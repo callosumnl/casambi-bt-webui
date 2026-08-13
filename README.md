@@ -2,6 +2,8 @@
 
 **Casambi BT WebUI** is a self-hosted lighting-control appliance for a Raspberry Pi. It places a cyberpunk-styled React interface, a JWT- and API-key-protected REST API, a local SQLite configuration store, durable timer rules, and a supervised Node.js-to-Python Bluetooth bridge behind one local service. The Python bridge uses [`lkempf/casambi-bt`](https://github.com/lkempf/casambi-bt), which must be treated as an unofficial, alpha-quality Casambi protocol implementation. [1]
 
+The login screen includes an anonymous **Explore Demo** entry point. Demo mode uses a sample network entirely in browser memory: its lamps, rooms, scenes, sensors, and timer rules are simulated; it sends no HTTP requests, opens no bridge event stream, and cannot read or modify Raspberry Pi accounts, settings, schedules, API keys, or Casambi fixtures. Exit Demo to return to the normal local sign-in screen.
+
 > Run this on a trusted local network. A lighting controller has physical-world effects. Do not expose it directly to the public internet; place it behind a VPN or a carefully configured HTTPS reverse proxy if remote access is needed.
 
 ## What is included
