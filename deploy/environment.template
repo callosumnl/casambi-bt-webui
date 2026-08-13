@@ -1,0 +1,12 @@
+# Copy this file to /opt/casambi-bt-webui/.env and replace every placeholder.
+PORT=3000
+NODE_ENV=production
+
+# Generate unique values with: openssl rand -base64 48
+CASAMBI_ENCRYPTION_KEY=replace-with-a-unique-high-entropy-secret
+CASAMBI_JWT_SECRET=replace-with-a-different-unique-high-entropy-secret
+
+# A physical Raspberry Pi must use false. True is only for development without Bluetooth hardware.
+CASAMBI_MOCK_MODE=false
+CASAMBI_PYTHON_COMMAND=/opt/casambi-bt-webui/.venv/bin/python
+CASAMBI_DB_PATH=/var/lib/casambi-bt-webui/casambi-bt-webui.db

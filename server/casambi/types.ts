@@ -1,0 +1,98 @@
+import { z } from "zod";
+
+/** A fixture control reported by the Casambi library. */
+export const capabilitySchema = z.object({
+  type: z.string(),
+  min: z.number().nullable().optional(),
+  max: z.number().nullable().optional(),
+  readOnly: z.boolean().default(false),
+});
+
+/** A normalized live state for a Casambi unit. Values use upstream units. */
+export const unitStateSchema = z.object({
+  dimmer: z.number().int().min(0).max(255).nullable().optional(),
+  temperature: z.number().int().nullable().optional(),
+  rgb: z.tuple([z.number().int(), z.number().int(), z.number().int()]).nullable().optional(),
+  white: z.number().int().min(0).max(255).nullable().optional(),
+  vertical: z.number().int().min(0).max(255).nullable().optional(),
+  slider: z.number().int().min(0).max(255).nullable().optional(),
+  xy: z.tuple([z.number(), z.number()]).nullable().optional(),
+  sensors: z.array(z.object({ label: z.string(), value: z.number().nullable(), unit: z.string().nullable() })).default([]),
+  on: z.boolean(),
+  online: z.boolean(),
+});
+
+export const unitSchema = z.object({
+  id: z.number().int(),
+  uuid: z.string(),
+  address: z.string(),
+  name: z.string(),
+  firmwareVersion: z.string().nullable().optional(),
+  model: z.string().nullable().optional(),
+  manufacturer: z.string().nullable().optional(),
+  capabilities: z.array(capabilitySchema),
+  state: unitStateSchema,
+});
+
+export const groupSchema = z.object({ id: z.number().int(), name: z.string(), unitIds: z.array(z.number().int()) });
+export const sceneSchema = z.object({ id: z.number().int(), name: z.string() });
+
+/** Full snapshot communicated by the Python bridge. */
+export const networkSnapshotSchema = z.object({
+  connected: z.boolean(),
+  network: z.object({ id: z.string(), name: z.string() }).nullable(),
+  units: z.array(unitSchema),
+  groups: z.array(groupSchema),
+  scenes: z.array(sceneSchema),
+  updatedAt: z.string(),
+});
+
+export type Capability = z.infer<typeof capabilitySchema>;
+export type UnitState = z.infer<typeof unitStateSchema>;
+export type UnitSnapshot = z.infer<typeof unitSchema>;
+export type GroupSnapshot = z.infer<typeof groupSchema>;
+export type SceneSnapshot = z.infer<typeof sceneSchema>;
+export type NetworkSnapshot = z.infer<typeof networkSnapshotSchema>;
+
+export const targetTypeSchema = z.enum(["unit", "group", "room", "scene", "network"]);
+export const operationSchema = z.enum([
+  "on",
+  "off",
+  "set_level",
+  "set_temperature",
+  "set_color",
+  "set_white",
+  "set_vertical",
+  "set_slider",
+  "set_xy",
+  "activate_scene",
+]);
+
+/** Validated command sent from REST, schedules, or the UI to Casambi. */
+export const controlRequestSchema = z.object({
+  targetType: targetTypeSchema,
+  targetId: z.union([z.number().int().nonnegative(), z.string().min(1)]).nullable().optional(),
+  operation: operationSchema,
+  value: z.unknown().optional(),
+}).superRefine((value, ctx) => {
+  const numberOps = ["set_level", "set_temperature", "set_white", "set_vertical", "set_slider"];
+  if (numberOps.includes(value.operation) && (typeof value.value !== "number" || !Number.isFinite(value.value))) {
+    ctx.addIssue({ code: "custom", message: "A numeric value is required for this operation.", path: ["value"] });
+  }
+  if (value.operation === "set_color" && (!Array.isArray(value.value) || value.value.length !== 3 || !value.value.every(item => Number.isInteger(item)))) {
+    ctx.addIssue({ code: "custom", message: "RGB colour must be an array of three integer values.", path: ["value"] });
+  }
+  if (value.operation === "set_xy" && (!Array.isArray(value.value) || value.value.length !== 2 || !value.value.every(item => typeof item === "number" && Number.isFinite(item)))) {
+    ctx.addIssue({ code: "custom", message: "XY colour must be an array of two numeric values.", path: ["value"] });
+  }
+  if (value.targetType === "scene" && value.operation !== "activate_scene") {
+    ctx.addIssue({ code: "custom", message: "Scenes can only be activated.", path: ["operation"] });
+  }
+});
+
+export type ControlRequest = z.infer<typeof controlRequestSchema>;
+
+export type BridgeEvent =
+  | { type: "bridge"; state: "starting" | "connected" | "disconnected" | "unavailable"; detail?: string }
+  | { type: "unit.state"; unit: UnitSnapshot }
+  | { type: "switch"; event: Record<string, unknown> };

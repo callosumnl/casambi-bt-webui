@@ -1,0 +1,38 @@
+import { mkdtempSync, rmSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
+import { afterEach, describe, expect, it } from "vitest";
+import { LocalStore } from "./store";
+
+const folders: string[] = [];
+function store(): LocalStore { const folder = mkdtempSync(join(tmpdir(), "casambi-store-")); folders.push(folder); return new LocalStore(join(folder, "state.db"), "test-key"); }
+afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })));
+
+describe("LocalStore", () => {
+  it("creates a salted local admin and verifies its password", () => {
+    const database = store();
+    expect(database.needsBootstrap()).toBe(true);
+    const admin = database.createUser("operator", "a-strong-password", "admin");
+    expect(database.needsBootstrap()).toBe(false);
+    expect(database.verifyUser("operator", "a-strong-password")).toMatchObject({ id: admin.id, role: "admin" });
+    expect(database.verifyUser("operator", "incorrect-password")).toBeNull();
+  });
+
+  it("creates, verifies, and revokes API keys without retaining their plaintext", () => {
+    const database = store();
+    const created = database.createApiKey("integration", "user");
+    expect(created.token).toMatch(/^cbt_[a-f0-9]{8}_/);
+    expect(database.listApiKeys()[0]).not.toHaveProperty("token");
+    expect(database.authenticateApiKey(created.token)).toMatchObject({ label: "integration", role: "user" });
+    database.revokeApiKey(created.id);
+    expect(database.authenticateApiKey(created.token)).toBeNull();
+  });
+
+  it("stores Casambi secret configuration separately from the safe admin view", () => {
+    const database = store();
+    database.saveCasambiConfig({ networkAddress: "AA:BB:CC:DD:EE:FF", networkUuid: null, apiKey: "network-api", networkPassword: "network-password", btAdapter: "hci0", forceOffline: false, pollingEnabled: true, pollingIntervalSeconds: 30 });
+    expect(database.getSafeCasambiConfig()).toEqual(expect.objectContaining({ networkAddress: "AA:BB:CC:DD:EE:FF", hasApiKey: true, hasNetworkPassword: true }));
+    expect(database.getSafeCasambiConfig()).not.toHaveProperty("networkPassword");
+    expect(database.getCasambiConfig().networkPassword).toBe("network-password");
+  });
+});

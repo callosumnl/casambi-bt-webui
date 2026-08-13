@@ -6,6 +6,12 @@ import { createExpressMiddleware } from "@trpc/server/adapters/express";
 import { registerOAuthRoutes } from "./oauth";
 import { registerStorageProxy } from "./storageProxy";
 import { appRouter } from "../routers";
+import { createCasambiApi } from "../api";
+import { JsonLineCasambiBridge } from "../casambi/bridge";
+import { CasambiService } from "../casambi/service";
+import { EventHub } from "../events";
+import { DurableScheduler } from "../scheduler";
+import { LocalStore } from "../store";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
@@ -31,11 +37,17 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 async function startServer() {
   const app = express();
   const server = createServer(app);
+  const store = new LocalStore();
+  const events = new EventHub();
+  const bridge = new JsonLineCasambiBridge();
+  const casambi = new CasambiService(store, bridge, events);
+  const scheduler = new DurableScheduler(store, (command, actor) => casambi.control(command, actor).then(() => undefined), events);
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));
   registerStorageProxy(app);
   registerOAuthRoutes(app);
+  app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler }));
   // tRPC API
   app.use(
     "/api/trpc",
@@ -44,6 +56,8 @@ async function startServer() {
       createContext,
     })
   );
+  await casambi.initialize();
+  scheduler.reload();
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
@@ -61,6 +75,9 @@ async function startServer() {
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
+  const shutdown = () => bridge.stop();
+  process.once("SIGTERM", shutdown);
+  process.once("SIGINT", shutdown);
 }
 
 startServer().catch(console.error);

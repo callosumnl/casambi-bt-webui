@@ -1,0 +1,23 @@
+# Project TODO
+
+- [x] Review the upstream `lkempf/casambi-bt` library commands, data model, and Raspberry Pi requirements.
+- [x] Design a resilient JSON-lines Node.js-to-Python Casambi bridge with timeouts, error isolation, reconnect handling, and a mock mode for development.
+- [x] Implement persistent configuration for Casambi network UUID, API key, Bluetooth adapter, and polling controls.
+- [x] Implement device, group, room, scene, and sensor synchronization with custom device names and room assignments.
+- [x] Implement role-based authentication preserving the `admin` and `user` roles.
+- [x] Implement revocable API-key management and JWT authentication for the public REST API.
+- [x] Implement authenticated REST endpoints for every available configuration, discovery, control, scene, scheduling, and status action.
+- [x] Implement live device-state delivery through Server-Sent Events with authenticated access and reconnect support.
+- [x] Implement database-backed timer and recurring schedule management with a server-side scheduler.
+- [x] Build the cyberpunk Admin Panel for configuration, synchronization, device metadata, user access, API keys, and live status.
+- [x] Build the cyberpunk User Dashboard for lamps, groups, rooms, scenes, sensors, switching, dimming, and colour-temperature control.
+- [x] Add input validation, authorization checks, audit logging, error handling, JSDoc/docstrings, and accessible status feedback.
+- [x] Create Vitest unit and integration tests for bridge communication, authorization, REST endpoints, timers, state updates, and validation.
+- [x] Create Raspberry Pi deployment scripts, a systemd service definition, environment templates, and complete setup and API documentation.
+- [x] Validate type checking, automated tests, build output, and responsive visual presentation.
+- [ ] Push the completed codebase to `https://github.com/callosumnl/casambi-bt-webui`.
+- [x] Add persistent bridge polling controls with validated interval/backoff settings and status-refresh behavior.
+- [x] Serialize supported upstream sensor controls and values, expose them through REST, and display sensor telemetry in the User Dashboard.
+- [x] Add automated schedule execution and duplicate-run prevention coverage.
+- [x] Verify the authenticated dashboard and admin layouts across desktop and mobile breakpoints.
+- [x] Extract raw live Casambi SENSOR bitfields before upstream parsing discards them, label fixture-specific values safely as raw, and provide a Raspberry Pi hardware verification script.

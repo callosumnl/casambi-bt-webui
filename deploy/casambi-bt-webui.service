@@ -1,0 +1,22 @@
+[Unit]
+Description=Casambi BT WebUI local lighting bridge
+After=network-online.target bluetooth.target
+Wants=network-online.target bluetooth.target
+
+[Service]
+Type=simple
+User=casambi
+Group=casambi
+WorkingDirectory=/opt/casambi-bt-webui
+EnvironmentFile=/etc/casambi-bt-webui.env
+ExecStart=/usr/bin/node /opt/casambi-bt-webui/dist/index.js
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/casambi-bt-webui
+
+[Install]
+WantedBy=multi-user.target

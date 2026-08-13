@@ -1,0 +1,14 @@
+.collective-controls { display: grid; gap: .55rem; }
+.collective-control { display: grid; grid-template-columns: 1fr auto; gap: .55rem .8rem; padding: .65rem; background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.08); }
+.collective-control div:first-child { display: grid; gap: .18rem; }
+.collective-control span { color: var(--pink); font: .54rem "DM Mono"; letter-spacing: .1em; }
+.collective-control strong { font-size: .8rem; }
+.collective-buttons { display: flex; gap: .3rem; }
+.collective-buttons button { min-width: 0; padding: .35rem .48rem; color: var(--cyan); background: rgba(99,244,255,.08); border: 1px solid rgba(99,244,255,.23); font: .56rem "DM Mono"; }
+.collective-buttons button:last-child { color: var(--pink); background: rgba(255,63,175,.08); border-color: rgba(255,63,175,.24); }
+.collective-control input { grid-column: 1 / -1; }
+.sensor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
+.sensor-card { display: grid; gap: .35rem; }
+.sensor-card strong { color: var(--cyan); font-size: 1.8rem; letter-spacing: -.06em; }
+.sensor-card small { color: var(--muted); font-size: .75rem; margin-left: .25rem; }
+.sensor-card > span { color: var(--muted); font-size: .72rem; }

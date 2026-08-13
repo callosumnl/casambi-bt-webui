@@ -1,0 +1,95 @@
+import { Router, Request, Response } from "express";
+import rateLimit from "express-rate-limit";
+import { z } from "zod";
+import { authenticate, issueToken, Principal, requireAuth } from "./auth";
+import { CasambiService } from "./casambi/service";
+import { controlRequestSchema } from "./casambi/types";
+import { EventHub } from "./events";
+import { LocalStore, Role } from "./store";
+import { DurableScheduler, validateCron } from "./scheduler";
+
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler };
+type AsyncRoute = (request: Request, response: Response) => Promise<void>;
+const roleSchema = z.enum(["admin", "user"]);
+const credentialsSchema = z.object({ username: z.string().trim().min(3).max(64).regex(/^[a-z0-9._-]+$/i), password: z.string().min(12).max(256) });
+const configSchema = z.object({ networkAddress: z.string().trim().min(1).max(128).nullable().optional(), networkUuid: z.string().trim().max(128).nullable().optional(), apiKey: z.string().max(512).nullable().optional(), networkPassword: z.string().max(512).nullable().optional(), btAdapter: z.string().trim().max(128).nullable().optional(), forceOffline: z.boolean().optional(), pollingEnabled: z.boolean().optional(), pollingIntervalSeconds: z.number().int().min(5).max(3600).optional() });
+const scheduleSchema = z.object({ name: z.string().trim().min(1).max(96), cronExpression: z.string().trim().min(9).max(128), timezone: z.string().trim().min(1).max(80), command: controlRequestSchema, enabled: z.boolean().default(true) });
+
+/** Wraps async routes in a stable JSON error response. */
+function route(handler: AsyncRoute) {
+  return (request: Request, response: Response) => void handler(request, response).catch(error => {
+    const message = error instanceof Error ? error.message : "Unexpected server error.";
+    const status = message.includes("does not exist") || message.includes("does not exist") ? 404 : message.includes("required") || message.includes("invalid") ? 422 : 500;
+    response.status(status).json({ error: { code: status === 422 ? "VALIDATION_ERROR" : status === 404 ? "NOT_FOUND" : "INTERNAL_ERROR", message }, requestId: response.locals.requestId });
+  });
+}
+
+function parsed<T>(schema: z.ZodType<T>, input: unknown): T { return schema.parse(input); }
+function principal(response: Response): Principal { return response.locals.principal as Principal; }
+function assertScheduleAccess(schedule: { ownerUserId: number }, actor: Principal): void { if (actor.role !== "admin" && schedule.ownerUserId !== actor.id) throw new Error("Schedule does not exist."); }
+
+/** Registers the complete versioned Raspberry Pi REST API. */
+export function createCasambiApi({ store, service, events, scheduler }: Dependencies): Router {
+  const api = Router();
+  api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
+  api.use((_request, response, next) => { response.locals.requestId = crypto.randomUUID(); next(); });
+
+  api.get("/health", (_request, response) => response.json({ status: "ok", bootstrapRequired: store.needsBootstrap(), eventClients: events.clientCount }));
+  api.post("/auth/bootstrap", route(async (request, response) => {
+    if (!store.needsBootstrap()) { response.status(409).json({ error: { code: "BOOTSTRAP_COMPLETE", message: "An administrator already exists." } }); return; }
+    const input = parsed(credentialsSchema, request.body); const user = store.createUser(input.username, input.password, "admin"); store.audit(user.username, "auth.bootstrap", {});
+    response.status(201).json({ token: await issueToken(user), user });
+  }));
+  api.post("/auth/login", route(async (request, response) => {
+    const input = parsed(credentialsSchema, request.body); const user = store.verifyUser(input.username, input.password);
+    if (!user) { response.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Username or password is invalid." } }); return; }
+    store.audit(user.username, "auth.login", {}); response.json({ token: await issueToken(user), user });
+  }));
+
+  api.get("/auth/me", requireAuth(store), (request, response) => response.json({ principal: principal(response) }));
+  api.get("/events", route(async (request, response) => {
+    const token = typeof request.query.access_token === "string" ? request.query.access_token : null;
+    if (token) request.headers.authorization = `Bearer ${token}`;
+    const actor = await authenticate(request, store);
+    if (!actor) { response.status(401).json({ error: { code: "UNAUTHORIZED", message: "A valid event token is required." } }); return; }
+    const remove = events.add(response); request.on("close", remove);
+  }));
+
+  api.get("/network", requireAuth(store), route(async (_request, response) => { response.json(await service.snapshot()); }));
+  api.get("/devices", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).units); }));
+  api.get("/groups", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).groups); }));
+  api.get("/scenes", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).scenes); }));
+  api.get("/sensors", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).units.flatMap(unit => unit.state.sensors.map(sensor => ({ deviceId: unit.id, deviceName: unit.name, ...sensor })))); }));
+  api.get("/rooms", requireAuth(store), (request, response) => response.json(store.listRooms()));
+  api.post("/control", requireAuth(store), route(async (request, response) => { const command = parsed(controlRequestSchema, request.body); response.json(await service.control(command, principal(response).name)); }));
+  api.post("/devices/:id/on", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "on" }, principal(response).name)); }));
+  api.post("/devices/:id/off", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "off" }, principal(response).name)); }));
+  api.post("/scenes/:id/activate", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "scene", targetId: Number(request.params.id), operation: "activate_scene" }, principal(response).name)); }));
+
+  api.get("/schedules", requireAuth(store), (request, response) => { const actor = principal(response); response.json(store.listSchedules().filter(schedule => actor.role === "admin" || schedule.ownerUserId === actor.id)); });
+  api.post("/schedules", requireAuth(store), route(async (request, response) => { const input = parsed(scheduleSchema, request.body); validateCron(input.cronExpression, input.timezone); const schedule = store.createSchedule({ ...input, ownerUserId: principal(response).id }); scheduler.reload(); store.audit(principal(response).name, "schedule.created", { scheduleId: schedule.id }); response.status(201).json(schedule); }));
+  api.patch("/schedules/:id", requireAuth(store), route(async (request, response) => { const current = store.getSchedule(Number(request.params.id)); if (!current) throw new Error("Schedule does not exist."); assertScheduleAccess(current, principal(response)); const input = parsed(scheduleSchema.partial(), request.body); if (input.cronExpression || input.timezone) validateCron(input.cronExpression ?? current.cronExpression, input.timezone ?? current.timezone); const schedule = store.updateSchedule(current.id, input); scheduler.reload(); response.json(schedule); }));
+  api.delete("/schedules/:id", requireAuth(store), route(async (request, response) => { const current = store.getSchedule(Number(request.params.id)); if (!current) throw new Error("Schedule does not exist."); assertScheduleAccess(current, principal(response)); store.deleteSchedule(current.id); scheduler.reload(); response.status(204).send(); }));
+
+  api.get("/admin/config", requireAuth(store, "admin"), (_request, response) => response.json(store.getSafeCasambiConfig()));
+  api.put("/admin/config", requireAuth(store, "admin"), route(async (request, response) => { service.saveConfiguration(parsed(configSchema, request.body)); store.audit(principal(response).name, "config.updated", {}); response.json(store.getSafeCasambiConfig()); }));
+  api.get("/admin/discovery", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.discover()); }));
+  api.post("/admin/connect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.connect()); }));
+  api.post("/admin/disconnect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.disconnect()); }));
+  api.post("/admin/rooms", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ name: z.string().trim().min(1).max(96) }), request.body); response.status(201).json(store.createRoom(input.name)); }));
+  api.delete("/admin/rooms/:id", requireAuth(store, "admin"), (request, response) => { store.deleteRoom(Number(request.params.id)); response.status(204).send(); });
+  api.put("/admin/devices/:id/metadata", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ customName: z.string().trim().max(128).nullable(), roomId: z.number().int().positive().nullable() }), request.body); store.setUnitMetadata(Number(request.params.id), input.customName, input.roomId); response.status(204).send(); }));
+  api.get("/admin/users", requireAuth(store, "admin"), (_request, response) => response.json(store.listUsers()));
+  api.post("/admin/users", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(credentialsSchema.extend({ role: roleSchema }), request.body); response.status(201).json(store.createUser(input.username, input.password, input.role)); }));
+  api.patch("/admin/users/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ role: roleSchema }), request.body); response.json(store.setUserRole(Number(request.params.id), input.role)); }));
+  api.get("/admin/api-keys", requireAuth(store, "admin"), (_request, response) => response.json(store.listApiKeys()));
+  api.post("/admin/api-keys", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ label: z.string().trim().min(1).max(96), role: roleSchema }), request.body); const key = store.createApiKey(input.label, input.role); store.audit(principal(response).name, "api_key.created", { id: key.id, label: key.label, role: key.role }); response.status(201).json(key); }));
+  api.delete("/admin/api-keys/:id", requireAuth(store, "admin"), (request, response) => { store.revokeApiKey(Number(request.params.id)); store.audit(principal(response).name, "api_key.revoked", { id: Number(request.params.id) }); response.status(204).send(); });
+  api.get("/admin/audit", requireAuth(store, "admin"), (_request, response) => response.json(store.recentAudit()));
+
+  api.use((error: unknown, _request: Request, response: Response, _next: unknown) => {
+    if (error instanceof z.ZodError) return response.status(422).json({ error: { code: "VALIDATION_ERROR", message: "Request validation failed.", fields: error.flatten() } });
+    return response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Unexpected API error." } });
+  });
+  return api;
+}
