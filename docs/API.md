@@ -17,7 +17,7 @@ All application endpoints begin with `/api/v1`. Send either an `Authorization: B
 | `POST` | `/devices/:id/on`, `/devices/:id/off` | user | Convenience lamp on/off controls. |
 | `POST` | `/scenes/:id/activate` | user | Activates an upstream Casambi scene. |
 | `POST` | `/rooms/:id/apply-default` | user | Applies the room’s saved default brightness; an optional `fadeDurationMs` from 0 to 60,000 enables a smooth transition. |
-| `GET`, `POST` | `/schedules` | user | Lists permitted schedules or creates a timer owned by the caller. |
+| `GET`, `POST` | `/schedules` | user | Lists permitted schedules, including `nextRunAt`, or creates a timer owned by the caller. |
 | `PATCH`, `DELETE` | `/schedules/:id` | owner or admin | Edits or deletes a timer. |
 | `GET`, `PUT` | `/admin/config` | admin | Reads safe settings or saves encrypted bridge configuration, including bounded polling enablement and interval. |
 | `GET` | `/admin/discovery` | admin | Scans nearby Casambi networks. |
@@ -59,9 +59,11 @@ curl -sS -X POST http://raspberrypi.local:3000/api/v1/scenes/3/activate \
 
 ## Timers and scheduling
 
-In the WebUI, create a timer by choosing a **time**, repeat pattern, optional days, time zone, lighting target, action, brightness, and optional fade. The interface translates these everyday choices into the durable scheduler format automatically, so users do not need to write cron syntax. The Raspberry Pi service reloads persisted timers at startup and runs them through the same validated control pathway used by the API.
+In the WebUI, create a timer by choosing a **time**, repeat pattern, optional days, time zone, lighting target, action, brightness, and optional fade. You can instead choose **sunrise** or **sunset** and a whole-minute offset from 180 minutes before to 180 minutes after the event. The interface translates everyday choices into the durable scheduler format automatically, so users do not need to write cron syntax. The Raspberry Pi service reloads persisted timers at startup and runs them through the same validated control pathway used by the API.
 
-For API integrations, the schedule payload continues to accept a five-field `cronExpression` and an IANA time zone. Include `fadeDurationMs` inside an `on`, `off`, or `set_level` command to request a transition of up to 60 seconds. The upstream method is `setLevel(target, level)` and does not expose a native transition argument, so this application performs ordered 200 ms level steps; an interrupted service restart stops an in-progress fade. [1]
+Before using a solar timer, an `admin` saves the lighting site’s latitude and longitude in **Admin → Casambi Link**. Solar times are calculated locally with the bundled SunCalc algorithm; no web service or live location request is used. Each `GET /schedules` result includes `nextRunAt`, an ISO 8601 timestamp calculated from the active configuration. Solar schedules re-evaluate after every run so seasonal daylight changes are reflected automatically. [1]
+
+For API integrations, the schedule payload continues to accept a five-field `cronExpression` and an IANA time zone. Include `fadeDurationMs` inside an `on`, `off`, or `set_level` command to request a transition of up to 60 seconds. The upstream method is `setLevel(target, level)` and does not expose a native transition argument, so this application performs ordered 200 ms level steps; an interrupted service restart stops an in-progress fade. [2]
 
 ```bash
 curl -sS -X POST http://raspberrypi.local:3000/api/v1/schedules \
@@ -72,6 +74,23 @@ curl -sS -X POST http://raspberrypi.local:3000/api/v1/schedules \
     "timezone":"Europe/Amsterdam",
     "enabled":true,
     "command":{"targetType":"network","operation":"off","fadeDurationMs":5000}
+  }'
+```
+
+### Solar timer request
+
+Solar schedules use `solar` in place of a meaningful fixed `cronExpression`; API clients may omit `cronExpression` when `solar` is provided. A compatibility placeholder is stored internally for existing schedule records.
+
+```bash
+# Fade a room on 15 minutes before the locally configured sunset.
+curl -sS -X POST http://raspberrypi.local:3000/api/v1/schedules \
+  -H 'Authorization: Bearer YOUR_JWT' -H 'Content-Type: application/json' \
+  -d '{
+    "name":"Welcome home",
+    "timezone":"Europe/Amsterdam",
+    "solar":{"event":"sunset","offsetMinutes":-15},
+    "enabled":true,
+    "command":{"targetType":"room","targetId":4,"operation":"on","fadeDurationMs":1200}
   }'
 ```
 
@@ -102,10 +121,11 @@ source.addEventListener("unit.state", event => console.log(JSON.parse(event.data
 
 ## Sensor telemetry and polling
 
-`GET /sensors` flattens the `state.sensors` entries reported by fixtures into records containing `deviceId`, `deviceName`, `label`, `value`, and `unit`. The bridge preserves live upstream SENSOR bitfields from subsequent state packets before the upstream parser discards them. Because fixture-specific engineering-unit conversion is not documented by the upstream library, extracted values are labelled `raw`. A `null` value means no post-connection state packet has yet carried that sensor control; it never represents a fabricated measurement. [1]
+`GET /sensors` flattens the `state.sensors` entries reported by fixtures into records containing `deviceId`, `deviceName`, `label`, `value`, and `unit`. The bridge preserves live upstream SENSOR bitfields from subsequent state packets before the upstream parser discards them. Because fixture-specific engineering-unit conversion is not documented by the upstream library, extracted values are labelled `raw`. A `null` value means no post-connection state packet has yet carried that sensor control; it never represents a fabricated measurement. [2]
 
 An `admin` may set `pollingEnabled` and `pollingIntervalSeconds` in `PUT /admin/config`. The interval must be from 5 to 3,600 seconds. Polling requests a fresh snapshot through the same serialized bridge channel used by control commands; failures are recorded in the audit log and retry with capped exponential backoff.
 
 ## References
 
-[1]: https://github.com/lkempf/casambi-bt "lkempf/casambi-bt upstream library"
+[1]: https://github.com/mourner/suncalc "SunCalc local solar-time calculation library"
+[2]: https://github.com/lkempf/casambi-bt "lkempf/casambi-bt upstream library"

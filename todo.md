@@ -43,3 +43,8 @@
 - [x] Replace the cron editor with a human-friendly timer form for time, repeat days, timezone, target, action, brightness, and fade duration.
 - [x] Translate validated user-friendly schedules to the durable cron-backed scheduler while retaining existing REST schedule compatibility.
 - [x] Add readable schedule summaries, Demo-mode behavior, automated tests, documentation, responsive QA, and GitHub publication for the redesigned timer experience.
+- [x] Add validated administrator-managed solar location settings for local sunrise and sunset calculations.
+- [x] Add sunrise and sunset timer choices with bounded minute offsets and durable local scheduling.
+- [x] Calculate and expose a next-run timestamp for normal and solar schedules without relying on external services.
+- [x] Add user-facing solar timer controls, next-run indicators, Demo behavior, tests, documentation, responsive QA, and GitHub publication.
+- [ ] Commit and push the sunrise/sunset scheduling and next-run indicator implementation to the GitHub `main` branch.

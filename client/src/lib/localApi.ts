@@ -3,7 +3,8 @@ export type Session = { token: string; user: { id: number; username: string; rol
 export type Capability = { type: string; min?: number | null; max?: number | null; readOnly: boolean };
 export type Device = { id: number; name: string; address: string; model?: string | null; capabilities: Capability[]; roomId?: number; roomName?: string; state: { dimmer?: number | null; temperature?: number | null; sensors: { label: string; value: number | null; unit: string | null }[]; on: boolean; online: boolean } };
 export type NetworkSnapshot = { connected: boolean; network: { id: string; name: string } | null; units: Device[]; groups: { id: number; name: string; unitIds: number[] }[]; scenes: { id: number; name: string }[]; rooms: { id: number; name: string; sortOrder: number; defaultBrightnessPercent: number }[]; updatedAt: string };
-export type Schedule = { id: number; name: string; cronExpression: string; timezone: string; command: { targetType: string; targetId?: number | string | null; operation: string; value?: unknown; fadeDurationMs?: number }; enabled: boolean; lastRunAt: string | null };
+export type SolarSchedule = { event: "sunrise" | "sunset"; offsetMinutes: number };
+export type Schedule = { id: number; name: string; cronExpression: string; timezone: string; command: { targetType: string; targetId?: number | string | null; operation: string; value?: unknown; fadeDurationMs?: number }; solar?: SolarSchedule | null; enabled: boolean; lastRunAt: string | null; nextRunAt?: string | null };
 
 const SESSION_KEY = "casambi-bt-webui.session";
 

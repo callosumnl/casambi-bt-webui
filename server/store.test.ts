@@ -30,10 +30,16 @@ describe("LocalStore", () => {
 
   it("stores Casambi secret configuration separately from the safe admin view", () => {
     const database = store();
-    database.saveCasambiConfig({ networkAddress: "AA:BB:CC:DD:EE:FF", networkUuid: null, apiKey: "network-api", networkPassword: "network-password", btAdapter: "hci0", forceOffline: false, pollingEnabled: true, pollingIntervalSeconds: 30 });
+    database.saveCasambiConfig({ networkAddress: "AA:BB:CC:DD:EE:FF", networkUuid: null, apiKey: "network-api", networkPassword: "network-password", btAdapter: "hci0", forceOffline: false, pollingEnabled: true, pollingIntervalSeconds: 30, solarLatitude: null, solarLongitude: null });
     expect(database.getSafeCasambiConfig()).toEqual(expect.objectContaining({ networkAddress: "AA:BB:CC:DD:EE:FF", hasApiKey: true, hasNetworkPassword: true }));
     expect(database.getSafeCasambiConfig()).not.toHaveProperty("networkPassword");
     expect(database.getCasambiConfig().networkPassword).toBe("network-password");
+  });
+
+  it("persists non-secret solar coordinates for local sunrise and sunset scheduling", () => {
+    const database = store();
+    database.saveCasambiConfig({ ...database.getCasambiConfig(), solarLatitude: 52.3676, solarLongitude: 4.9041 });
+    expect(database.getSafeCasambiConfig()).toMatchObject({ solarLatitude: 52.3676, solarLongitude: 4.9041 });
   });
 
   it("stores bounded default brightness values for rooms", () => {

@@ -5,15 +5,17 @@ import { authenticate, issueToken, Principal, requireAuth } from "./auth";
 import { CasambiService } from "./casambi/service";
 import { controlRequestSchema } from "./casambi/types";
 import { EventHub } from "./events";
-import { LocalStore, Role } from "./store";
-import { DurableScheduler, validateCron } from "./scheduler";
+import { LocalStore, Role, ScheduleRecord } from "./store";
+import { DurableScheduler, nextRunAt, validateCron } from "./scheduler";
+import { SolarSchedule, validateSolarLocation, validateSolarSchedule } from "./solar";
 
 type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 const roleSchema = z.enum(["admin", "user"]);
 const credentialsSchema = z.object({ username: z.string().trim().min(3).max(64).regex(/^[a-z0-9._-]+$/i), password: z.string().min(12).max(256) });
-const configSchema = z.object({ networkAddress: z.string().trim().min(1).max(128).nullable().optional(), networkUuid: z.string().trim().max(128).nullable().optional(), apiKey: z.string().max(512).nullable().optional(), networkPassword: z.string().max(512).nullable().optional(), btAdapter: z.string().trim().max(128).nullable().optional(), forceOffline: z.boolean().optional(), pollingEnabled: z.boolean().optional(), pollingIntervalSeconds: z.number().int().min(5).max(3600).optional() });
-const scheduleSchema = z.object({ name: z.string().trim().min(1).max(96), cronExpression: z.string().trim().min(9).max(128), timezone: z.string().trim().min(1).max(80), command: controlRequestSchema, enabled: z.boolean().default(true) });
+const configSchema = z.object({ networkAddress: z.string().trim().min(1).max(128).nullable().optional(), networkUuid: z.string().trim().max(128).nullable().optional(), apiKey: z.string().max(512).nullable().optional(), networkPassword: z.string().max(512).nullable().optional(), btAdapter: z.string().trim().max(128).nullable().optional(), forceOffline: z.boolean().optional(), pollingEnabled: z.boolean().optional(), pollingIntervalSeconds: z.number().int().min(5).max(3600).optional(), solarLatitude: z.number().min(-90).max(90).nullable().optional(), solarLongitude: z.number().min(-180).max(180).nullable().optional() });
+const solarSchema = z.object({ event: z.enum(["sunrise", "sunset"]), offsetMinutes: z.number().int().min(-180).max(180) });
+const scheduleSchema = z.object({ name: z.string().trim().min(1).max(96), cronExpression: z.string().trim().min(9).max(128).optional(), timezone: z.string().trim().min(1).max(80), command: controlRequestSchema, solar: solarSchema.nullable().optional(), enabled: z.boolean().default(true) });
 
 /** Wraps async routes in a stable JSON error response. */
 function route(handler: AsyncRoute) {
@@ -31,6 +33,8 @@ function route(handler: AsyncRoute) {
 function parsed<T>(schema: z.ZodType<T>, input: unknown): T { return schema.parse(input); }
 function principal(response: Response): Principal { return response.locals.principal as Principal; }
 function assertScheduleAccess(schedule: { ownerUserId: number }, actor: Principal): void { if (actor.role !== "admin" && schedule.ownerUserId !== actor.id) throw new Error("Schedule does not exist."); }
+function serializeSchedule(schedule: ScheduleRecord, store: LocalStore) { let nextRun: Date | null = null; try { nextRun = nextRunAt(schedule, store.getCasambiConfig()); } catch { /* Invalid/missing solar configuration remains visible without claiming a run time. */ } return { ...schedule, nextRunAt: nextRun?.toISOString() ?? null }; }
+function validateSolarForStore(solar: SolarSchedule | null | undefined, store: LocalStore): void { if (!solar) return; validateSolarSchedule(solar); const config = store.getCasambiConfig(); validateSolarLocation({ latitude: config.solarLatitude ?? undefined, longitude: config.solarLongitude ?? undefined }); }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
 export function createCasambiApi({ store, service, events, scheduler }: Dependencies): Router {
@@ -74,13 +78,13 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
   api.post("/devices/:id/off", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "off" }, principal(response).name)); }));
   api.post("/scenes/:id/activate", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "scene", targetId: Number(request.params.id), operation: "activate_scene" }, principal(response).name)); }));
 
-  api.get("/schedules", requireAuth(store), (request, response) => { const actor = principal(response); response.json(store.listSchedules().filter(schedule => actor.role === "admin" || schedule.ownerUserId === actor.id)); });
-  api.post("/schedules", requireAuth(store), route(async (request, response) => { const input = parsed(scheduleSchema, request.body); validateCron(input.cronExpression, input.timezone); const schedule = store.createSchedule({ ...input, ownerUserId: principal(response).id }); scheduler.reload(); store.audit(principal(response).name, "schedule.created", { scheduleId: schedule.id }); response.status(201).json(schedule); }));
-  api.patch("/schedules/:id", requireAuth(store), route(async (request, response) => { const current = store.getSchedule(Number(request.params.id)); if (!current) throw new Error("Schedule does not exist."); assertScheduleAccess(current, principal(response)); const input = parsed(scheduleSchema.partial(), request.body); if (input.cronExpression || input.timezone) validateCron(input.cronExpression ?? current.cronExpression, input.timezone ?? current.timezone); const schedule = store.updateSchedule(current.id, input); scheduler.reload(); response.json(schedule); }));
+  api.get("/schedules", requireAuth(store), (_request, response) => { const actor = principal(response); response.json(store.listSchedules().filter(schedule => actor.role === "admin" || schedule.ownerUserId === actor.id).map(schedule => serializeSchedule(schedule, store))); });
+  api.post("/schedules", requireAuth(store), route(async (request, response) => { const input = parsed(scheduleSchema, request.body); const cronExpression = input.cronExpression ?? "0 0 * * *"; if (!input.solar) validateCron(cronExpression, input.timezone); validateSolarForStore(input.solar, store); const schedule = store.createSchedule({ name: input.name, cronExpression, timezone: input.timezone, command: input.command, solar: input.solar ?? null, enabled: input.enabled, ownerUserId: principal(response).id }); scheduler.reload(); store.audit(principal(response).name, "schedule.created", { scheduleId: schedule.id, solar: schedule.solar }); response.status(201).json(serializeSchedule(schedule, store)); }));
+  api.patch("/schedules/:id", requireAuth(store), route(async (request, response) => { const current = store.getSchedule(Number(request.params.id)); if (!current) throw new Error("Schedule does not exist."); assertScheduleAccess(current, principal(response)); const input = parsed(scheduleSchema.partial(), request.body); const solar = input.solar === undefined ? current.solar : input.solar; const cronExpression = input.cronExpression ?? current.cronExpression; const timezone = input.timezone ?? current.timezone; if (!solar) validateCron(cronExpression, timezone); validateSolarForStore(solar, store); const schedule = store.updateSchedule(current.id, { ...input, cronExpression, timezone, solar: solar ?? null }); scheduler.reload(); response.json(serializeSchedule(schedule, store)); }));
   api.delete("/schedules/:id", requireAuth(store), route(async (request, response) => { const current = store.getSchedule(Number(request.params.id)); if (!current) throw new Error("Schedule does not exist."); assertScheduleAccess(current, principal(response)); store.deleteSchedule(current.id); scheduler.reload(); response.status(204).send(); }));
 
   api.get("/admin/config", requireAuth(store, "admin"), (_request, response) => response.json(store.getSafeCasambiConfig()));
-  api.put("/admin/config", requireAuth(store, "admin"), route(async (request, response) => { service.saveConfiguration(parsed(configSchema, request.body)); store.audit(principal(response).name, "config.updated", {}); response.json(store.getSafeCasambiConfig()); }));
+  api.put("/admin/config", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(configSchema, request.body); if ("solarLatitude" in input || "solarLongitude" in input) { const current = store.getCasambiConfig(); const latitude = input.solarLatitude === undefined ? current.solarLatitude : input.solarLatitude; const longitude = input.solarLongitude === undefined ? current.solarLongitude : input.solarLongitude; if (latitude !== null || longitude !== null) validateSolarLocation({ latitude: latitude ?? undefined, longitude: longitude ?? undefined }); } service.saveConfiguration(input); scheduler.reload(); store.audit(principal(response).name, "config.updated", {}); response.json(store.getSafeCasambiConfig()); }));
   api.get("/admin/discovery", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.discover()); }));
   api.post("/admin/connect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.connect()); }));
   api.post("/admin/disconnect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.disconnect()); }));
