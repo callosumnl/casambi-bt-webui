@@ -15,7 +15,7 @@
 - [x] Create Vitest unit and integration tests for bridge communication, authorization, REST endpoints, timers, state updates, and validation.
 - [x] Create Raspberry Pi deployment scripts, a systemd service definition, environment templates, and complete setup and API documentation.
 - [x] Validate type checking, automated tests, build output, and responsive visual presentation.
-- [ ] Push the completed codebase to `https://github.com/callosumnl/casambi-bt-webui`.
+- [x] Push the completed codebase to `https://github.com/callosumnl/casambi-bt-webui`.
 - [x] Add persistent bridge polling controls with validated interval/backoff settings and status-refresh behavior.
 - [x] Serialize supported upstream sensor controls and values, expose them through REST, and display sensor telemetry in the User Dashboard.
 - [x] Add automated schedule execution and duplicate-run prevention coverage.
