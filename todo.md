@@ -32,3 +32,5 @@
 - [x] Add user-triggerable simulated sensor changes in Demo mode and cover their behavior with an automated test.
 - [x] Verify the login Demo button and Demo dashboard/timer views at desktop and mobile breakpoints.
 - [x] Capture and review the desktop login view with the Demo button before finalizing Demo mode QA.
+- [x] Convert all user-facing brightness inputs and labels to a bounded 0–100% scale while preserving Casambi 0–255 commands.
+- [ ] Add conversion tests, visual verification, and publish the brightness-scale correction to GitHub.

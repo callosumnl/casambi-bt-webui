@@ -3,6 +3,7 @@ import "./Dashboard.css";
 import { DeviceControlCard } from "@/components/DeviceControlCard";
 import { HudFrame } from "@/components/HudFrame";
 import { useNetwork } from "@/hooks/useNetwork";
+import { percentToDimmer } from "@/lib/brightness";
 
 /** Main lamp, group, room, and scene control surface. */
 export default function Dashboard({ demo = false }: { demo?: boolean }) {
@@ -18,5 +19,5 @@ export default function Dashboard({ demo = false }: { demo?: boolean }) {
 }
 
 function CollectiveControl({ type, name, command: send }: { type: string; name: string; onCommand: (operation: string, value?: number) => unknown; command: (operation: string, value?: number) => void }) {
-  return <article className="collective-control"><div><span>{type}</span><strong>{name}</strong></div><div className="collective-buttons"><button onClick={() => send("on")}>ON</button><button onClick={() => send("off")}>OFF</button></div><input aria-label={`${name} brightness`} type="range" min="0" max="255" defaultValue="180" onChange={event => send("set_level", Number(event.target.value))} /></article>;
+  return <article className="collective-control"><div><span>{type}</span><strong>{name}</strong></div><div className="collective-buttons"><button onClick={() => send("on")}>ON</button><button onClick={() => send("off")}>OFF</button></div><input aria-label={`${name} brightness percent`} type="range" min="0" max="100" defaultValue="71" onChange={event => send("set_level", percentToDimmer(Number(event.target.value)))} /></article>;
 }
