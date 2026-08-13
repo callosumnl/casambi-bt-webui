@@ -63,6 +63,20 @@ In the WebUI, create a timer by choosing a **time**, explicit repeat days, time 
 
 Every timer can include up to 120 explicit `holidayDates` in `YYYY-MM-DD` format. These are personal away dates, not a downloaded regional holiday calendar. A date is compared in the timer’s IANA time zone; a matching run is skipped, a `schedule.skipped_holiday` event is recorded, and `nextRunAt` advances to the following eligible trigger. This makes it safe to keep routine lighting timers enabled while you are away.
 
+An `admin` can also create a reusable away-date set in **Admin → Away-date sets** and apply it to multiple selected timers. Each set has a name and one or more ISO dates. An assigned timer combines its own `holidayDates` with the set’s dates; when the set is edited, its linked timers calculate their next run from the new shared dates automatically. `GET /away-date-sets` is available to authenticated users for timer selection, while creation, modification, and deletion use the admin endpoints below.
+
+```bash
+# Create a shared away period as an administrator.
+curl -sS -X POST http://raspberrypi.local:3000/api/v1/admin/away-date-sets \
+  -H 'Authorization: Bearer ADMIN_JWT' -H 'Content-Type: application/json' \
+  -d '{"name":"Summer break","dates":["2026-08-17","2026-08-18","2026-08-19"]}'
+
+# Apply the returned set ID to an existing timer.
+curl -sS -X PATCH http://raspberrypi.local:3000/api/v1/schedules/12 \
+  -H 'Authorization: Bearer YOUR_JWT' -H 'Content-Type: application/json' \
+  -d '{"awayDateSetId":4}'
+```
+
 Before using a solar timer, an `admin` saves the lighting site’s latitude and longitude in **Admin → Casambi Link**. Solar times are calculated locally with the bundled SunCalc algorithm; no web service or live location request is used. Each `GET /schedules` result includes `nextRunAt`, an ISO 8601 timestamp calculated from the active configuration. Solar schedules re-evaluate after every run so seasonal daylight changes are reflected automatically. [1]
 
 For API integrations, the schedule payload continues to accept a five-field `cronExpression` and an IANA time zone. Include `fadeDurationMs` inside an `on`, `off`, or `set_level` command to request a transition of up to 60 seconds. The upstream method is `setLevel(target, level)` and does not expose a native transition argument, so this application performs ordered 200 ms level steps; an interrupted service restart stops an in-progress fade. [2]

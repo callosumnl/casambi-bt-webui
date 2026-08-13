@@ -49,4 +49,17 @@ describe("LocalStore", () => {
     expect(database.setRoomDefaultBrightness(room.id, 42)).toMatchObject({ id: room.id, defaultBrightnessPercent: 42 });
     expect(() => database.setRoomDefaultBrightness(room.id, 101)).toThrow("Default brightness");
   });
+
+  it("persists reusable away-date sets and detaches them safely from linked timers", () => {
+    const database = store();
+    const owner = database.createUser("operator", "a-strong-password", "admin");
+    const set = database.createAwayDateSet("Summer break", ["2026-08-17", "2026-08-18"]);
+    const schedule = database.createSchedule({ name: "Morning", cronExpression: "0 9 * * *", timezone: "Europe/Amsterdam", command: { targetType: "network", operation: "on" }, solar: null, holidayDates: [], awayDateSetId: set.id, awayDateSet: set, enabled: true, ownerUserId: owner.id });
+    expect(schedule.awayDateSet).toMatchObject({ id: set.id, name: "Summer break" });
+    expect(database.updateAwayDateSet(set.id, { dates: ["2026-08-19"] }).dates).toEqual(["2026-08-19"]);
+    expect(database.getSchedule(schedule.id)?.awayDateSet?.dates).toEqual(["2026-08-19"]);
+    database.deleteAwayDateSet(set.id);
+    expect(database.getSchedule(schedule.id)?.awayDateSetId).toBeNull();
+    expect(database.getSchedule(schedule.id)?.awayDateSet).toBeNull();
+  });
 });

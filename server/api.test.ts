@@ -58,4 +58,14 @@ describe("REST API", () => {
     expect(response.body.holidayDates).toEqual(["2026-12-25"]);
     expect(new Date(response.body.nextRunAt).getTime()).toBeGreaterThan(Date.now());
   });
+
+  it("creates a reusable away-date set and attaches it to a timer", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    const set = await request(instance).post("/api/v1/admin/away-date-sets").set(auth).send({ name: "Summer break", dates: ["2026-08-17", "2026-08-18"] }).expect(201);
+    const timer = await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Welcome", cronExpression: "0 18 * * *", timezone: "Europe/Amsterdam", awayDateSetId: set.body.id, enabled: true, command: { targetType: "network", operation: "on" } }).expect(201);
+    expect(timer.body.awayDateSet).toMatchObject({ id: set.body.id, name: "Summer break", dates: ["2026-08-17", "2026-08-18"] });
+    expect((await request(instance).get("/api/v1/away-date-sets").set(auth).expect(200)).body).toHaveLength(1);
+  });
 });

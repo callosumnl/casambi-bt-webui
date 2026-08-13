@@ -30,4 +30,13 @@ describe("local solar scheduling", () => {
     expect(next).not.toBeNull();
     expect(localCalendarDate(next!, schedule.timezone)).toBe("2026-06-22");
   });
+
+  it("uses reusable away-date set dates when calculating the next run", () => {
+    const from = new Date("2026-06-21T08:00:00.000Z");
+    const schedule: ScheduleRecord = { id: 3, name: "Shared away", cronExpression: "0 18 * * *", timezone: "Europe/Amsterdam", command: { targetType: "network", operation: "on" }, solar: null, holidayDates: [], awayDateSetId: 8, awayDateSet: { id: 8, name: "Summer break", dates: ["2026-06-21"], createdAt: "", updatedAt: "" }, enabled: true, ownerUserId: 1, createdAt: "", updatedAt: "", lastRunKey: null, lastRunAt: null };
+    const config = { networkAddress: null, networkUuid: null, apiKey: null, networkPassword: null, btAdapter: null, forceOffline: false, pollingEnabled: false, pollingIntervalSeconds: 30, solarLatitude: location.latitude, solarLongitude: location.longitude };
+    const next = nextRunAt(schedule, config, from);
+    expect(next).not.toBeNull();
+    expect(localCalendarDate(next!, schedule.timezone)).toBe("2026-06-22");
+  });
 });

@@ -21,7 +21,8 @@ export function localCalendarDate(date: Date, timezone: string): string {
 
 /** Returns whether a scheduled instant falls on one of the timer's explicit away dates. */
 export function isHolidayExcluded(schedule: ScheduleRecord, instant: Date): boolean {
-  return (schedule.holidayDates ?? []).includes(localCalendarDate(instant, schedule.timezone));
+  const dates = new Set([...(schedule.holidayDates ?? []), ...(schedule.awayDateSet?.dates ?? [])]);
+  return dates.has(localCalendarDate(instant, schedule.timezone));
 }
 
 /** Returns the next exact trigger time for standard or dynamically calculated solar schedules, skipping away dates. */
