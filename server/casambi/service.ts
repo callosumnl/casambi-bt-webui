@@ -37,7 +37,8 @@ export class CasambiService {
   public async connect(): Promise<NetworkSnapshot> {
     const config = this.store.getCasambiConfig();
     if (!config.networkAddress || !config.networkPassword) throw new Error("Network address and network password must be configured before connecting.");
-    this.lastSnapshot = await this.bridge.execute<NetworkSnapshot>("configure", config as unknown as Record<string, unknown>);
+    const { solarLatitude: _solarLatitude, solarLongitude: _solarLongitude, ...bridgeConfig } = config;
+    this.lastSnapshot = await this.bridge.execute<NetworkSnapshot>("configure", bridgeConfig as unknown as Record<string, unknown>);
     this.events.publish("network.snapshot", this.withMetadata(this.lastSnapshot));
     return this.lastSnapshot;
   }

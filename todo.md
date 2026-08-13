@@ -47,4 +47,5 @@
 - [x] Add sunrise and sunset timer choices with bounded minute offsets and durable local scheduling.
 - [x] Calculate and expose a next-run timestamp for normal and solar schedules without relying on external services.
 - [x] Add user-facing solar timer controls, next-run indicators, Demo behavior, tests, documentation, responsive QA, and GitHub publication.
-- [ ] Commit and push the sunrise/sunset scheduling and next-run indicator implementation to the GitHub `main` branch.
+- [x] Commit and push the sunrise/sunset scheduling and next-run indicator implementation to the GitHub `main` branch.
+- [ ] Commit and push the remaining bridge solar-configuration safeguard, then rerun final release validation.
