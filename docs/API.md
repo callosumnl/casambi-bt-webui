@@ -57,9 +57,11 @@ curl -sS -X POST http://raspberrypi.local:3000/api/v1/scenes/3/activate \
   -H 'X-API-Key: YOUR_USER_OR_ADMIN_KEY'
 ```
 
-## Timer request
+## Timers and scheduling
 
-Timer rules use five-field cron expressions and an IANA timezone. The Raspberry Pi service reloads persisted rules at startup and runs commands through the same authorization-independent, validated control pathway used by the API. Include `fadeDurationMs` inside an `on`, `off`, or `set_level` command to request a transition of up to 60 seconds. The upstream method is `setLevel(target, level)` and does not expose a native transition argument, so this application performs ordered 200 ms level steps; an interrupted service restart stops an in-progress fade. [1]
+In the WebUI, create a timer by choosing a **time**, repeat pattern, optional days, time zone, lighting target, action, brightness, and optional fade. The interface translates these everyday choices into the durable scheduler format automatically, so users do not need to write cron syntax. The Raspberry Pi service reloads persisted timers at startup and runs them through the same validated control pathway used by the API.
+
+For API integrations, the schedule payload continues to accept a five-field `cronExpression` and an IANA time zone. Include `fadeDurationMs` inside an `on`, `off`, or `set_level` command to request a transition of up to 60 seconds. The upstream method is `setLevel(target, level)` and does not expose a native transition argument, so this application performs ordered 200 ms level steps; an interrupted service restart stops an in-progress fade. [1]
 
 ```bash
 curl -sS -X POST http://raspberrypi.local:3000/api/v1/schedules \

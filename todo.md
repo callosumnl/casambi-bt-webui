@@ -40,3 +40,6 @@
 - [x] Correct trusted-proxy configuration so API rate limiting remains stable behind the deployment proxy.
 - [x] Correct REST validation error mapping so invalid preset and fade inputs return HTTP 422 rather than an internal error.
 - [x] Capture and review desktop and mobile Admin Panel room default-brightness controls before final release confirmation.
+- [x] Replace the cron editor with a human-friendly timer form for time, repeat days, timezone, target, action, brightness, and fade duration.
+- [x] Translate validated user-friendly schedules to the durable cron-backed scheduler while retaining existing REST schedule compatibility.
+- [ ] Add readable schedule summaries, Demo-mode behavior, automated tests, documentation, responsive QA, and GitHub publication for the redesigned timer experience.
