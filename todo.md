@@ -42,4 +42,4 @@
 - [x] Capture and review desktop and mobile Admin Panel room default-brightness controls before final release confirmation.
 - [x] Replace the cron editor with a human-friendly timer form for time, repeat days, timezone, target, action, brightness, and fade duration.
 - [x] Translate validated user-friendly schedules to the durable cron-backed scheduler while retaining existing REST schedule compatibility.
-- [ ] Add readable schedule summaries, Demo-mode behavior, automated tests, documentation, responsive QA, and GitHub publication for the redesigned timer experience.
+- [x] Add readable schedule summaries, Demo-mode behavior, automated tests, documentation, responsive QA, and GitHub publication for the redesigned timer experience.
