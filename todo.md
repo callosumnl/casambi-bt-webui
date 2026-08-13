@@ -36,6 +36,7 @@
 - [x] Add conversion tests, visual verification, and publish the brightness-scale correction to GitHub.
 - [x] Add persistent per-room default brightness presets with admin configuration and user quick-apply controls.
 - [x] Add validated timer fade-duration settings that preserve safe Casambi command behavior.
-- [ ] Add Demo support, tests, documentation, visual validation, and GitHub publication for room presets and timer fades.
+- [x] Add Demo support, tests, documentation, visual validation, and GitHub publication for room presets and timer fades.
 - [x] Correct trusted-proxy configuration so API rate limiting remains stable behind the deployment proxy.
 - [x] Correct REST validation error mapping so invalid preset and fade inputs return HTTP 422 rather than an internal error.
+- [x] Capture and review desktop and mobile Admin Panel room default-brightness controls before final release confirmation.
