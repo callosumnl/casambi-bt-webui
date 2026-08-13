@@ -48,4 +48,6 @@
 - [x] Calculate and expose a next-run timestamp for normal and solar schedules without relying on external services.
 - [x] Add user-facing solar timer controls, next-run indicators, Demo behavior, tests, documentation, responsive QA, and GitHub publication.
 - [x] Commit and push the sunrise/sunset scheduling and next-run indicator implementation to the GitHub `main` branch.
-- [ ] Commit and push the remaining bridge solar-configuration safeguard, then rerun final release validation.
+- [x] Commit and push the remaining bridge solar-configuration safeguard, then rerun final release validation.
+- [x] Rerun final validation against the exact published solar scheduling state and confirm a clean working tree.
+- [x] Synchronize the final task record, then validate the exact published state with a clean working tree.
