@@ -13,4 +13,5 @@
 .sensor-card small { color: var(--muted); font-size: .75rem; margin-left: .25rem; }
 .sensor-card > span { color: var(--muted); font-size: .72rem; }
 .sensor-pulse { justify-self: start; margin-top: .25rem; padding: .32rem .45rem; color: var(--pink); background: rgba(255,63,175,.07); border: 1px solid rgba(255,63,175,.35); font: .55rem "DM Mono"; letter-spacing: .07em; }
+.room-default { width: 100%; margin-top: .45rem; padding: .35rem .45rem; color: var(--cyan); background: rgba(99,244,255,.06); border: 1px solid rgba(99,244,255,.3); font: .56rem "DM Mono"; letter-spacing: .06em; }
 .demo-banner { display: flex; align-items: flex-start; gap: .55rem; margin: 0 0 1rem; padding: .7rem .8rem; color: #b6fbff; background: rgba(99,244,255,.08); border: 1px solid rgba(99,244,255,.38); font: .65rem "DM Mono"; line-height: 1.55; letter-spacing: .03em; }

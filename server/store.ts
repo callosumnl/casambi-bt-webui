@@ -11,7 +11,7 @@ export type Role = "admin" | "user";
 export type StoredUser = { id: number; username: string; role: Role; createdAt: string };
 type UserRow = StoredUser & { passwordHash: string; passwordSalt: string };
 export type ApiKeyRecord = { id: number; label: string; prefix: string; role: Role; createdAt: string; lastUsedAt: string | null; revokedAt: string | null };
-export type RoomRecord = { id: number; name: string; sortOrder: number };
+export type RoomRecord = { id: number; name: string; sortOrder: number; defaultBrightnessPercent: number };
 export type UnitMetadata = { unitId: number; customName: string | null; roomId: number | null };
 export type ScheduleRecord = {
   id: number; name: string; cronExpression: string; timezone: string; command: ControlRequest;
@@ -60,7 +60,7 @@ export class LocalStore {
         role TEXT NOT NULL CHECK(role IN ('admin','user')), created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT
       );
       CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, encrypted INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE IF NOT EXISTS rooms (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, sort_order INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE IF NOT EXISTS rooms (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE, sort_order INTEGER NOT NULL DEFAULT 0, default_brightness_percent INTEGER NOT NULL DEFAULT 100 CHECK(default_brightness_percent BETWEEN 0 AND 100));
       CREATE TABLE IF NOT EXISTS unit_metadata (unit_id INTEGER PRIMARY KEY, custom_name TEXT, room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL);
       CREATE TABLE IF NOT EXISTS schedules (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, cron_expression TEXT NOT NULL, timezone TEXT NOT NULL,
@@ -71,6 +71,8 @@ export class LocalStore {
         id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL, detail_json TEXT NOT NULL, created_at TEXT NOT NULL
       );
     `);
+    const roomColumns = this.db.prepare("PRAGMA table_info(rooms)").all() as Array<{ name: string }>;
+    if (!roomColumns.some(column => column.name === "default_brightness_percent")) this.db.exec("ALTER TABLE rooms ADD COLUMN default_brightness_percent INTEGER NOT NULL DEFAULT 100 CHECK(default_brightness_percent BETWEEN 0 AND 100)");
   }
 
   /** Returns whether an initial appliance administrator still needs to be created. */
@@ -178,12 +180,18 @@ export class LocalStore {
   }
 
   /** Creates a named room for local organization because rooms are not modeled upstream. */
-  public createRoom(name: string): RoomRecord {
-    const info = this.db.prepare("INSERT INTO rooms (name,sort_order) VALUES (?,?)").run(name.trim(), this.listRooms().length);
-    return this.db.prepare("SELECT id,name,sort_order AS sortOrder FROM rooms WHERE id = ?").get(info.lastInsertRowid) as RoomRecord;
+  public createRoom(name: string, defaultBrightnessPercent = 100): RoomRecord {
+    const info = this.db.prepare("INSERT INTO rooms (name,sort_order,default_brightness_percent) VALUES (?,?,?)").run(name.trim(), this.listRooms().length, this.normalizePercent(defaultBrightnessPercent));
+    return this.getRoom(Number(info.lastInsertRowid))!;
   }
 
-  public listRooms(): RoomRecord[] { return this.db.prepare("SELECT id,name,sort_order AS sortOrder FROM rooms ORDER BY sort_order,name").all() as RoomRecord[]; }
+  public listRooms(): RoomRecord[] { return this.db.prepare("SELECT id,name,sort_order AS sortOrder,default_brightness_percent AS defaultBrightnessPercent FROM rooms ORDER BY sort_order,name").all() as RoomRecord[]; }
+  public getRoom(id: number): RoomRecord | null { return (this.db.prepare("SELECT id,name,sort_order AS sortOrder,default_brightness_percent AS defaultBrightnessPercent FROM rooms WHERE id = ?").get(id) as RoomRecord | undefined) ?? null; }
+  public setRoomDefaultBrightness(id: number, defaultBrightnessPercent: number): RoomRecord {
+    if (!this.getRoom(id)) throw new Error("Room does not exist.");
+    this.db.prepare("UPDATE rooms SET default_brightness_percent = ? WHERE id = ?").run(this.normalizePercent(defaultBrightnessPercent), id);
+    return this.getRoom(id)!;
+  }
   public deleteRoom(id: number): void { this.db.prepare("DELETE FROM rooms WHERE id = ?").run(id); }
   public setUnitMetadata(unitId: number, customName: string | null, roomId: number | null): void {
     this.db.prepare("INSERT INTO unit_metadata (unit_id,custom_name,room_id) VALUES (?,?,?) ON CONFLICT(unit_id) DO UPDATE SET custom_name=excluded.custom_name,room_id=excluded.room_id").run(unitId, customName?.trim() || null, roomId);
@@ -223,6 +231,7 @@ export class LocalStore {
 
   private getUserById(id: number): StoredUser | null { return (this.db.prepare("SELECT id,username,role,created_at AS createdAt FROM local_users WHERE id = ?").get(id) as StoredUser | undefined) ?? null; }
   private getApiKey(id: number): ApiKeyRecord | null { return (this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt FROM api_keys WHERE id = ?").get(id) as ApiKeyRecord | undefined) ?? null; }
+  private normalizePercent(value: number): number { if (!Number.isInteger(value) || value < 0 || value > 100) throw new Error("Default brightness must be an integer from 0 to 100."); return value; }
   private adminCount(): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM local_users WHERE role = 'admin'").get() as { count: number }).count; }
   private mapSchedule(row: Record<string, unknown>): ScheduleRecord { return { id: Number(row.id), name: String(row.name), cronExpression: String(row.cron_expression), timezone: String(row.timezone), command: JSON.parse(String(row.command_json)) as ControlRequest, enabled: Boolean(row.enabled), ownerUserId: Number(row.owner_user_id), createdAt: String(row.created_at), updatedAt: String(row.updated_at), lastRunKey: row.last_run_key ? String(row.last_run_key) : null, lastRunAt: row.last_run_at ? String(row.last_run_at) : null }; }
   private hashPassword(password: string, salt: string): string { return scryptSync(password, salt, 64).toString("hex"); }

@@ -1,4 +1,5 @@
 import type { Device, NetworkSnapshot } from "./localApi";
+import { percentToDimmer } from "./brightness";
 
 /** Creates the deterministic, non-persistent network shown to anonymous Demo visitors. */
 export function createDemoNetwork(): NetworkSnapshot {
@@ -12,7 +13,7 @@ export function createDemoNetwork(): NetworkSnapshot {
     ],
     groups: [{ id: 201, name: "Gallery lighting", unitIds: [101, 102] }, { id: 202, name: "All demo lamps", unitIds: [101, 102, 103] }],
     scenes: [{ id: 301, name: "Gallery welcome" }, { id: 302, name: "Focus work" }, { id: 303, name: "Night close" }],
-    rooms: [{ id: 401, name: "Gallery", sortOrder: 1 }, { id: 402, name: "Studio", sortOrder: 2 }],
+    rooms: [{ id: 401, name: "Gallery", sortOrder: 1, defaultBrightnessPercent: 68 }, { id: 402, name: "Studio", sortOrder: 2, defaultBrightnessPercent: 82 }],
     updatedAt: new Date().toISOString(),
   };
 }
@@ -31,20 +32,24 @@ export function applyDemoCommand(snapshot: NetworkSnapshot, input: unknown): Net
     : command.targetType === "group" ? snapshot.groups.find(group => group.id === targetId)?.unitIds ?? []
       : command.targetType === "room" ? snapshot.units.filter(unit => unit.roomId === targetId).map(unit => unit.id)
         : command.targetType === "unit" ? [targetId] : [];
-  let units = snapshot.units;
-  if (command.targetType === "scene") units = activateScene(snapshot.units, targetId);
-  else if (selected.length) units = snapshot.units.map(unit => selected.includes(unit.id) ? applyToUnit(unit, command) : unit);
+  const units = command.targetType === "scene" ? activateScene(snapshot.units, targetId) : selected.length ? snapshot.units.map(unit => selected.includes(unit.id) ? applyToUnit(unit, command) : unit) : snapshot.units;
   return { ...snapshot, units, updatedAt: new Date().toISOString() };
+}
+
+/** Applies an administrator-configured room default to the browser-only Demo network. */
+export function applyDemoRoomDefault(snapshot: NetworkSnapshot, roomId: number): NetworkSnapshot {
+  const room = snapshot.rooms.find(candidate => candidate.id === roomId);
+  return room ? applyDemoCommand(snapshot, { targetType: "room", targetId: room.id, operation: "set_level", value: percentToDimmer(room.defaultBrightnessPercent) }) : snapshot;
 }
 
 function applyToUnit(unit: Device, command: DemoCommand): Device {
   const value = Number(command.value);
   const state = command.operation === "simulate_sensor" ? { ...unit.state, sensors: unit.state.sensors.map(sensor => ({ ...sensor, value: sensor.value === null ? 100 : (sensor.value + 37) % 1000 })) }
     : command.operation === "on" ? { ...unit.state, on: true, dimmer: unit.state.dimmer || 180 }
-    : command.operation === "off" ? { ...unit.state, on: false, dimmer: 0 }
-      : command.operation === "set_level" ? { ...unit.state, dimmer: Math.max(0, Math.min(255, value)), on: value > 0 }
-        : command.operation === "set_temperature" ? { ...unit.state, temperature: Math.max(2700, Math.min(6500, value)) }
-          : unit.state;
+      : command.operation === "off" ? { ...unit.state, on: false, dimmer: 0 }
+        : command.operation === "set_level" ? { ...unit.state, dimmer: Math.max(0, Math.min(255, value)), on: value > 0 }
+          : command.operation === "set_temperature" ? { ...unit.state, temperature: Math.max(2700, Math.min(6500, value)) }
+            : unit.state;
   return { ...unit, state };
 }
 

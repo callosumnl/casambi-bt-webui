@@ -74,6 +74,7 @@ export const controlRequestSchema = z.object({
   targetId: z.union([z.number().int().nonnegative(), z.string().min(1)]).nullable().optional(),
   operation: operationSchema,
   value: z.unknown().optional(),
+  fadeDurationMs: z.number().int().min(0).max(60_000).optional(),
 }).superRefine((value, ctx) => {
   const numberOps = ["set_level", "set_temperature", "set_white", "set_vertical", "set_slider"];
   if (numberOps.includes(value.operation) && (typeof value.value !== "number" || !Number.isFinite(value.value))) {

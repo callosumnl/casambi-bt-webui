@@ -35,4 +35,12 @@ describe("LocalStore", () => {
     expect(database.getSafeCasambiConfig()).not.toHaveProperty("networkPassword");
     expect(database.getCasambiConfig().networkPassword).toBe("network-password");
   });
+
+  it("stores bounded default brightness values for rooms", () => {
+    const database = store();
+    const room = database.createRoom("Studio", 65);
+    expect(room).toMatchObject({ name: "Studio", defaultBrightnessPercent: 65 });
+    expect(database.setRoomDefaultBrightness(room.id, 42)).toMatchObject({ id: room.id, defaultBrightnessPercent: 42 });
+    expect(() => database.setRoomDefaultBrightness(room.id, 101)).toThrow("Default brightness");
+  });
 });

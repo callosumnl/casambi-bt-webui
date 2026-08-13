@@ -59,6 +59,13 @@ export class CasambiService {
   /** Applies a control command to its actual Casambi target, expanding local room membership first. */
   public async control(input: ControlRequest, actor: string): Promise<NetworkSnapshot> {
     const command = controlRequestSchema.parse(input);
+    if (command.fadeDurationMs && ["on", "off", "set_level"].includes(command.operation)) {
+      await this.fadeToLevel(command);
+      this.store.audit(actor, "lighting.control", { targetType: command.targetType, targetId: command.targetId ?? null, operation: command.operation, fadeDurationMs: command.fadeDurationMs });
+      const faded = this.withMetadata(this.lastSnapshot);
+      this.events.publish("network.snapshot", faded);
+      return faded;
+    }
     if (command.targetType === "room") {
       const roomId = Number(command.targetId);
       const unitIds = this.store.getUnitMetadata().filter(metadata => metadata.roomId === roomId).map(metadata => metadata.unitId);
@@ -72,6 +79,41 @@ export class CasambiService {
     const snapshot = this.withMetadata(this.lastSnapshot);
     this.events.publish("network.snapshot", snapshot);
     return snapshot;
+  }
+
+  /** Applies a room's administrator-configured default brightness, optionally with a bounded smooth transition. */
+  public async applyRoomPreset(roomId: number, actor: string, fadeDurationMs = 0): Promise<NetworkSnapshot> {
+    const room = this.store.getRoom(roomId);
+    if (!room) throw new Error("Room does not exist.");
+    return this.control({ targetType: "room", targetId: room.id, operation: "set_level", value: Math.round((room.defaultBrightnessPercent / 100) * 255), ...(fadeDurationMs ? { fadeDurationMs } : {}) }, actor);
+  }
+
+  /** Uses bounded 200 ms software steps because upstream `setLevel(target, level)` has no duration argument. */
+  private async fadeToLevel(command: ControlRequest): Promise<void> {
+    if (command.targetType === "scene") throw new Error("Scenes cannot be faded by this bridge.");
+    const snapshot = await this.snapshot();
+    const targetLevel = command.operation === "off" ? 0 : command.operation === "on" ? 255 : Number(command.value);
+    const unitIds = this.targetUnitIds(command, snapshot);
+    if (unitIds.length === 0) throw new Error("The control target has no assigned lamps.");
+    const startLevels = new Map(snapshot.units.map(unit => [unit.id, unit.state.dimmer ?? (unit.state.on ? 255 : 0)]));
+    const steps = Math.max(1, Math.min(60, Math.ceil((command.fadeDurationMs || 0) / 200)));
+    for (let step = 1; step <= steps; step += 1) {
+      for (const unitId of unitIds) {
+        const start = startLevels.get(unitId) ?? 0;
+        const level = Math.round(start + ((targetLevel - start) * step) / steps);
+        await this.bridge.execute("control", { targetType: "unit", targetId: unitId, operation: "set_level", value: level });
+      }
+      if (step < steps) await new Promise(resolve => setTimeout(resolve, 200));
+    }
+    this.lastSnapshot = await this.bridge.snapshot();
+  }
+
+  private targetUnitIds(command: ControlRequest, snapshot: NetworkSnapshot): number[] {
+    if (command.targetType === "unit") return [Number(command.targetId)];
+    if (command.targetType === "group") return snapshot.groups.find(group => group.id === Number(command.targetId))?.unitIds ?? [];
+    if (command.targetType === "network") return snapshot.units.map(unit => unit.id);
+    if (command.targetType === "room") return this.store.getUnitMetadata().filter(metadata => metadata.roomId === Number(command.targetId)).map(metadata => metadata.unitId);
+    return [];
   }
 
   private handleBridgeEvent(event: BridgeEvent): void {

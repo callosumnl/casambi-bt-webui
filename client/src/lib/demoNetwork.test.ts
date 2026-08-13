@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyDemoCommand, createDemoNetwork } from "./demoNetwork";
+import { applyDemoCommand, applyDemoRoomDefault, createDemoNetwork } from "./demoNetwork";
 
 describe("anonymous demo network", () => {
   it("creates a connected in-memory fixture set with sample rooms, groups, scenes, and sensors", () => {
@@ -30,5 +30,12 @@ describe("anonymous demo network", () => {
     const next = applyDemoCommand(createDemoNetwork(), { targetType: "unit", targetId: 101, operation: "simulate_sensor" });
     expect(next.units.find(unit => unit.id === 101)?.state.sensors[0]?.value).toBe(557);
     expect(next.units.find(unit => unit.id === 102)?.state.sensors[0]?.value).toBe(385);
+  });
+
+  it("applies only the selected room's configured default brightness", () => {
+    const next = applyDemoRoomDefault(createDemoNetwork(), 401);
+    expect(next.units.find(unit => unit.id === 101)?.state.dimmer).toBe(173);
+    expect(next.units.find(unit => unit.id === 102)?.state.dimmer).toBe(173);
+    expect(next.units.find(unit => unit.id === 103)?.state.dimmer).toBe(210);
   });
 });

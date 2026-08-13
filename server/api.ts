@@ -18,6 +18,10 @@ const scheduleSchema = z.object({ name: z.string().trim().min(1).max(96), cronEx
 /** Wraps async routes in a stable JSON error response. */
 function route(handler: AsyncRoute) {
   return (request: Request, response: Response) => void handler(request, response).catch(error => {
+    if (error instanceof z.ZodError) {
+      response.status(422).json({ error: { code: "VALIDATION_ERROR", message: "Request validation failed.", fields: error.flatten() }, requestId: response.locals.requestId });
+      return;
+    }
     const message = error instanceof Error ? error.message : "Unexpected server error.";
     const status = message.includes("does not exist") || message.includes("does not exist") ? 404 : message.includes("required") || message.includes("invalid") ? 422 : 500;
     response.status(status).json({ error: { code: status === 422 ? "VALIDATION_ERROR" : status === 404 ? "NOT_FOUND" : "INTERNAL_ERROR", message }, requestId: response.locals.requestId });
@@ -61,6 +65,10 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
   api.get("/scenes", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).scenes); }));
   api.get("/sensors", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).units.flatMap(unit => unit.state.sensors.map(sensor => ({ deviceId: unit.id, deviceName: unit.name, ...sensor })))); }));
   api.get("/rooms", requireAuth(store), (request, response) => response.json(store.listRooms()));
+  api.post("/rooms/:id/apply-default", requireAuth(store), route(async (request, response) => {
+    const input = parsed(z.object({ fadeDurationMs: z.number().int().min(0).max(60_000).optional() }), request.body || {});
+    response.json(await service.applyRoomPreset(Number(request.params.id), principal(response).name, input.fadeDurationMs || 0));
+  }));
   api.post("/control", requireAuth(store), route(async (request, response) => { const command = parsed(controlRequestSchema, request.body); response.json(await service.control(command, principal(response).name)); }));
   api.post("/devices/:id/on", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "on" }, principal(response).name)); }));
   api.post("/devices/:id/off", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "off" }, principal(response).name)); }));
@@ -76,7 +84,8 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
   api.get("/admin/discovery", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.discover()); }));
   api.post("/admin/connect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.connect()); }));
   api.post("/admin/disconnect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.disconnect()); }));
-  api.post("/admin/rooms", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ name: z.string().trim().min(1).max(96) }), request.body); response.status(201).json(store.createRoom(input.name)); }));
+  api.post("/admin/rooms", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ name: z.string().trim().min(1).max(96), defaultBrightnessPercent: z.number().int().min(0).max(100).default(100) }), request.body); response.status(201).json(store.createRoom(input.name, input.defaultBrightnessPercent)); }));
+  api.put("/admin/rooms/:id/default-brightness", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ defaultBrightnessPercent: z.number().int().min(0).max(100) }), request.body); const room = store.setRoomDefaultBrightness(Number(request.params.id), input.defaultBrightnessPercent); store.audit(principal(response).name, "room.default_brightness.updated", { roomId: room.id, defaultBrightnessPercent: room.defaultBrightnessPercent }); response.json(room); }));
   api.delete("/admin/rooms/:id", requireAuth(store, "admin"), (request, response) => { store.deleteRoom(Number(request.params.id)); response.status(204).send(); });
   api.put("/admin/devices/:id/metadata", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ customName: z.string().trim().max(128).nullable(), roomId: z.number().int().positive().nullable() }), request.body); store.setUnitMetadata(Number(request.params.id), input.customName, input.roomId); response.status(204).send(); }));
   api.get("/admin/users", requireAuth(store, "admin"), (_request, response) => response.json(store.listUsers()));

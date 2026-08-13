@@ -36,6 +36,8 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
 
 async function startServer() {
   const app = express();
+  // The managed gateway and common Raspberry Pi reverse proxies add one trusted forwarding hop.
+  app.set("trust proxy", 1);
   const server = createServer(app);
   const store = new LocalStore();
   const events = new EventHub();
