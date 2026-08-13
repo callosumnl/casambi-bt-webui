@@ -61,4 +61,5 @@
 - [x] Add automated Demo-mode coverage for reusable away-date set assignment without live API access.
 - [x] Verify reusable away-date set selection and Admin management controls at desktop and mobile breakpoints.
 - [x] Rerun validation and publish the final reusable away-date set QA record.
-- [ ] Synchronize the reusable away-date set completion record, then validate the exact published tree is clean.
+- [x] Synchronize the reusable away-date set completion record, then validate the exact published tree is clean.
+- [x] Commit the final completion record and reconfirm the exact published reusable away-date set tree is clean.
