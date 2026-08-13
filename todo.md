@@ -28,7 +28,7 @@
 - [x] Design an anonymous Demo mode that is isolated from real Casambi bridges, accounts, API keys, schedules, and persistent data.
 - [x] Add an accessible Demo button to the login page and interactive simulated lamp, group, room, scene, and sensor controls.
 - [x] Add demo safeguards, responsive visual validation, automated tests, and user documentation.
-- [ ] Commit and push the anonymous Demo mode implementation to GitHub.
+- [x] Commit and push the anonymous Demo mode implementation to GitHub.
 - [x] Add user-triggerable simulated sensor changes in Demo mode and cover their behavior with an automated test.
 - [x] Verify the login Demo button and Demo dashboard/timer views at desktop and mobile breakpoints.
 - [x] Capture and review the desktop login view with the Demo button before finalizing Demo mode QA.
