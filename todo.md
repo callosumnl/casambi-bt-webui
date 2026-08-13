@@ -60,4 +60,5 @@
 - [x] Add administrator management, user-friendly timer set selection, Demo behavior, tests, documentation, responsive QA, and GitHub publication.
 - [x] Add automated Demo-mode coverage for reusable away-date set assignment without live API access.
 - [x] Verify reusable away-date set selection and Admin management controls at desktop and mobile breakpoints.
-- [ ] Rerun validation and publish the final reusable away-date set QA record.
+- [x] Rerun validation and publish the final reusable away-date set QA record.
+- [ ] Synchronize the reusable away-date set completion record, then validate the exact published tree is clean.
