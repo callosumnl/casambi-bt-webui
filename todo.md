@@ -57,4 +57,7 @@
 - [x] Synchronize the final holiday-timer release record and confirm the published tree is clean.
 - [x] Add persistent reusable away-date sets with validated names and ISO calendar dates.
 - [x] Add per-timer away-date set assignment while combining assigned and timer-specific exclusions in timezone-aware scheduler decisions.
-- [ ] Add administrator management, user-friendly timer set selection, Demo behavior, tests, documentation, responsive QA, and GitHub publication.
+- [x] Add administrator management, user-friendly timer set selection, Demo behavior, tests, documentation, responsive QA, and GitHub publication.
+- [x] Add automated Demo-mode coverage for reusable away-date set assignment without live API access.
+- [x] Verify reusable away-date set selection and Admin management controls at desktop and mobile breakpoints.
+- [ ] Rerun validation and publish the final reusable away-date set QA record.

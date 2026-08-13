@@ -5,6 +5,7 @@ import { useNetwork } from "@/hooks/useNetwork";
 import { defaultDaysForRepeat, describeCronExpression, RepeatPattern, toCronExpression, WEEKDAYS } from "@/lib/friendlySchedule";
 import { AwayDateSet, LocalApi, Schedule, SolarSchedule } from "@/lib/localApi";
 import { percentToDimmer } from "@/lib/brightness";
+import { attachDemoAwayDateSet } from "@/lib/awayDateSets";
 
 type TimerCommand = Schedule["command"] & { fadeDurationMs?: number };
 type TimerForm = { name: string; trigger: "time" | "sunrise" | "sunset"; time: string; repeat: RepeatPattern; days: string[]; solarOffsetMinutes: string; timezone: string; targetType: string; targetId: string; operation: string; value: string; fadeDurationSeconds: string; holidayDates: string[]; awayDateSetId: string };
@@ -56,7 +57,7 @@ export default function Schedules({ demo = false }: { demo?: boolean }) {
       if (form.trigger === "time" && form.repeat === "custom" && form.days.length === 0) throw new Error("Choose at least one day, or select every day.");
       const awayDateSet = awayDateSets.find(set => set.id === Number(form.awayDateSetId)) ?? null;
       const schedule: Schedule = { id: Date.now(), name: form.name.trim(), cronExpression: solar ? "0 0 * * *" : toCronExpression(form.time, form.repeat, form.days), timezone: form.timezone, enabled: true, command, solar, holidayDates: form.holidayDates, awayDateSetId: awayDateSet?.id ?? null, awayDateSet, lastRunAt: null, nextRunAt: demo ? new Date(Date.now() + 3_600_000).toISOString() : null };
-      if (demo) { setSchedules(current => [schedule, ...current]); setMessage("Demo timer saved in this browser only."); return; }
+      if (demo) { setSchedules(current => [attachDemoAwayDateSet(schedule, awayDateSet), ...current]); setMessage("Demo timer saved in this browser only."); return; }
       await api.request("/schedules", { method: "POST", body: JSON.stringify(schedule) });
       setMessage("Timer saved. Your Raspberry Pi will run it at the chosen time.");
       await refresh();
