@@ -83,6 +83,19 @@ pnpm build
 CASAMBI_MOCK_MODE=true pnpm dev
 ```
 
+## Python package preparation
+
+The repository is also prepared for a future PyPI distribution named `casambi-bt-webui`. Its wheel is a **Raspberry Pi deployment companion**, not a replacement for the Node.js web application: it provides the `casambi-bt-webui` command for prerequisite diagnostics and for writing non-secret systemd and environment templates. The complete UI and API continue to be deployed from this repository.
+
+```bash
+# Available after a future PyPI release, or from a locally built wheel.
+casambi-bt-webui doctor
+casambi-bt-webui systemd-template
+casambi-bt-webui write-templates --directory ./deployment-templates
+```
+
+See [the PyPI release guide](docs/PYPI_RELEASE.md) for the build, TestPyPI, Trusted Publishing, and production-release process.
+
 The Vitest suite covers password and API-key handling, encrypted settings, role-protected REST routes, bridge JSON-lines correlation and events, and schedule validation. It deliberately uses a deterministic mock bridge in development; no automated test attempts to address live Bluetooth hardware.
 
 After deploying on a connected Raspberry Pi, run the hardware-facing smoke test to verify the real bridge and any reported SENSOR controls. Obtain an `admin` or `user` JWT from the login endpoint, then run the script locally; it never prints Casambi credentials.

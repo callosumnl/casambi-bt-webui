@@ -1,0 +1,19 @@
+name: Validate Python package
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install package tooling
+        run: python -m pip install --upgrade build twine
+      - name: Build and smoke test package
+        run: ./scripts/validate-package.sh

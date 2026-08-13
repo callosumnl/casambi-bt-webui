@@ -21,3 +21,7 @@
 - [x] Add automated schedule execution and duplicate-run prevention coverage.
 - [x] Verify the authenticated dashboard and admin layouts across desktop and mobile breakpoints.
 - [x] Extract raw live Casambi SENSOR bitfields before upstream parsing discards them, label fixture-specific values safely as raw, and provide a Raspberry Pi hardware verification script.
+- [x] Define the PyPI package boundary, project metadata, supported Python versions, and distribution naming.
+- [x] Add a Python source package, PEP 517 build configuration, package data, and console entry point for deployment helpers.
+- [x] Add package-build validation, PyPI/TestPyPI release guidance, and release artifacts checks.
+- [ ] Commit and push the PyPI package preparation changes to GitHub.
