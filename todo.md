@@ -53,4 +53,5 @@
 - [x] Synchronize the final task record, then validate the exact published state with a clean working tree.
 - [x] Add persistent ISO-date holiday exclusions for individual timers with timezone-aware scheduler skip behavior.
 - [x] Add a clear all-days and specific-day-of-week selection workflow for fixed-time timers.
-- [ ] Add away-mode exclusion controls in live and Demo timers, next-run recalculation, tests, documentation, responsive QA, and GitHub publication.
+- [x] Add away-mode exclusion controls in live and Demo timers, next-run recalculation, tests, documentation, responsive QA, and GitHub publication.
+- [ ] Synchronize the final holiday-timer release record and confirm the published tree is clean.
