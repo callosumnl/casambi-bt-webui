@@ -51,3 +51,6 @@
 - [x] Commit and push the remaining bridge solar-configuration safeguard, then rerun final release validation.
 - [x] Rerun final validation against the exact published solar scheduling state and confirm a clean working tree.
 - [x] Synchronize the final task record, then validate the exact published state with a clean working tree.
+- [x] Add persistent ISO-date holiday exclusions for individual timers with timezone-aware scheduler skip behavior.
+- [x] Add a clear all-days and specific-day-of-week selection workflow for fixed-time timers.
+- [ ] Add away-mode exclusion controls in live and Demo timers, next-run recalculation, tests, documentation, responsive QA, and GitHub publication.

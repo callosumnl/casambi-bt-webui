@@ -59,7 +59,9 @@ curl -sS -X POST http://raspberrypi.local:3000/api/v1/scenes/3/activate \
 
 ## Timers and scheduling
 
-In the WebUI, create a timer by choosing a **time**, repeat pattern, optional days, time zone, lighting target, action, brightness, and optional fade. You can instead choose **sunrise** or **sunset** and a whole-minute offset from 180 minutes before to 180 minutes after the event. The interface translates everyday choices into the durable scheduler format automatically, so users do not need to write cron syntax. The Raspberry Pi service reloads persisted timers at startup and runs them through the same validated control pathway used by the API.
+In the WebUI, create a timer by choosing a **time**, explicit repeat days, time zone, lighting target, action, brightness, and optional fade. Choose **Every day**, **Weekdays**, **Weekends**, or **Pick days** and select the exact day buttons. You can instead choose **sunrise** or **sunset** and a whole-minute offset from 180 minutes before to 180 minutes after the event. The interface translates everyday choices into the durable scheduler format automatically, so users do not need to write cron syntax. The Raspberry Pi service reloads persisted timers at startup and runs them through the same validated control pathway used by the API.
+
+Every timer can include up to 120 explicit `holidayDates` in `YYYY-MM-DD` format. These are personal away dates, not a downloaded regional holiday calendar. A date is compared in the timer’s IANA time zone; a matching run is skipped, a `schedule.skipped_holiday` event is recorded, and `nextRunAt` advances to the following eligible trigger. This makes it safe to keep routine lighting timers enabled while you are away.
 
 Before using a solar timer, an `admin` saves the lighting site’s latitude and longitude in **Admin → Casambi Link**. Solar times are calculated locally with the bundled SunCalc algorithm; no web service or live location request is used. Each `GET /schedules` result includes `nextRunAt`, an ISO 8601 timestamp calculated from the active configuration. Solar schedules re-evaluate after every run so seasonal daylight changes are reflected automatically. [1]
 
@@ -72,6 +74,7 @@ curl -sS -X POST http://raspberrypi.local:3000/api/v1/schedules \
     "name":"Weekday close",
     "cronExpression":"30 22 * * 1-5",
     "timezone":"Europe/Amsterdam",
+    "holidayDates":["2026-12-25","2026-12-26"],
     "enabled":true,
     "command":{"targetType":"network","operation":"off","fadeDurationMs":5000}
   }'

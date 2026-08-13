@@ -53,8 +53,9 @@ describe("REST API", () => {
     const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
     const auth = { Authorization: `Bearer ${admin.body.token}` };
     await request(instance).put("/api/v1/admin/config").set(auth).send({ solarLatitude: 52.3676, solarLongitude: 4.9041 }).expect(200);
-    const response = await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Sunset", timezone: "Europe/Amsterdam", solar: { event: "sunset", offsetMinutes: -15 }, enabled: true, command: { targetType: "network", operation: "on" } }).expect(201);
+    const response = await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Sunset", timezone: "Europe/Amsterdam", solar: { event: "sunset", offsetMinutes: -15 }, holidayDates: ["2026-12-25", "2026-12-25"], enabled: true, command: { targetType: "network", operation: "on" } }).expect(201);
     expect(response.body.solar).toEqual({ event: "sunset", offsetMinutes: -15 });
+    expect(response.body.holidayDates).toEqual(["2026-12-25"]);
     expect(new Date(response.body.nextRunAt).getTime()).toBeGreaterThan(Date.now());
   });
 });

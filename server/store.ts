@@ -16,7 +16,7 @@ export type RoomRecord = { id: number; name: string; sortOrder: number; defaultB
 export type UnitMetadata = { unitId: number; customName: string | null; roomId: number | null };
 export type ScheduleRecord = {
   id: number; name: string; cronExpression: string; timezone: string; command: ControlRequest;
-  solar: SolarSchedule | null; enabled: boolean; ownerUserId: number; createdAt: string; updatedAt: string; lastRunKey: string | null; lastRunAt: string | null;
+  solar: SolarSchedule | null; holidayDates: string[]; enabled: boolean; ownerUserId: number; createdAt: string; updatedAt: string; lastRunKey: string | null; lastRunAt: string | null;
 };
 
 /** Local configuration with secret fields omitted unless explicitly requested. */
@@ -67,7 +67,7 @@ export class LocalStore {
       CREATE TABLE IF NOT EXISTS unit_metadata (unit_id INTEGER PRIMARY KEY, custom_name TEXT, room_id INTEGER REFERENCES rooms(id) ON DELETE SET NULL);
       CREATE TABLE IF NOT EXISTS schedules (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, cron_expression TEXT NOT NULL, timezone TEXT NOT NULL,
-        command_json TEXT NOT NULL, solar_json TEXT, enabled INTEGER NOT NULL DEFAULT 1, owner_user_id INTEGER NOT NULL REFERENCES local_users(id),
+        command_json TEXT NOT NULL, solar_json TEXT, holiday_dates_json TEXT, enabled INTEGER NOT NULL DEFAULT 1, owner_user_id INTEGER NOT NULL REFERENCES local_users(id),
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_run_key TEXT, last_run_at TEXT
       );
       CREATE TABLE IF NOT EXISTS audit_log (
@@ -78,6 +78,7 @@ export class LocalStore {
     if (!roomColumns.some(column => column.name === "default_brightness_percent")) this.db.exec("ALTER TABLE rooms ADD COLUMN default_brightness_percent INTEGER NOT NULL DEFAULT 100 CHECK(default_brightness_percent BETWEEN 0 AND 100)");
     const scheduleColumns = this.db.prepare("PRAGMA table_info(schedules)").all() as Array<{ name: string }>;
     if (!scheduleColumns.some(column => column.name === "solar_json")) this.db.exec("ALTER TABLE schedules ADD COLUMN solar_json TEXT");
+    if (!scheduleColumns.some(column => column.name === "holiday_dates_json")) this.db.exec("ALTER TABLE schedules ADD COLUMN holiday_dates_json TEXT");
   }
 
   /** Returns whether an initial appliance administrator still needs to be created. */
@@ -209,17 +210,18 @@ export class LocalStore {
   /** Creates a durable automation rule. Cron syntax is validated by the scheduler before this call. */
   public createSchedule(input: Omit<ScheduleRecord, "id" | "createdAt" | "updatedAt" | "lastRunKey" | "lastRunAt">): ScheduleRecord {
     const now = NOW();
-    const info = this.db.prepare("INSERT INTO schedules (name,cron_expression,timezone,command_json,solar_json,enabled,owner_user_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?)")
-      .run(input.name.trim(), input.cronExpression, input.timezone, JSON.stringify(input.command), input.solar ? JSON.stringify(input.solar) : null, input.enabled ? 1 : 0, input.ownerUserId, now, now);
+    const holidayDates = input.holidayDates ?? [];
+    const info = this.db.prepare("INSERT INTO schedules (name,cron_expression,timezone,command_json,solar_json,holiday_dates_json,enabled,owner_user_id,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)")
+      .run(input.name.trim(), input.cronExpression, input.timezone, JSON.stringify(input.command), input.solar ? JSON.stringify(input.solar) : null, JSON.stringify(holidayDates), input.enabled ? 1 : 0, input.ownerUserId, now, now);
     return this.getSchedule(Number(info.lastInsertRowid))!;
   }
   public listSchedules(): ScheduleRecord[] { return (this.db.prepare("SELECT * FROM schedules ORDER BY id DESC").all() as Array<Record<string, unknown>>).map(row => this.mapSchedule(row)); }
   public getSchedule(id: number): ScheduleRecord | null { const row = this.db.prepare("SELECT * FROM schedules WHERE id = ?").get(id) as Record<string, unknown> | undefined; return row ? this.mapSchedule(row) : null; }
-  public updateSchedule(id: number, patch: Partial<Pick<ScheduleRecord, "name" | "cronExpression" | "timezone" | "command" | "solar" | "enabled">>): ScheduleRecord {
+  public updateSchedule(id: number, patch: Partial<Pick<ScheduleRecord, "name" | "cronExpression" | "timezone" | "command" | "solar" | "holidayDates" | "enabled">>): ScheduleRecord {
     const existing = this.getSchedule(id); if (!existing) throw new Error("Schedule does not exist.");
     const next = { ...existing, ...patch, updatedAt: NOW() };
-    this.db.prepare("UPDATE schedules SET name=?,cron_expression=?,timezone=?,command_json=?,solar_json=?,enabled=?,updated_at=? WHERE id=?")
-      .run(next.name, next.cronExpression, next.timezone, JSON.stringify(next.command), next.solar ? JSON.stringify(next.solar) : null, next.enabled ? 1 : 0, next.updatedAt, id);
+    this.db.prepare("UPDATE schedules SET name=?,cron_expression=?,timezone=?,command_json=?,solar_json=?,holiday_dates_json=?,enabled=?,updated_at=? WHERE id=?")
+      .run(next.name, next.cronExpression, next.timezone, JSON.stringify(next.command), next.solar ? JSON.stringify(next.solar) : null, JSON.stringify(next.holidayDates), next.enabled ? 1 : 0, next.updatedAt, id);
     return this.getSchedule(id)!;
   }
   public deleteSchedule(id: number): void { this.db.prepare("DELETE FROM schedules WHERE id = ?").run(id); }
@@ -241,7 +243,7 @@ export class LocalStore {
   private getApiKey(id: number): ApiKeyRecord | null { return (this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt FROM api_keys WHERE id = ?").get(id) as ApiKeyRecord | undefined) ?? null; }
   private normalizePercent(value: number): number { if (!Number.isInteger(value) || value < 0 || value > 100) throw new Error("Default brightness must be an integer from 0 to 100."); return value; }
   private adminCount(): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM local_users WHERE role = 'admin'").get() as { count: number }).count; }
-  private mapSchedule(row: Record<string, unknown>): ScheduleRecord { return { id: Number(row.id), name: String(row.name), cronExpression: String(row.cron_expression), timezone: String(row.timezone), command: JSON.parse(String(row.command_json)) as ControlRequest, solar: row.solar_json ? JSON.parse(String(row.solar_json)) as SolarSchedule : null, enabled: Boolean(row.enabled), ownerUserId: Number(row.owner_user_id), createdAt: String(row.created_at), updatedAt: String(row.updated_at), lastRunKey: row.last_run_key ? String(row.last_run_key) : null, lastRunAt: row.last_run_at ? String(row.last_run_at) : null }; }
+  private mapSchedule(row: Record<string, unknown>): ScheduleRecord { return { id: Number(row.id), name: String(row.name), cronExpression: String(row.cron_expression), timezone: String(row.timezone), command: JSON.parse(String(row.command_json)) as ControlRequest, solar: row.solar_json ? JSON.parse(String(row.solar_json)) as SolarSchedule : null, holidayDates: row.holiday_dates_json ? JSON.parse(String(row.holiday_dates_json)) as string[] : [], enabled: Boolean(row.enabled), ownerUserId: Number(row.owner_user_id), createdAt: String(row.created_at), updatedAt: String(row.updated_at), lastRunKey: row.last_run_key ? String(row.last_run_key) : null, lastRunAt: row.last_run_at ? String(row.last_run_at) : null }; }
   private hashPassword(password: string, salt: string): string { return scryptSync(password, salt, 64).toString("hex"); }
   private digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
   private safeEqual(left: string, right: string): boolean { const a = Buffer.from(left); const b = Buffer.from(right); return a.length === b.length && timingSafeEqual(a, b); }

@@ -12,14 +12,31 @@ export function validateCron(expression: string, timezone: string): void {
   try { new Cron(expression, { timezone, paused: true }); } catch { throw new Error("The schedule or timezone is invalid."); }
 }
 
-/** Returns the next exact trigger time for a standard or dynamically calculated solar schedule. */
+/** Formats a timestamp as the schedule site's ISO calendar date, independent of the Raspberry Pi host timezone. */
+export function localCalendarDate(date: Date, timezone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
+  const value = (type: string) => parts.find(part => part.type === type)?.value;
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
+
+/** Returns whether a scheduled instant falls on one of the timer's explicit away dates. */
+export function isHolidayExcluded(schedule: ScheduleRecord, instant: Date): boolean {
+  return (schedule.holidayDates ?? []).includes(localCalendarDate(instant, schedule.timezone));
+}
+
+/** Returns the next exact trigger time for standard or dynamically calculated solar schedules, skipping away dates. */
 export function nextRunAt(schedule: ScheduleRecord, config: CasambiConfig, from = new Date()): Date | null {
   if (!schedule.enabled) return null;
-  if (schedule.solar) {
-    const location: SolarLocation = { latitude: config.solarLatitude ?? Number.NaN, longitude: config.solarLongitude ?? Number.NaN };
-    return nextSolarRun(schedule.solar, location, schedule.timezone, from);
+  let cursor = from;
+  for (let attempts = 0; attempts < 400; attempts += 1) {
+    const candidate = schedule.solar
+      ? nextSolarRun(schedule.solar, { latitude: config.solarLatitude ?? Number.NaN, longitude: config.solarLongitude ?? Number.NaN } satisfies SolarLocation, schedule.timezone, cursor)
+      : new Cron(schedule.cronExpression, { timezone: schedule.timezone, paused: true }).nextRun(cursor) ?? null;
+    if (!candidate) return null;
+    if (!isHolidayExcluded(schedule, candidate)) return candidate;
+    cursor = new Date(candidate.getTime() + 1_000);
   }
-  return new Cron(schedule.cronExpression, { timezone: schedule.timezone, paused: true }).nextRun(from) ?? null;
+  return null;
 }
 
 /** Reloads SQLite-backed schedules and routes executions through the same control service as the API. */
@@ -43,7 +60,7 @@ export class DurableScheduler {
     this.jobs.set(schedule.id, job);
   }
 
-  /** Arms the next concrete solar event then recalculates after each execution because sun times vary by date. */
+  /** Arms the next concrete solar event then recalculates after every run because sun times vary by date. */
   private scheduleSolar(schedule: ScheduleRecord): void {
     let next: Date | null;
     try { next = nextRunAt(schedule, this.store.getCasambiConfig()); }
@@ -63,7 +80,13 @@ export class DurableScheduler {
   private async run(scheduleId: number): Promise<void> {
     const schedule = this.store.getSchedule(scheduleId);
     if (!schedule?.enabled) return;
-    const runKey = `${scheduleId}:${new Date().toISOString().slice(0, 16)}`;
+    const now = new Date();
+    if (isHolidayExcluded(schedule, now)) {
+      this.store.audit(`schedule:${schedule.id}`, "schedule.skipped_holiday", { scheduleId, holiday: localCalendarDate(now, schedule.timezone) });
+      this.events.publish("schedule.skipped_holiday", { scheduleId, name: schedule.name });
+      return;
+    }
+    const runKey = `${scheduleId}:${now.toISOString().slice(0, 16)}`;
     if (!this.store.claimScheduleRun(scheduleId, runKey)) return;
     try {
       await this.control(schedule.command, `schedule:${schedule.id}`);
