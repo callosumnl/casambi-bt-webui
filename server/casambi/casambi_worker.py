@@ -11,9 +11,11 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 
@@ -154,7 +156,15 @@ class CasambiWorker:
             raise ValueError("networkAddress/networkUuid and networkPassword are required to connect.")
         if self.casa:
             await self.casa.disconnect()
-        self.casa = Casambi()
+        # casambi-bt otherwise writes its cache relative to the process working
+        # directory. The production service deliberately runs with a read-only
+        # application directory, so keep upstream state in the service-owned
+        # data directory instead. Development retains the repository-local
+        # behavior unless an explicit path is supplied.
+        cache_path = os.environ.get("CASAMBI_CACHE_PATH")
+        if cache_path is None:
+            cache_path = str(Path.cwd() / "casambi-bt-store") if os.environ.get("NODE_ENV") == "development" else "/var/lib/casambi-bt-webui/casambi-bt-store"
+        self.casa = Casambi(cachePath=Path(cache_path))
         self.casa.registerUnitChangedHandler(self.handle_unit_changed)
         self.casa.registerSwitchEventHandler(self.handle_switch_event)
         self.casa.registerDisconnectCallback(self.handle_disconnect)

@@ -17,6 +17,7 @@ fi
 
 sudo useradd --system --home /var/lib/casambi-bt-webui --shell /usr/sbin/nologin "$SERVICE_USER" 2>/dev/null || true
 sudo install -d -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/casambi-bt-webui
+sudo install -d -m 0700 -o "$SERVICE_USER" -g "$SERVICE_USER" /var/lib/casambi-bt-webui/casambi-bt-store
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --upgrade pip
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"

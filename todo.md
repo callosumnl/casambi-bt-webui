@@ -63,3 +63,4 @@
 - [x] Rerun validation and publish the final reusable away-date set QA record.
 - [x] Synchronize the reusable away-date set completion record, then validate the exact published tree is clean.
 - [x] Commit the final completion record and reconfirm the exact published reusable away-date set tree is clean.
+- [x] Correct the production upstream Casambi cache location so the restricted service user can connect without a store permission failure.

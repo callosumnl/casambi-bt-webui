@@ -10,3 +10,5 @@ CASAMBI_JWT_SECRET=replace-with-a-different-unique-high-entropy-secret
 CASAMBI_MOCK_MODE=false
 CASAMBI_PYTHON_COMMAND=/opt/casambi-bt-webui/.venv/bin/python
 CASAMBI_DB_PATH=/var/lib/casambi-bt-webui/casambi-bt-webui.db
+# Persistent upstream casambi-bt cache; installer creates this directory as casambi:casambi with mode 0700.
+CASAMBI_CACHE_PATH=/var/lib/casambi-bt-webui/casambi-bt-store

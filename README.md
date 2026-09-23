@@ -51,7 +51,7 @@ chmod +x deploy/install.sh
 sudo APP_DIR=/opt/casambi-bt-webui ./deploy/install.sh
 ```
 
-The installer creates a least-privilege `casambi` service user, Python virtual environment, runtime data directory, build output, environment file, and `systemd` service. Confirm it is running and watch its logs.
+The installer creates a least-privilege `casambi` service user, Python virtual environment, build output, environment file, systemd service, and a protected runtime-data directory. The upstream `casambi-bt` package caches network state in `/var/lib/casambi-bt-webui/casambi-bt-store`; this directory is owned by the service account and is deliberately separate from the read-only application code in `/opt`. Confirm the service is running and watch its logs.
 
 ```bash
 sudo systemctl status casambi-bt-webui.service
@@ -67,9 +67,18 @@ Open `http://<pi-hostname-or-ip>:3000`. The first visitor must create the initia
 | Restart after configuration or upgrade | `sudo systemctl restart casambi-bt-webui` |
 | Inspect service logs | `sudo journalctl -u casambi-bt-webui.service -n 200 --no-pager` |
 | Update code | `git pull && corepack pnpm install --frozen-lockfile && pnpm build && sudo systemctl restart casambi-bt-webui` |
-| Back up state | Stop the service and copy `/var/lib/casambi-bt-webui/casambi-bt-webui.db` securely. |
-| Restore state | Stop the service, restore the database with owner `casambi:casambi`, then start the service. |
+| Back up state | Stop the service and securely copy all of `/var/lib/casambi-bt-webui/`, including the SQLite database and upstream Casambi cache. |
+| Restore state | Stop the service, restore `/var/lib/casambi-bt-webui/` with owner `casambi:casambi`, then start the service. |
 | Development without hardware | Set `CASAMBI_MOCK_MODE=true`, then run `pnpm dev`; mock fixtures are clearly marked development-only. |
+
+### Troubleshooting a `casambi-bt-store` permission error
+
+If an older installation reports `PermissionError: [Errno 13] Permission denied: '/opt/casambi-bt-webui/casambi-bt-store'` while connecting, the Casambi password has already reached the bridge; the error is the upstream library attempting to create its local cache inside the read-only application directory. Upgrade to a version that includes the dedicated cache path. To recover before upgrading, create the historical cache path for the restricted service account and restart the service:
+
+```bash
+sudo install -d -m 0700 -o casambi -g casambi /opt/casambi-bt-webui/casambi-bt-store
+sudo systemctl restart casambi-bt-webui.service
+```
 
 The Python bridge restarts after unexpected exit with capped exponential backoff. Commands are serialized and timeout-bounded so one malformed response cannot permanently block the HTTP service. When an administrator enables polling, the service requests fresh snapshots at the selected interval and backs off after errors. A bridge disconnect publishes state updates to browser clients and is recorded in the audit history without returning secrets.
 
