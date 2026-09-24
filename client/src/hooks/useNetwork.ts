@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { applyDemoCommand, applyDemoRoomDefault, createDemoNetwork } from "@/lib/demoNetwork";
-import { LocalApi, NetworkSnapshot } from "@/lib/localApi";
+import { ConnectionStatus, LocalApi, NetworkSnapshot } from "@/lib/localApi";
 
 /** Fetches the real network or runs a fully in-memory anonymous demo without API or SSE access. */
 export function useNetwork(demo = false) {
@@ -8,6 +8,7 @@ export function useNetwork(demo = false) {
   const [network, setNetwork] = useState<NetworkSnapshot | null>(() => demo ? createDemoNetwork() : null);
   const [loading, setLoading] = useState(!demo);
   const [error, setError] = useState<string | null>(null);
+  const [connection, setConnection] = useState<ConnectionStatus | null>(null);
   // While the event stream is open it delivers every post-command snapshot, so the POST can skip its duplicate body.
   const live = useRef(false);
   const lastCommandError = useRef<string | null>(null);
@@ -20,9 +21,10 @@ export function useNetwork(demo = false) {
     setError(current => message ?? (current === previous ? null : current));
   }, []);
 
-  const refresh = useCallback(async () => {
+  /** Loads the server's cached state instantly; `fresh` asks the bridge instead (explicit sync buttons). */
+  const refresh = useCallback(async (fresh = false) => {
     if (demo) { setError(null); setNetwork(current => current ? { ...current, updatedAt: new Date().toISOString() } : createDemoNetwork()); setLoading(false); return; }
-    try { setError(null); setNetwork(await api.request<NetworkSnapshot>("/network")); }
+    try { setError(null); const next = await api.request<NetworkSnapshot & { connection?: ConnectionStatus }>(fresh ? "/network?fresh=1" : "/network"); setNetwork(next); if (next.connection) setConnection(next.connection); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to load the Casambi network."); }
     finally { setLoading(false); }
   }, [api, demo]);
@@ -54,6 +56,7 @@ export function useNetwork(demo = false) {
       const unit = (JSON.parse(event.data) as { payload: NetworkSnapshot["units"][number] }).payload;
       setNetwork(current => current ? { ...current, units: current.units.map(item => item.id === unit.id ? { ...item, ...unit } : item) } : current);
     });
+    source.addEventListener("connection.status", event => { setConnection((JSON.parse(event.data) as { payload: ConnectionStatus }).payload); });
     source.addEventListener("network.snapshot", event => {
       const snapshot = (JSON.parse(event.data) as { payload: NetworkSnapshot }).payload;
       setNetwork(current => ({ ...snapshot, rooms: current?.rooms ?? [] }));
@@ -62,5 +65,5 @@ export function useNetwork(demo = false) {
     return () => { live.current = false; source.close(); };
   }, [api, demo]);
 
-  return { network, loading, error, refresh, command, applyRoomDefault, api };
+  return { network, loading, error, connection, refresh, command, applyRoomDefault, api };
 }

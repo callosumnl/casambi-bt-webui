@@ -10,8 +10,8 @@ All application endpoints begin with `/api/v1`. Send either an `Authorization: B
 | `POST` | `/auth/bootstrap` | Public, first run only | Creates the first `admin` and returns a JWT. |
 | `POST` | `/auth/login` | Public | Returns an eight-hour JWT for a local `admin` or `user`. |
 | `GET` | `/auth/me` | user | Returns the resolved principal. |
-| `GET` | `/events` | user | Streams `bridge`, `unit.state`, `network.snapshot`, `schedule.executed`, and `schedule.failed` SSE events. |
-| `GET` | `/network` | user | Returns connection status, units, groups, scenes, rooms, and local metadata. |
+| `GET` | `/events` | user | Streams `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `schedule.executed`, and `schedule.failed` SSE events. |
+| `GET` | `/network` | user | Returns the last known connection status, units, groups, scenes, rooms, and local metadata immediately; `?fresh=1` waits for a new bridge snapshot instead. `/devices`, `/groups`, `/scenes`, and `/sensors` also serve the last known state. The `connection` field is `{ phase }`, where `phase` is `idle`, `connecting` (with `attempt`), `connected`, `retrying` (with `attempt`, `nextRetryAt`, and `lastError`), or `failed` (with `lastError`); `connection.status` events carry the same object whenever it changes. |
 | `GET` | `/devices`, `/groups`, `/scenes`, `/sensors`, `/rooms` | user | Returns the named entity collection. |
 | `POST` | `/control` | user | Runs any supported control request. |
 | `POST` | `/devices/:id/on`, `/devices/:id/off` | user | Convenience lamp on/off controls. |

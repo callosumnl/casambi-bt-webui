@@ -5,12 +5,30 @@ import { JsonLineCasambiBridge } from "./bridge";
 
 /** Operations that set an absolute value, so a newer queued value can safely replace an unsent older one. */
 const COALESCIBLE_OPERATIONS = new Set(["set_level", "set_temperature", "set_color", "set_white", "set_vertical", "set_slider", "set_xy"]);
+/** Automatic reconnect delays: 15 s, 30 s, 60 s, … capped at 5 minutes. */
+const RECONNECT_BASE_MS = 15_000;
+const RECONNECT_MAX_MS = 300_000;
+
+/** What the service is doing about the Casambi connection, shown to users so a slow connect or retry is visible. */
+export type ConnectionStatus =
+  | { phase: "idle" }
+  | { phase: "connecting"; attempt: number }
+  | { phase: "connected" }
+  | { phase: "retrying"; attempt: number; nextRetryAt: string; lastError: string }
+  | { phase: "failed"; lastError: string };
+type ServiceSnapshot = NetworkSnapshot & { rooms: ReturnType<LocalStore["listRooms"]>; connection: ConnectionStatus };
 
 /** Normalizes bridge events, overlays local room metadata, and applies every control safely. */
 export class CasambiService {
   private lastSnapshot: NetworkSnapshot = { connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() };
   private pollTimer: NodeJS.Timeout | null = null;
   private pollFailures = 0;
+  /** True while the network should be connected: set by a connect intent, cleared by a manual disconnect. */
+  private wantConnected = false;
+  private connecting = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
+  private reconnectAttempt = 0;
+  private connectionStatus: ConnectionStatus = { phase: "idle" };
 
   public constructor(private readonly store: LocalStore, private readonly bridge: JsonLineCasambiBridge, private readonly events: EventHub) {
     this.bridge.on("event", (event: BridgeEvent) => this.handleBridgeEvent(event));
@@ -23,33 +41,91 @@ export class CasambiService {
     const config = this.store.getCasambiConfig();
     if (config.networkAddress && config.networkPassword) {
       // Not awaited: a Casambi connect can take up to a minute and must not delay the HTTP server. The bridge queue still orders later commands behind it.
-      void this.connect().catch(error => this.store.audit("bridge", "bridge.startup_connect_failed", { message: this.message(error) }));
+      this.wantConnected = true;
+      void this.autoConnect("startup");
     }
     this.configurePolling();
   }
 
-  /** Returns a current snapshot with locally managed names and rooms. */
-  public async snapshot(): Promise<NetworkSnapshot & { rooms: ReturnType<LocalStore["listRooms"]> }> {
+  /**
+   * The last known network state, without waiting on the Bluetooth queue. It is kept current by
+   * connects, controls, unit state events, disconnect events, and polling.
+   */
+  public cachedSnapshot(): ServiceSnapshot {
+    return { ...this.withMetadata(this.lastSnapshot), rooms: this.store.listRooms(), connection: this.connectionStatus };
+  }
+
+  /** Returns a fresh snapshot from the bridge (queued behind any running command) with locally managed names and rooms. */
+  public async snapshot(): Promise<ServiceSnapshot> {
     try { this.lastSnapshot = await this.bridge.snapshot(); } catch { /* The cached disconnected snapshot remains usable for status display. */ }
-    return { ...this.withMetadata(this.lastSnapshot), rooms: this.store.listRooms() };
+    return this.cachedSnapshot();
   }
 
   /** Discovers nearby Casambi networks using the actual Bluetooth adapter. */
   public discover(): Promise<Array<{ address: string }>> { return this.bridge.execute("discover"); }
 
-  /** Connects from encrypted persisted credentials. Upstream requires address and network password. */
+  /** Manual connect: takes over from any pending automatic retry. A failure is reported to the caller and not retried. */
   public async connect(): Promise<NetworkSnapshot> {
+    this.cancelReconnect();
+    this.wantConnected = true;
+    return this.connectOnce();
+  }
+
+  /** Connects from encrypted persisted credentials. Upstream requires address and network password. */
+  private async connectOnce(): Promise<NetworkSnapshot> {
     const config = this.store.getCasambiConfig();
     if (!config.networkAddress || !config.networkPassword) throw new Error("Network address and network password must be configured before connecting.");
     const { solarLatitude: _solarLatitude, solarLongitude: _solarLongitude, ...bridgeConfig } = config;
-    this.lastSnapshot = await this.bridge.execute<NetworkSnapshot>("configure", bridgeConfig as unknown as Record<string, unknown>);
+    this.connecting = true;
+    this.setConnectionStatus({ phase: "connecting", attempt: this.reconnectAttempt + 1 });
+    try { this.lastSnapshot = await this.bridge.execute<NetworkSnapshot>("configure", bridgeConfig as unknown as Record<string, unknown>); }
+    catch (error) { this.setConnectionStatus({ phase: "failed", lastError: this.message(error) }); throw error; }
+    finally { this.connecting = false; }
+    this.reconnectAttempt = 0;
+    this.setConnectionStatus({ phase: "connected" });
     this.events.publish("network.snapshot", this.withMetadata(this.lastSnapshot));
     return this.lastSnapshot;
   }
 
+  /** Connects without a user present (startup or after a dropped link), retrying with capped backoff until it succeeds. */
+  private async autoConnect(reason: "startup" | "reconnect"): Promise<void> {
+    try {
+      await this.connectOnce();
+      if (reason === "reconnect") this.store.audit("bridge", "bridge.reconnected", {});
+    } catch (error) {
+      const message = this.message(error);
+      this.store.audit("bridge", reason === "startup" ? "bridge.startup_connect_failed" : "bridge.reconnect_failed", { message, attempt: this.reconnectAttempt + 1 });
+      // A rejected password or incomplete settings will not fix themselves; wait for an administrator instead of retrying forever.
+      if (message.startsWith("AuthenticationError") || message.includes("must be configured")) return;
+      this.scheduleReconnect(reason, message);
+    }
+  }
+
+  private scheduleReconnect(reason: "startup" | "reconnect", lastError: string): void {
+    if (this.reconnectTimer || this.connecting || !this.wantConnected) return;
+    const delayMs = Math.min(RECONNECT_MAX_MS, RECONNECT_BASE_MS * 2 ** this.reconnectAttempt++);
+    this.reconnectTimer = setTimeout(() => { this.reconnectTimer = null; if (this.wantConnected) void this.autoConnect(reason); }, delayMs);
+    this.reconnectTimer.unref();
+    this.setConnectionStatus({ phase: "retrying", attempt: this.reconnectAttempt, nextRetryAt: new Date(Date.now() + delayMs).toISOString(), lastError });
+  }
+
+  private setConnectionStatus(status: ConnectionStatus): void {
+    this.connectionStatus = status;
+    this.events.publish("connection.status", status);
+  }
+
+  private cancelReconnect(): void {
+    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    this.reconnectTimer = null;
+    this.reconnectAttempt = 0;
+  }
+
   /** Disconnects Bluetooth without losing locally managed configuration. */
   public async disconnect(): Promise<NetworkSnapshot> {
+    this.wantConnected = false;
+    this.cancelReconnect();
     this.lastSnapshot = await this.bridge.execute<NetworkSnapshot>("disconnect");
+    this.setConnectionStatus({ phase: "idle" });
     this.events.publish("network.snapshot", this.withMetadata(this.lastSnapshot));
     return this.lastSnapshot;
   }
@@ -142,6 +218,14 @@ export class CasambiService {
       this.lastSnapshot.updatedAt = new Date().toISOString();
       this.events.publish("unit.state", this.withMetadata({ ...this.lastSnapshot, units: [event.unit], groups: [], scenes: [] }).units[0]);
     } else {
+      if (event.type === "bridge" && (event.state === "disconnected" || event.state === "unavailable")) {
+        this.lastSnapshot = { ...this.lastSnapshot, connected: false, updatedAt: new Date().toISOString() };
+        // Ignore the disconnect a (re)connect performs itself; otherwise reconnect an unexpected drop or worker restart.
+        if (!this.connecting && this.wantConnected) {
+          this.store.audit("bridge", "bridge.connection_lost", { state: event.state });
+          this.scheduleReconnect("reconnect", "The Bluetooth connection was lost.");
+        }
+      }
       this.events.publish(event.type, event);
     }
   }

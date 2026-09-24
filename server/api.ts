@@ -67,11 +67,12 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
     const remove = events.add(response); request.on("close", remove);
   }));
 
-  api.get("/network", requireAuth(store), route(async (_request, response) => { response.json(await service.snapshot()); }));
-  api.get("/devices", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).units); }));
-  api.get("/groups", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).groups); }));
-  api.get("/scenes", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).scenes); }));
-  api.get("/sensors", requireAuth(store), route(async (_request, response) => { response.json((await service.snapshot()).units.flatMap(unit => unit.state.sensors.map(sensor => ({ deviceId: unit.id, deviceName: unit.name, ...sensor })))); }));
+  // Read routes serve the cached state so they never wait behind a slow Bluetooth connect; `/network?fresh=1` asks the bridge.
+  api.get("/network", requireAuth(store), route(async (request, response) => { response.json(request.query.fresh === "1" ? await service.snapshot() : service.cachedSnapshot()); }));
+  api.get("/devices", requireAuth(store), route(async (_request, response) => { response.json(service.cachedSnapshot().units); }));
+  api.get("/groups", requireAuth(store), route(async (_request, response) => { response.json(service.cachedSnapshot().groups); }));
+  api.get("/scenes", requireAuth(store), route(async (_request, response) => { response.json(service.cachedSnapshot().scenes); }));
+  api.get("/sensors", requireAuth(store), route(async (_request, response) => { response.json(service.cachedSnapshot().units.flatMap(unit => unit.state.sensors.map(sensor => ({ deviceId: unit.id, deviceName: unit.name, ...sensor })))); }));
   api.get("/rooms", requireAuth(store), (request, response) => response.json(store.listRooms()));
   api.post("/rooms/:id/apply-default", requireAuth(store), route(async (request, response) => {
     const input = parsed(z.object({ fadeDurationMs: z.number().int().min(0).max(60_000).optional() }), request.body || {});

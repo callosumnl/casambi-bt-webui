@@ -2,6 +2,8 @@ export type Role = "admin" | "user";
 export type Session = { token: string; user: { id: number; username: string; role: Role } };
 export type Capability = { type: string; min?: number | null; max?: number | null; readOnly: boolean };
 export type Device = { id: number; name: string; address: string; model?: string | null; capabilities: Capability[]; roomId?: number; roomName?: string; state: { dimmer?: number | null; temperature?: number | null; sensors: { label: string; value: number | null; unit: string | null }[]; on: boolean; online: boolean } };
+/** Mirrors the server's `ConnectionStatus`: what the Pi is doing about its Casambi connection. */
+export type ConnectionStatus = { phase: "idle" } | { phase: "connecting"; attempt: number } | { phase: "connected" } | { phase: "retrying"; attempt: number; nextRetryAt: string; lastError: string } | { phase: "failed"; lastError: string };
 export type NetworkSnapshot = { connected: boolean; network: { id: string; name: string } | null; units: Device[]; groups: { id: number; name: string; unitIds: number[] }[]; scenes: { id: number; name: string }[]; rooms: { id: number; name: string; sortOrder: number; defaultBrightnessPercent: number }[]; updatedAt: string };
 export type SolarSchedule = { event: "sunrise" | "sunset"; offsetMinutes: number };
 export type AwayDateSet = { id: number; name: string; dates: string[]; createdAt?: string; updatedAt?: string };

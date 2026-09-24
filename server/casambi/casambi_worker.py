@@ -192,10 +192,11 @@ class CasambiWorker:
         cache_path = os.environ.get("CASAMBI_CACHE_PATH")
         if cache_path is None:
             cache_path = str(Path.cwd() / "casambi-bt-store") if os.environ.get("NODE_ENV") == "development" else "/var/lib/casambi-bt-webui/casambi-bt-store"
-        self.casa = Casambi(cachePath=Path(cache_path))
-        self.casa.registerUnitChangedHandler(self.handle_unit_changed)
-        self.casa.registerSwitchEventHandler(self.handle_switch_event)
-        self.casa.registerDisconnectCallback(self.handle_disconnect)
+        casa = Casambi(cachePath=Path(cache_path))
+        self.casa = casa
+        casa.registerUnitChangedHandler(self.handle_unit_changed)
+        casa.registerSwitchEventHandler(self.handle_switch_event)
+        casa.registerDisconnectCallback(lambda: self.handle_disconnect(casa))
         try:
             await self.casa.connect(endpoint, password, bool(payload.get("forceOffline", False)))
         except Exception as error:
@@ -223,8 +224,12 @@ class CasambiWorker:
         """Forward physical switch activity for audit and optional client feedback."""
         emit({"event": {"type": "switch", "event": asdict(event) if hasattr(event, "__dataclass_fields__") else dict(event)}})
 
-    def handle_disconnect(self) -> None:
+    def handle_disconnect(self, source: Any = None) -> None:
         """Report a remote Bluetooth disconnect."""
+        # A late callback from a connection this worker already replaced must not
+        # mark the new connection as lost (Node would then reconnect needlessly).
+        if source is not None and source is not self.casa:
+            return
         self.connected = False
         emit({"event": {"type": "bridge", "state": "disconnected"}})
 
