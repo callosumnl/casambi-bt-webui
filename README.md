@@ -80,6 +80,17 @@ sudo install -d -m 0700 -o casambi -g casambi /opt/casambi-bt-webui/casambi-bt-s
 sudo systemctl restart casambi-bt-webui.service
 ```
 
+### Troubleshooting a local BLE endpoint discovery error
+
+An error stating that the Raspberry Pi cannot discover a local BLE endpoint means BlueZ cannot see the configured Casambi network address locally. This is independent of the network password. The bridge deliberately retains the `BLEDevice` object returned by its immediate discovery scan because the upstream library otherwise attempts a second BlueZ cache lookup after network-update work, where a short-lived BlueZ device entry may have expired. Verify discovery using the same restricted service account as the WebUI:
+
+```bash
+sudo -u casambi /opt/casambi-bt-webui/.venv/bin/python -c \
+  'import asyncio; from CasambiBt import discover; print([device.address for device in asyncio.run(discover())])'
+```
+
+Use an address returned by that command. If it returns an empty list, move the Pi or its Bluetooth antenna closer to a powered Casambi unit, ensure the `bluetooth` service is active, and confirm that `id casambi` includes the `bluetooth` group. The installer and service template grant this group automatically; after upgrading an older installation, run `sudo usermod -aG bluetooth casambi`, `sudo systemctl daemon-reload`, and `sudo systemctl restart casambi-bt-webui.service`.
+
 The Python bridge restarts after unexpected exit with capped exponential backoff. Commands are serialized and timeout-bounded so one malformed response cannot permanently block the HTTP service. When an administrator enables polling, the service requests fresh snapshots at the selected interval and backs off after errors. A bridge disconnect publishes state updates to browser clients and is recorded in the audit history without returning secrets.
 
 ## Development and testing

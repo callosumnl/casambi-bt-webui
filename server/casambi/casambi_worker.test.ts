@@ -42,6 +42,10 @@ describe("casambi_worker upstream cache", () => {
     mkdirSync(fakePackageDirectory, { recursive: true });
     writeFileSync(path.join(fakePackageDirectory, "__init__.py"), `
 from pathlib import Path
+from types import SimpleNamespace
+
+async def discover():
+    return [SimpleNamespace(address="AB:CD:EF:01:23:45")]
 
 class Casambi:
     def __init__(self, cachePath):
@@ -57,6 +61,7 @@ class Casambi:
     async def connect(self, address, password, force_offline):
         self.cache_path.mkdir(mode=0o700, parents=True, exist_ok=True)
         (self.cache_path / "selected-path.txt").write_text(str(self.cache_path))
+        (self.cache_path / "selected-address.txt").write_text(address.address)
     async def disconnect(self): pass
 `);
 
@@ -73,9 +78,10 @@ class Casambi:
 
     try {
       const response = waitForResponse(child, "cache-path");
-      child.stdin.write(`${JSON.stringify({ id: "cache-path", command: "configure", payload: { networkAddress: "00:11:22:33:44:55", networkPassword: "not-a-real-password" } })}\n`);
+      child.stdin.write(`${JSON.stringify({ id: "cache-path", command: "configure", payload: { networkAddress: "abcdef012345", networkPassword: "not-a-real-password" } })}\n`);
       await expect(response).resolves.toMatchObject({ id: "cache-path", ok: true, result: { connected: true } });
       expect(readFileSync(path.join(cachePath, "selected-path.txt"), "utf8")).toBe(cachePath);
+      expect(readFileSync(path.join(cachePath, "selected-address.txt"), "utf8")).toBe("AB:CD:EF:01:23:45");
     } finally {
       child.kill();
     }

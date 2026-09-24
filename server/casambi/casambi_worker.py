@@ -12,6 +12,7 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import sys
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -27,6 +28,21 @@ def emit(payload: dict[str, Any]) -> None:
 def utc_now() -> str:
     """Return an ISO-8601 timestamp for snapshot and event ordering."""
     return datetime.now(UTC).isoformat()
+
+
+def normalize_network_address(value: Any) -> str:
+    """Return a canonical colon-delimited BLE address accepted by casambi-bt.
+
+    The upstream library accepts a BLE address but its colon-free branch currently
+    references an uninitialized variable. Accept both common user-entered forms
+    here and always call the upstream client with a valid canonical address.
+    """
+    if not isinstance(value, str):
+        raise ValueError("Network address must be a 12-digit hexadecimal Bluetooth address.")
+    compact = value.strip().replace(":", "").replace("-", "")
+    if not re.fullmatch(r"[0-9A-Fa-f]{12}", compact):
+        raise ValueError("Network address must contain exactly 12 hexadecimal digits, for example AB:CD:EF:01:23:45.")
+    return ":".join(compact[index : index + 2] for index in range(0, 12, 2)).upper()
 
 
 @dataclass
@@ -148,14 +164,26 @@ class CasambiWorker:
             self.connected = True
             emit({"event": {"type": "bridge", "state": "connected", "detail": "Development bridge connected."}})
             return self.snapshot()
-        from CasambiBt import Casambi  # Imported only in live mode for a clean development experience.
+        from CasambiBt import Casambi, discover  # Imported only in live mode for a clean development experience.
 
         address = payload.get("networkAddress") or payload.get("networkUuid")
         password = payload.get("networkPassword")
         if not address or not password:
             raise ValueError("networkAddress/networkUuid and networkPassword are required to connect.")
+        address = normalize_network_address(address)
         if self.casa:
             await self.casa.disconnect()
+        # Keep the BLEDevice returned by a fresh discovery scan. Passing a raw
+        # address makes casambi-bt perform a second BlueZ cache lookup after its
+        # network update work; BlueZ can expire that cached object meanwhile,
+        # leading to an empty NetworkNotFoundError despite a successful scan.
+        endpoints = await discover()
+        endpoint = next((device for device in endpoints if device.address.upper() == address), None)
+        if endpoint is None:
+            raise RuntimeError(
+                f"The Raspberry Pi cannot currently discover Casambi BLE endpoint {address}. "
+                "Move the Pi or its antenna nearer to a powered Casambi unit, then run Discover and retry."
+            )
         # casambi-bt otherwise writes its cache relative to the process working
         # directory. The production service deliberately runs with a read-only
         # application directory, so keep upstream state in the service-owned
@@ -168,7 +196,19 @@ class CasambiWorker:
         self.casa.registerUnitChangedHandler(self.handle_unit_changed)
         self.casa.registerSwitchEventHandler(self.handle_switch_event)
         self.casa.registerDisconnectCallback(self.handle_disconnect)
-        await self.casa.connect(address, password, bool(payload.get("forceOffline", False)))
+        try:
+            await self.casa.connect(endpoint, password, bool(payload.get("forceOffline", False)))
+        except Exception as error:
+            # casambi-bt uses a blank NetworkNotFoundError both when a cloud
+            # lookup is unavailable and when BlueZ cannot rediscover the local
+            # BLE endpoint. The cloud branch includes a message; make the
+            # otherwise opaque direct-Bluetooth branch actionable.
+            if type(error).__name__ == "NetworkNotFoundError" and not str(error):
+                raise RuntimeError(
+                    f"Casambi cloud data was resolved, but the Raspberry Pi Bluetooth adapter could not discover local BLE endpoint {address}. "
+                    "Use Discover while the Pi is near a powered Casambi unit, verify the casambi service account has Bluetooth access, and retry."
+                ) from error
+            raise
         for unit in self.casa.units:
             self.instrument_sensor_state(unit)
         self.connected = True
