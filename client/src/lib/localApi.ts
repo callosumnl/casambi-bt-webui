@@ -9,6 +9,11 @@ export type SolarSchedule = { event: "sunrise" | "sunset"; offsetMinutes: number
 export type AwayDateSet = { id: number; name: string; dates: string[]; createdAt?: string; updatedAt?: string };
 export type Schedule = { id: number; name: string; cronExpression: string; timezone: string; command: { targetType: string; targetId?: number | string | null; operation: string; value?: unknown; fadeDurationMs?: number }; solar?: SolarSchedule | null; holidayDates: string[]; awayDateSetId: number | null; awayDateSet: AwayDateSet | null; enabled: boolean; lastRunAt: string | null; nextRunAt?: string | null };
 
+export type SwitchTrigger = "tap" | "hold" | "release_after_hold";
+/** A reported button message; `trigger` is null for raw activity that never drives a rule. */
+export type SwitchPress = { unitId: number | null; button: number | null; trigger: SwitchTrigger | null; raw: Record<string, unknown>; at: string };
+export type SwitchRule = { id: number; name: string; unitId: number; button: number; trigger: SwitchTrigger; command: { targetType: string; targetId?: number | string | null; operation: string; value?: unknown }; enabled: boolean; lastTriggeredAt: string | null };
+
 const SESSION_KEY = "casambi-bt-webui.session";
 
 /** A typed same-origin API client. No secrets are placed in a URL except SSE’s short-lived browser token. */

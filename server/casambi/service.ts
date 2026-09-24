@@ -1,6 +1,6 @@
 import { EventHub } from "../events";
 import { CasambiConfig, LocalStore } from "../store";
-import { controlRequestSchema, type BridgeEvent, type ControlRequest, type NetworkSnapshot } from "./types";
+import { controlRequestSchema, type BridgeEvent, type ControlRequest, type NetworkSnapshot, type SwitchPress } from "./types";
 import { JsonLineCasambiBridge } from "./bridge";
 
 /** Operations that set an absolute value, so a newer queued value can safely replace an unsent older one. */
@@ -8,6 +8,8 @@ const COALESCIBLE_OPERATIONS = new Set(["set_level", "set_temperature", "set_col
 /** Automatic reconnect delays: 15 s, 30 s, 60 s, … capped at 5 minutes. */
 const RECONNECT_BASE_MS = 15_000;
 const RECONNECT_MAX_MS = 300_000;
+const SWITCH_ACTIVITY_LIMIT = 50;
+export type TimedSwitchPress = SwitchPress & { at: string };
 
 /** What the service is doing about the Casambi connection, shown to users so a slow connect or retry is visible. */
 export type ConnectionStatus =
@@ -29,6 +31,8 @@ export class CasambiService {
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
   private connectionStatus: ConnectionStatus = { phase: "idle" };
+  private readonly switchActivity: TimedSwitchPress[] = [];
+  private readonly switchListeners: Array<(press: TimedSwitchPress) => void> = [];
 
   public constructor(private readonly store: LocalStore, private readonly bridge: JsonLineCasambiBridge, private readonly events: EventHub) {
     this.bridge.on("event", (event: BridgeEvent) => this.handleBridgeEvent(event));
@@ -60,6 +64,12 @@ export class CasambiService {
     try { this.lastSnapshot = await this.bridge.snapshot(); } catch { /* The cached disconnected snapshot remains usable for status display. */ }
     return this.cachedSnapshot();
   }
+
+  /** Most recent switch messages first, including raw activity, so an administrator can identify a switch by pressing it. */
+  public recentSwitchActivity(): TimedSwitchPress[] { return [...this.switchActivity]; }
+
+  /** Registers a handler for every reported switch message; handlers must filter on `trigger` themselves. */
+  public onSwitchPress(listener: (press: TimedSwitchPress) => void): void { this.switchListeners.push(listener); }
 
   /** Discovers nearby Casambi networks using the actual Bluetooth adapter. */
   public discover(): Promise<Array<{ address: string }>> { return this.bridge.execute("discover"); }
@@ -217,6 +227,14 @@ export class CasambiService {
       else this.lastSnapshot.units.push(event.unit);
       this.lastSnapshot.updatedAt = new Date().toISOString();
       this.events.publish("unit.state", this.withMetadata({ ...this.lastSnapshot, units: [event.unit], groups: [], scenes: [] }).units[0]);
+    } else if (event.type === "switch") {
+      const press: TimedSwitchPress = { ...event.press, at: new Date().toISOString() };
+      this.switchActivity.unshift(press);
+      this.switchActivity.splice(SWITCH_ACTIVITY_LIMIT);
+      // Only real triggers are audited; raw type 0x08 activity would double every press.
+      if (press.trigger) this.store.audit("switch", "switch.pressed", { unitId: press.unitId, button: press.button, trigger: press.trigger });
+      this.events.publish("switch", press);
+      for (const listener of this.switchListeners) listener(press);
     } else {
       if (event.type === "bridge" && (event.state === "disconnected" || event.state === "unavailable")) {
         this.lastSnapshot = { ...this.lastSnapshot, connected: false, updatedAt: new Date().toISOString() };

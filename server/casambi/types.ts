@@ -93,7 +93,13 @@ export const controlRequestSchema = z.object({
 
 export type ControlRequest = z.infer<typeof controlRequestSchema>;
 
+/** Button triggers a switch rule can react to, derived from upstream's reliable type 0x10 switch messages. */
+export const switchTriggerSchema = z.enum(["tap", "hold", "release_after_hold"]);
+export type SwitchTrigger = z.infer<typeof switchTriggerSchema>;
+/** One reported button message. `trigger` is null for raw activity that must not drive automations. */
+export type SwitchPress = { unitId: number | null; button: number | null; trigger: SwitchTrigger | null; raw: Record<string, unknown> };
+
 export type BridgeEvent =
   | { type: "bridge"; state: "starting" | "connected" | "disconnected" | "unavailable"; detail?: string }
   | { type: "unit.state"; unit: UnitSnapshot }
-  | { type: "switch"; event: Record<string, unknown> };
+  | { type: "switch"; press: SwitchPress };

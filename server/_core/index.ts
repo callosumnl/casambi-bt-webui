@@ -12,6 +12,7 @@ import { CasambiService } from "../casambi/service";
 import { EventHub } from "../events";
 import { DurableScheduler } from "../scheduler";
 import { LocalStore } from "../store";
+import { SwitchRuleRunner } from "../switchRules";
 import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
 
@@ -44,6 +45,8 @@ async function startServer() {
   const bridge = new JsonLineCasambiBridge();
   const casambi = new CasambiService(store, bridge, events);
   const scheduler = new DurableScheduler(store, (command, actor) => casambi.control(command, actor).then(() => undefined), events);
+  const switchRules = new SwitchRuleRunner(store, casambi, events);
+  casambi.onSwitchPress(press => void switchRules.handle(press));
   // Configure body parser with larger size limit for file uploads
   app.use(express.json({ limit: "50mb" }));
   app.use(express.urlencoded({ limit: "50mb", extended: true }));

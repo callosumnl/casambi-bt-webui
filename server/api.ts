@@ -8,6 +8,7 @@ import { EventHub } from "./events";
 import { AwayDateSet, LocalStore, Role, ScheduleRecord } from "./store";
 import { DurableScheduler, nextRunAt, validateCron } from "./scheduler";
 import { SolarSchedule, validateSolarLocation, validateSolarSchedule } from "./solar";
+import { switchRuleSchema } from "./switchRules";
 
 type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
@@ -110,6 +111,11 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
   api.post("/admin/api-keys", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ label: z.string().trim().min(1).max(96), role: roleSchema }), request.body); const key = store.createApiKey(input.label, input.role); store.audit(principal(response).name, "api_key.created", { id: key.id, label: key.label, role: key.role }); response.status(201).json(key); }));
   api.delete("/admin/api-keys/:id", requireAuth(store, "admin"), (request, response) => { store.revokeApiKey(Number(request.params.id)); store.audit(principal(response).name, "api_key.revoked", { id: Number(request.params.id) }); response.status(204).send(); });
   api.get("/admin/audit", requireAuth(store, "admin"), (_request, response) => response.json(store.recentAudit()));
+  api.get("/admin/switch-activity", requireAuth(store, "admin"), (_request, response) => response.json(service.recentSwitchActivity()));
+  api.get("/admin/switch-rules", requireAuth(store, "admin"), (_request, response) => response.json(store.listSwitchRules()));
+  api.post("/admin/switch-rules", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(switchRuleSchema, request.body); const rule = store.createSwitchRule(input); store.audit(principal(response).name, "switch_rule.created", { ruleId: rule.id }); response.status(201).json(rule); }));
+  api.patch("/admin/switch-rules/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(switchRuleSchema.partial(), request.body); const rule = store.updateSwitchRule(Number(request.params.id), input); store.audit(principal(response).name, "switch_rule.updated", { ruleId: rule.id }); response.json(rule); }));
+  api.delete("/admin/switch-rules/:id", requireAuth(store, "admin"), route(async (request, response) => { store.deleteSwitchRule(Number(request.params.id)); store.audit(principal(response).name, "switch_rule.deleted", { ruleId: Number(request.params.id) }); response.status(204).send(); }));
 
   api.use((error: unknown, _request: Request, response: Response, _next: unknown) => {
     if (error instanceof z.ZodError) return response.status(422).json({ error: { code: "VALIDATION_ERROR", message: "Request validation failed.", fields: error.flatten() } });

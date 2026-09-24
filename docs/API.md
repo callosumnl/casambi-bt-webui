@@ -10,7 +10,7 @@ All application endpoints begin with `/api/v1`. Send either an `Authorization: B
 | `POST` | `/auth/bootstrap` | Public, first run only | Creates the first `admin` and returns a JWT. |
 | `POST` | `/auth/login` | Public | Returns an eight-hour JWT for a local `admin` or `user`. |
 | `GET` | `/auth/me` | user | Returns the resolved principal. |
-| `GET` | `/events` | user | Streams `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `schedule.executed`, and `schedule.failed` SSE events. |
+| `GET` | `/events` | user | Streams `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `switch`, `switch_rule.executed`, `switch_rule.failed`, `schedule.executed`, and `schedule.failed` SSE events. |
 | `GET` | `/network` | user | Returns the last known connection status, units, groups, scenes, rooms, and local metadata immediately; `?fresh=1` waits for a new bridge snapshot instead. `/devices`, `/groups`, `/scenes`, and `/sensors` also serve the last known state. The `connection` field is `{ phase }`, where `phase` is `idle`, `connecting` (with `attempt`), `connected`, `retrying` (with `attempt`, `nextRetryAt`, and `lastError`), or `failed` (with `lastError`); `connection.status` events carry the same object whenever it changes. |
 | `GET` | `/devices`, `/groups`, `/scenes`, `/sensors`, `/rooms` | user | Returns the named entity collection. |
 | `POST` | `/control` | user | Runs any supported control request. |
@@ -28,6 +28,9 @@ All application endpoints begin with `/api/v1`. Send either an `Authorization: B
 | `GET`, `POST`, `PATCH` | `/admin/users`, `/admin/users/:id` | admin | Manages local `admin` and `user` accounts. |
 | `GET`, `POST`, `DELETE` | `/admin/api-keys`, `/admin/api-keys/:id` | admin | Lists metadata, generates once-visible API keys, and revokes keys. |
 | `GET` | `/admin/audit` | admin | Reads recent non-secret audit entries. |
+| `GET` | `/admin/switch-activity` | admin | Returns the 50 most recent switch messages, newest first. |
+| `GET`, `POST` | `/admin/switch-rules` | admin | Lists or creates physical switch rules. |
+| `PATCH`, `DELETE` | `/admin/switch-rules/:id` | admin | Updates or deletes a switch rule. |
 
 ## Authentication examples
 
@@ -135,6 +138,18 @@ Browser clients can use `EventSource` with the login token in a same-origin quer
 const source = new EventSource(`/api/v1/events?access_token=${encodeURIComponent(jwt)}`);
 source.addEventListener("unit.state", event => console.log(JSON.parse(event.data)));
 ```
+
+## Physical switches
+
+Every button message a Casambi switch reports is published as a `switch` SSE event and kept in `GET /admin/switch-activity`: `{ unitId, button, trigger, raw, at }`. Upstream reports each action twice. The type `0x08` message's press/release label comes from one bit of a sequence counter and is unreliable, so only the type `0x10` message's state becomes a `trigger`: `tap` (released after a short press), `hold` (about 0.7 s into a long press), or `release_after_hold`. Other messages have `trigger: null` and are raw activity for diagnosis only; `raw` keeps `messageType`, `event`, `action`, `flags`, and hex `extraData`. Presses with a trigger are audited as `switch.pressed`.
+
+A switch rule runs a lighting command when a matching button is used:
+
+```json
+{ "name": "Eiland toggle", "unitId": 2, "button": 4, "trigger": "tap", "command": { "targetType": "unit", "targetId": 1, "operation": "toggle" }, "enabled": true }
+```
+
+`command` is any `/control` request, or `toggle` for a `unit`, `group`, `room`, or `network`, which turns the target off when any of its lamps is on and on otherwise. Presses are handled one at a time through the same control path as the API, so consecutive toggles alternate. Each run is audited as `switch_rule.executed` or `switch_rule.failed`. Rules run in addition to whatever the button already does in the Casambi app.
 
 ## Sensor telemetry and polling
 

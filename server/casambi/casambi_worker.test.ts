@@ -1,4 +1,4 @@
-import { spawn } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
@@ -85,5 +85,49 @@ class Casambi:
     } finally {
       child.kill();
     }
+  });
+});
+
+describe("casambi_worker switch events", () => {
+  // Mirrors upstream's SwitchEvent dataclass and ButtonEventType enum, with the values captured from a real switch.
+  const script = `
+import json, sys
+from dataclasses import dataclass
+from enum import Enum
+sys.path.insert(0, sys.argv[1])
+from casambi_worker import normalize_switch_event
+
+class ButtonEventType(Enum):
+    PRESS = 0x01
+    RELEASE = 0x02
+    HOLD = 0x09
+    RELEASE_AFTER_HOLD = 0x0C
+
+@dataclass(frozen=True)
+class SwitchEvent:
+    message_type: int
+    button: int
+    unit_id: int
+    action: int | None
+    event: ButtonEventType
+    flags: int
+    extra_data: bytes
+
+events = [
+    SwitchEvent(0x10, 4, 2, 241, ButtonEventType.RELEASE, 2, b"\\x12\\x00"),
+    SwitchEvent(0x10, 4, 2, 247, ButtonEventType.HOLD, 2, b"\\x12\\x00"),
+    SwitchEvent(0x10, 4, 2, 123, ButtonEventType.RELEASE_AFTER_HOLD, 2, b"\\x12\\x00"),
+    SwitchEvent(0x08, 4, 2, 187, ButtonEventType.RELEASE, 4, b"\\x02"),
+]
+print(json.dumps([normalize_switch_event(event) for event in events]))
+`;
+
+  it("derives triggers only from type 0x10 messages and keeps raw fields as JSON", () => {
+    const result = spawnSync("python3", ["-c", script, path.join(projectRoot, "server", "casambi")], { encoding: "utf8" });
+    expect(result.stderr).toBe("");
+    const presses = JSON.parse(result.stdout) as Array<Record<string, unknown>>;
+    expect(presses.map(press => press.trigger)).toEqual(["tap", "hold", "release_after_hold", null]);
+    expect(presses[0]).toEqual({ unitId: 2, button: 4, trigger: "tap", raw: { messageType: 16, event: "RELEASE", action: 241, flags: 2, extraData: "1200" } });
+    expect(presses[3].raw).toMatchObject({ messageType: 8, event: "RELEASE", extraData: "02" });
   });
 });

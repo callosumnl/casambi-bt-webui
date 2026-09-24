@@ -14,7 +14,7 @@ const folders: string[] = [];
 function app() {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
-  const service = { snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
+  const service = { snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
   const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler })); return instance;
 }
@@ -68,6 +68,25 @@ describe("REST API", () => {
     expect(full.body).toMatchObject({ connected: false, units: [] });
     const minimal = await request(instance).post("/api/v1/control").set(auth).set("Prefer", "return=minimal").send(command).expect(204);
     expect(minimal.headers["preference-applied"]).toBe("return=minimal");
+  });
+
+  it("lets only an admin manage switch rules and read switch activity", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    await request(instance).post("/api/v1/admin/users").set(auth).send({ username: "operator", password: "another-strong-password", role: "user" }).expect(201);
+    const operator = await request(instance).post("/api/v1/auth/login").send({ username: "operator", password: "another-strong-password" });
+    const rule = { name: "Eiland", unitId: 2, button: 4, trigger: "tap", command: { targetType: "unit", targetId: 1, operation: "toggle" } };
+
+    await request(instance).post("/api/v1/admin/switch-rules").set({ Authorization: `Bearer ${operator.body.token}` }).send(rule).expect(403);
+    await request(instance).post("/api/v1/admin/switch-rules").set(auth).send({ ...rule, trigger: "press" }).expect(422);
+    const created = await request(instance).post("/api/v1/admin/switch-rules").set(auth).send(rule).expect(201);
+    expect(created.body).toMatchObject({ name: "Eiland", unitId: 2, button: 4, trigger: "tap", enabled: true });
+    expect((await request(instance).patch(`/api/v1/admin/switch-rules/${created.body.id}`).set(auth).send({ enabled: false }).expect(200)).body.enabled).toBe(false);
+    expect((await request(instance).get("/api/v1/admin/switch-rules").set(auth).expect(200)).body).toHaveLength(1);
+    expect((await request(instance).get("/api/v1/admin/switch-activity").set(auth).expect(200)).body[0]).toMatchObject({ unitId: 2, button: 4, trigger: "tap" });
+    await request(instance).delete(`/api/v1/admin/switch-rules/${created.body.id}`).set(auth).expect(204);
+    await request(instance).delete(`/api/v1/admin/switch-rules/${created.body.id}`).set(auth).expect(404);
   });
 
   it("creates a reusable away-date set and attaches it to a timer", async () => {

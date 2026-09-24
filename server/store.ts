@@ -2,7 +2,7 @@ import { createRequire } from "module";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
 import { dirname, resolve } from "path";
 import { mkdirSync } from "fs";
-import type { ControlRequest } from "./casambi/types";
+import type { ControlRequest, SwitchTrigger } from "./casambi/types";
 import type { SolarSchedule } from "./solar";
 
 const runtimeRequire = createRequire(import.meta.url);
@@ -14,6 +14,9 @@ type UserRow = StoredUser & { passwordHash: string; passwordSalt: string };
 export type ApiKeyRecord = { id: number; label: string; prefix: string; role: Role; createdAt: string; lastUsedAt: string | null; revokedAt: string | null };
 export type RoomRecord = { id: number; name: string; sortOrder: number; defaultBrightnessPercent: number };
 export type UnitMetadata = { unitId: number; customName: string | null; roomId: number | null };
+/** A rule's action: any validated control, or a toggle resolved against current lamp state when it fires. */
+export type SwitchRuleCommand = ControlRequest | { targetType: "unit" | "group" | "room" | "network"; targetId?: number | string | null; operation: "toggle" };
+export type SwitchRuleRecord = { id: number; name: string; unitId: number; button: number; trigger: SwitchTrigger; command: SwitchRuleCommand; enabled: boolean; createdAt: string; updatedAt: string; lastTriggeredAt: string | null };
 export type AwayDateSet = { id: number; name: string; dates: string[]; createdAt: string; updatedAt: string };
 export type ScheduleRecord = {
   id: number; name: string; cronExpression: string; timezone: string; command: ControlRequest;
@@ -74,6 +77,10 @@ export class LocalStore {
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, cron_expression TEXT NOT NULL, timezone TEXT NOT NULL,
         command_json TEXT NOT NULL, solar_json TEXT, holiday_dates_json TEXT, away_date_set_id INTEGER, enabled INTEGER NOT NULL DEFAULT 1, owner_user_id INTEGER NOT NULL REFERENCES local_users(id),
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_run_key TEXT, last_run_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS switch_rules (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, unit_id INTEGER NOT NULL, button INTEGER NOT NULL, trigger TEXT NOT NULL,
+        command_json TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_triggered_at TEXT
       );
       CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL, detail_json TEXT NOT NULL, created_at TEXT NOT NULL
@@ -238,6 +245,23 @@ export class LocalStore {
   public createAwayDateSet(name: string, dates: string[]): AwayDateSet { const now = NOW(); const info = this.db.prepare("INSERT INTO away_date_sets (name,dates_json,created_at,updated_at) VALUES (?,?,?,?)").run(name.trim(), JSON.stringify(dates), now, now); return this.getAwayDateSet(Number(info.lastInsertRowid))!; }
   public updateAwayDateSet(id: number, patch: { name?: string; dates?: string[] }): AwayDateSet { const existing = this.getAwayDateSet(id); if (!existing) throw new Error("Away-date set does not exist."); const next = { ...existing, ...patch, updatedAt: NOW() }; this.db.prepare("UPDATE away_date_sets SET name=?,dates_json=?,updated_at=? WHERE id=?").run(next.name.trim(), JSON.stringify(next.dates), next.updatedAt, id); return this.getAwayDateSet(id)!; }
   public deleteAwayDateSet(id: number): void { this.db.exec("BEGIN IMMEDIATE"); try { this.db.prepare("UPDATE schedules SET away_date_set_id = NULL WHERE away_date_set_id = ?").run(id); this.db.prepare("DELETE FROM away_date_sets WHERE id = ?").run(id); this.db.exec("COMMIT"); } catch (error) { this.db.exec("ROLLBACK"); throw error; } }
+  /** Physical-switch automations, matched by the switch's unit id, button, and trigger. */
+  public listSwitchRules(): SwitchRuleRecord[] { return (this.db.prepare("SELECT * FROM switch_rules ORDER BY unit_id,button,id").all() as Array<Record<string, unknown>>).map(row => this.mapSwitchRule(row)); }
+  public getSwitchRule(id: number): SwitchRuleRecord | null { const row = this.db.prepare("SELECT * FROM switch_rules WHERE id = ?").get(id) as Record<string, unknown> | undefined; return row ? this.mapSwitchRule(row) : null; }
+  public createSwitchRule(input: Pick<SwitchRuleRecord, "name" | "unitId" | "button" | "trigger" | "command" | "enabled">): SwitchRuleRecord {
+    const now = NOW();
+    const info = this.db.prepare("INSERT INTO switch_rules (name,unit_id,button,trigger,command_json,enabled,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)").run(input.name.trim(), input.unitId, input.button, input.trigger, JSON.stringify(input.command), input.enabled ? 1 : 0, now, now);
+    return this.getSwitchRule(Number(info.lastInsertRowid))!;
+  }
+  public updateSwitchRule(id: number, patch: Partial<Pick<SwitchRuleRecord, "name" | "unitId" | "button" | "trigger" | "command" | "enabled">>): SwitchRuleRecord {
+    const existing = this.getSwitchRule(id); if (!existing) throw new Error("Switch rule does not exist.");
+    const next = { ...existing, ...patch, updatedAt: NOW() };
+    this.db.prepare("UPDATE switch_rules SET name=?,unit_id=?,button=?,trigger=?,command_json=?,enabled=?,updated_at=? WHERE id=?").run(next.name.trim(), next.unitId, next.button, next.trigger, JSON.stringify(next.command), next.enabled ? 1 : 0, next.updatedAt, id);
+    return this.getSwitchRule(id)!;
+  }
+  public deleteSwitchRule(id: number): void { if (this.db.prepare("DELETE FROM switch_rules WHERE id = ?").run(id).changes === 0) throw new Error("Switch rule does not exist."); }
+  public markSwitchRuleTriggered(id: number): void { this.db.prepare("UPDATE switch_rules SET last_triggered_at = ? WHERE id = ?").run(NOW(), id); }
+
   /** Acquires a minute-specific schedule execution lock, giving at-least-once triggers idempotent effect. */
   public claimScheduleRun(id: number, runKey: string): boolean {
     const result = this.db.prepare("UPDATE schedules SET last_run_key=?,last_run_at=? WHERE id=? AND (last_run_key IS NULL OR last_run_key != ?)").run(runKey, NOW(), id, runKey);
@@ -256,6 +280,9 @@ export class LocalStore {
   private getApiKey(id: number): ApiKeyRecord | null { return (this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt FROM api_keys WHERE id = ?").get(id) as ApiKeyRecord | undefined) ?? null; }
   private normalizePercent(value: number): number { if (!Number.isInteger(value) || value < 0 || value > 100) throw new Error("Default brightness must be an integer from 0 to 100."); return value; }
   private adminCount(): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM local_users WHERE role = 'admin'").get() as { count: number }).count; }
+  private mapSwitchRule(row: Record<string, unknown>): SwitchRuleRecord {
+    return { id: Number(row.id), name: String(row.name), unitId: Number(row.unit_id), button: Number(row.button), trigger: String(row.trigger) as SwitchTrigger, command: JSON.parse(String(row.command_json)) as SwitchRuleCommand, enabled: Boolean(row.enabled), createdAt: String(row.created_at), updatedAt: String(row.updated_at), lastTriggeredAt: row.last_triggered_at == null ? null : String(row.last_triggered_at) };
+  }
   private mapSchedule(row: Record<string, unknown>): ScheduleRecord { const awayDateSetId = row.away_date_set_id == null ? null : Number(row.away_date_set_id); return { id: Number(row.id), name: String(row.name), cronExpression: String(row.cron_expression), timezone: String(row.timezone), command: JSON.parse(String(row.command_json)) as ControlRequest, solar: row.solar_json ? JSON.parse(String(row.solar_json)) as SolarSchedule : null, holidayDates: row.holiday_dates_json ? JSON.parse(String(row.holiday_dates_json)) as string[] : [], awayDateSetId, awayDateSet: awayDateSetId ? this.getAwayDateSet(awayDateSetId) : null, enabled: Boolean(row.enabled), ownerUserId: Number(row.owner_user_id), createdAt: String(row.created_at), updatedAt: String(row.updated_at), lastRunKey: row.last_run_key ? String(row.last_run_key) : null, lastRunAt: row.last_run_at ? String(row.last_run_at) : null }; }
   private hashPassword(password: string, salt: string): string { return scryptSync(password, salt, 64).toString("hex"); }
   private digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }

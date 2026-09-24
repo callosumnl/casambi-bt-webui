@@ -14,7 +14,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -23,6 +23,33 @@ from typing import Any
 def emit(payload: dict[str, Any]) -> None:
     """Write one protocol envelope and flush it immediately."""
     print(json.dumps(payload, separators=(",", ":"), default=str), flush=True)
+
+
+# Upstream reports each button action twice. The type 0x08 message's press/release
+# label is derived from one bit of a sequence counter and flips whenever the counter
+# skips, so it is unreliable. The type 0x10 message carries a real state byte, so
+# only its states become triggers; everything else is forwarded as raw activity.
+SWITCH_TRIGGERS = {"RELEASE": "tap", "HOLD": "hold", "RELEASE_AFTER_HOLD": "release_after_hold"}
+
+
+def normalize_switch_event(event: Any) -> dict[str, Any]:
+    """Convert an upstream SwitchEvent into a JSON-friendly trigger, keeping the raw fields for diagnosis."""
+    state = getattr(event, "event", None)
+    kind = getattr(state, "name", None) or str(state)
+    message_type = getattr(event, "message_type", None)
+    extra = getattr(event, "extra_data", b"") or b""
+    return {
+        "unitId": getattr(event, "unit_id", None),
+        "button": getattr(event, "button", None),
+        "trigger": SWITCH_TRIGGERS.get(kind) if message_type == 0x10 else None,
+        "raw": {
+            "messageType": message_type,
+            "event": kind,
+            "action": getattr(event, "action", None),
+            "flags": getattr(event, "flags", None),
+            "extraData": extra.hex() if isinstance(extra, (bytes, bytearray)) else str(extra),
+        },
+    }
 
 
 def utc_now() -> str:
@@ -222,7 +249,7 @@ class CasambiWorker:
 
     def handle_switch_event(self, event: Any) -> None:
         """Forward physical switch activity for audit and optional client feedback."""
-        emit({"event": {"type": "switch", "event": asdict(event) if hasattr(event, "__dataclass_fields__") else dict(event)}})
+        emit({"event": {"type": "switch", "press": normalize_switch_event(event)}})
 
     def handle_disconnect(self, source: Any = None) -> None:
         """Report a remote Bluetooth disconnect."""

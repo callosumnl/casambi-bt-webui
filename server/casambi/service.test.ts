@@ -165,3 +165,22 @@ describe("CasambiService connection resilience", () => {
     expect(bridge.snapshotCalls).toBe(0);
   });
 });
+
+describe("CasambiService switch activity", () => {
+  it("records every switch message, audits only triggers, and notifies listeners", () => {
+    const database = store(); const bridge = new FakeBridge();
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    const heard: Array<string | null> = [];
+    service.onSwitchPress(press => heard.push(press.trigger));
+
+    bridge.emit("event", { type: "switch", press: { unitId: 2, button: 4, trigger: null, raw: { messageType: 8 } } });
+    bridge.emit("event", { type: "switch", press: { unitId: 2, button: 4, trigger: "tap", raw: { messageType: 16 } } });
+
+    expect(heard).toEqual([null, "tap"]);
+    expect(service.recentSwitchActivity().map(press => press.trigger)).toEqual(["tap", null]);
+    expect(service.recentSwitchActivity()[0].at).toEqual(expect.any(String));
+    const pressed = database.recentAudit().filter(entry => entry.action === "switch.pressed");
+    expect(pressed.map(entry => entry.detail)).toEqual([{ unitId: 2, button: 4, trigger: "tap" }]);
+  });
+});
+
