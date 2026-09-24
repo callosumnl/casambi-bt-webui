@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
 import { PassThrough, Writable } from "stream";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { JsonLineCasambiBridge } from "./bridge";
 
 class FakeWorker extends EventEmitter {
@@ -12,6 +12,28 @@ class FakeWorker extends EventEmitter {
 }
 
 describe("JsonLineCasambiBridge", () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it("gives a Casambi connect longer than the default command timeout", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
+    let settled = false;
+    const result = bridge.execute("configure"); result.then(() => { settled = true; }, () => { settled = true; });
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(settled).toBe(false);
+    const rejection = expect(result).rejects.toThrow("Casambi bridge command 'configure' timed out.");
+    await vi.advanceTimersByTimeAsync(60_000);
+    await rejection; bridge.stop();
+  });
+
+  it("keeps the default timeout for ordinary commands", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
+    const rejection = expect(bridge.execute("snapshot")).rejects.toThrow("Casambi bridge command 'snapshot' timed out.");
+    await vi.advanceTimersByTimeAsync(12_000);
+    await rejection; bridge.stop();
+  });
+
   it("correlates a JSON-lines response to the command that created it", async () => {
     const worker = new FakeWorker();
     const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never, commandTimeoutMs: 200 });

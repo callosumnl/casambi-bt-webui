@@ -7,6 +7,13 @@ import type { BridgeEvent, NetworkSnapshot } from "./types";
 type BridgeResponse = { id: string; ok: true; result: unknown } | { id: string; ok: false; error: { code: string; message: string } };
 type BridgeEnvelope = BridgeResponse | { event: BridgeEvent };
 
+/**
+ * Commands that legitimately outlast the default timeout. A connect runs a
+ * 5 s BLE scan, several Casambi cloud requests, and a retrying BLE connect
+ * plus key exchange; a discovery is a single 5 s scan.
+ */
+const LONG_COMMAND_TIMEOUTS_MS: Record<string, number> = { configure: 90_000, connect: 90_000, discover: 30_000 };
+
 /** Minimal child-process shape, kept small to enable deterministic bridge tests. */
 export type BridgeChild = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "on" | "kill">;
 export type BridgeChildFactory = () => BridgeChild;
@@ -91,7 +98,7 @@ export class JsonLineCasambiBridge extends EventEmitter {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         rejectRequest(new Error(`Casambi bridge command '${command}' timed out.`));
-      }, this.commandTimeoutMs);
+      }, LONG_COMMAND_TIMEOUTS_MS[command] ?? this.commandTimeoutMs);
       this.pending.set(id, { resolve: value => resolveRequest(value as T), reject: rejectRequest, timer });
       try {
         this.child?.stdin.write(`${JSON.stringify({ id, command, payload })}\n`);

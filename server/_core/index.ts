@@ -77,7 +77,8 @@ async function startServer() {
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
-  const shutdown = () => bridge.stop();
+  // A signal handler replaces Node's default exit, so exit explicitly; open SSE streams would otherwise keep systemd waiting until SIGKILL.
+  const shutdown = () => { bridge.stop(); process.exit(0); };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
 }

@@ -19,7 +19,8 @@ export class CasambiService {
     this.bridge.start();
     const config = this.store.getCasambiConfig();
     if (config.networkAddress && config.networkPassword) {
-      try { await this.connect(); } catch (error) { this.store.audit("bridge", "bridge.startup_connect_failed", { message: this.message(error) }); }
+      // Not awaited: a Casambi connect can take up to a minute and must not delay the HTTP server. The bridge queue still orders later commands behind it.
+      void this.connect().catch(error => this.store.audit("bridge", "bridge.startup_connect_failed", { message: this.message(error) }));
     }
     this.configurePolling();
   }
