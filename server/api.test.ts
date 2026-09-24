@@ -59,6 +59,17 @@ describe("REST API", () => {
     expect(new Date(response.body.nextRunAt).getTime()).toBeGreaterThan(Date.now());
   });
 
+  it("returns the control snapshot unless the client prefers a minimal response", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    const command = { targetType: "unit", targetId: 1, operation: "set_level", value: 128 };
+    const full = await request(instance).post("/api/v1/control").set(auth).send(command).expect(200);
+    expect(full.body).toMatchObject({ connected: false, units: [] });
+    const minimal = await request(instance).post("/api/v1/control").set(auth).set("Prefer", "return=minimal").send(command).expect(204);
+    expect(minimal.headers["preference-applied"]).toBe("return=minimal");
+  });
+
   it("creates a reusable away-date set and attaches it to a timer", async () => {
     const instance = app();
     const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });

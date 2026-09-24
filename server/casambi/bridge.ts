@@ -43,6 +43,8 @@ export class JsonLineCasambiBridge extends EventEmitter {
   private readonly commandTimeoutMs: number;
   private readonly createChild: BridgeChildFactory;
   private queue: Promise<unknown> = Promise.resolve();
+  /** The most recently queued coalescible command, while it has not been sent yet. */
+  private coalescibleTail: { key: string; payload: Record<string, unknown>; result: Promise<unknown> } | null = null;
 
   public constructor(options: BridgeOptions = {}) {
     super();
@@ -82,6 +84,25 @@ export class JsonLineCasambiBridge extends EventEmitter {
     const run = async () => this.send<T>(command, payload);
     const next = this.queue.then(run, run);
     this.queue = next.catch(() => undefined);
+    this.coalescibleTail = null;
+    return next;
+  }
+
+  /**
+   * Like `execute`, but when the last queued command has the same `key` and has
+   * not been sent yet, its payload is replaced instead of queueing another
+   * command; both callers receive the result of the latest value. Only the tail
+   * is merged, so ordering relative to any other command is preserved.
+   */
+  public executeLatest<T = unknown>(key: string, command: string, payload: Record<string, unknown>): Promise<T> {
+    const tail = this.coalescibleTail;
+    if (tail && tail.key === key) { tail.payload = payload; return tail.result as Promise<T>; }
+    const entry = { key, payload, result: Promise.resolve() as Promise<unknown> };
+    const run = async () => { if (this.coalescibleTail === entry) this.coalescibleTail = null; return this.send<T>(command, entry.payload); };
+    const next = this.queue.then(run, run);
+    entry.result = next;
+    this.queue = next.catch(() => undefined);
+    this.coalescibleTail = entry;
     return next;
   }
 

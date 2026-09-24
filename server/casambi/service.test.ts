@@ -14,7 +14,8 @@ afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: 
 
 class FakeBridge extends EventEmitter {
   public commands: Array<Record<string, unknown>> = [];
-  private readonly state: NetworkSnapshot = { connected: true, network: { id: "test", name: "Test" }, groups: [], scenes: [], updatedAt: new Date().toISOString(), units: [
+  public latestKeys: string[] = [];
+  public readonly state: NetworkSnapshot = { connected: true, network: { id: "test", name: "Test" }, groups: [], scenes: [], updatedAt: new Date().toISOString(), units: [
     { id: 1, uuid: "one", address: "one", name: "One", capabilities: [], state: { dimmer: 0, sensors: [], on: false, online: true } },
     { id: 2, uuid: "two", address: "two", name: "Two", capabilities: [], state: { dimmer: 0, sensors: [], on: false, online: true } },
   ] };
@@ -28,6 +29,7 @@ class FakeBridge extends EventEmitter {
     }
     return structuredClone(this.state) as T;
   }
+  async executeLatest<T>(key: string, command: string, payload: Record<string, unknown>): Promise<T> { this.latestKeys.push(key); return this.execute<T>(command, payload); }
 }
 
 describe("CasambiService fade controls", () => {
@@ -47,5 +49,37 @@ describe("CasambiService fade controls", () => {
       expect.objectContaining({ targetId: 2, operation: "set_level", value: 128 }),
     ]));
     expect(snapshot.units.every(unit => unit.state.dimmer === 128)).toBe(true);
+  });
+
+  it("sends a room as one group command when a Casambi group has exactly the room's lamps", async () => {
+    const database = store();
+    const room = database.createRoom("Gallery", 50);
+    database.setUnitMetadata(1, null, room.id);
+    database.setUnitMetadata(2, null, room.id);
+    const bridge = new FakeBridge();
+    bridge.state.groups = [{ id: 7, name: "Partial", unitIds: [1] }, { id: 9, name: "Gallery", unitIds: [2, 1] }];
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    await service.snapshot();
+
+    await service.control({ targetType: "room", targetId: room.id, operation: "set_level", value: 200 }, "tester");
+
+    expect(bridge.commands).toEqual([expect.objectContaining({ targetType: "group", targetId: 9, operation: "set_level", value: 200 })]);
+    expect(bridge.latestKeys).toEqual(["group:9:set_level"]);
+  });
+
+  it("falls back to one command per lamp when no group matches the room", async () => {
+    const database = store();
+    const room = database.createRoom("Gallery", 50);
+    database.setUnitMetadata(1, null, room.id);
+    database.setUnitMetadata(2, null, room.id);
+    const bridge = new FakeBridge();
+    bridge.state.groups = [{ id: 7, name: "Partial", unitIds: [1] }];
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    await service.snapshot();
+
+    await service.control({ targetType: "room", targetId: room.id, operation: "on" }, "tester");
+
+    expect(bridge.commands).toEqual([expect.objectContaining({ targetType: "unit", targetId: 1 }), expect.objectContaining({ targetType: "unit", targetId: 2 })]);
+    expect(bridge.latestKeys).toEqual([]); // "on" is not an absolute value, so it is never merged.
   });
 });

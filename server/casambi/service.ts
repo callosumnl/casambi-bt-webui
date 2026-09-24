@@ -3,6 +3,9 @@ import { CasambiConfig, LocalStore } from "../store";
 import { controlRequestSchema, type BridgeEvent, type ControlRequest, type NetworkSnapshot } from "./types";
 import { JsonLineCasambiBridge } from "./bridge";
 
+/** Operations that set an absolute value, so a newer queued value can safely replace an unsent older one. */
+const COALESCIBLE_OPERATIONS = new Set(["set_level", "set_temperature", "set_color", "set_white", "set_vertical", "set_slider", "set_xy"]);
+
 /** Normalizes bridge events, overlays local room metadata, and applies every control safely. */
 export class CasambiService {
   private lastSnapshot: NetworkSnapshot = { connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() };
@@ -72,10 +75,16 @@ export class CasambiService {
       const roomId = Number(command.targetId);
       const unitIds = this.store.getUnitMetadata().filter(metadata => metadata.roomId === roomId).map(metadata => metadata.unitId);
       if (unitIds.length === 0) throw new Error("The room has no assigned lamps.");
-      for (const unitId of unitIds) await this.bridge.execute("control", { ...command, targetType: "unit", targetId: unitId });
-      this.lastSnapshot = await this.bridge.snapshot();
+      // A Casambi group with exactly the room's lamps takes one BLE command instead of one per lamp.
+      const roomUnits = new Set(unitIds);
+      const group = this.lastSnapshot.groups.find(candidate => candidate.unitIds.length === roomUnits.size && candidate.unitIds.every(unitId => roomUnits.has(unitId)));
+      if (group) this.lastSnapshot = await this.runControl({ ...command, targetType: "group", targetId: group.id });
+      else {
+        for (const unitId of unitIds) await this.runControl({ ...command, targetType: "unit", targetId: unitId });
+        this.lastSnapshot = await this.bridge.snapshot();
+      }
     } else {
-      this.lastSnapshot = await this.bridge.execute<NetworkSnapshot>("control", command as unknown as Record<string, unknown>);
+      this.lastSnapshot = await this.runControl(command);
     }
     this.store.audit(actor, "lighting.control", { targetType: command.targetType, targetId: command.targetId ?? null, operation: command.operation });
     const snapshot = this.withMetadata(this.lastSnapshot);
@@ -108,6 +117,13 @@ export class CasambiService {
       if (step < steps) await new Promise(resolve => setTimeout(resolve, 200));
     }
     this.lastSnapshot = await this.bridge.snapshot();
+  }
+
+  /** Sends one control command, letting a newer absolute value replace an unsent older one for the same target. */
+  private runControl(command: ControlRequest): Promise<NetworkSnapshot> {
+    const payload = command as unknown as Record<string, unknown>;
+    if (!COALESCIBLE_OPERATIONS.has(command.operation)) return this.bridge.execute<NetworkSnapshot>("control", payload);
+    return this.bridge.executeLatest<NetworkSnapshot>(`${command.targetType}:${command.targetId ?? ""}:${command.operation}`, "control", payload);
   }
 
   private targetUnitIds(command: ControlRequest, snapshot: NetworkSnapshot): number[] {

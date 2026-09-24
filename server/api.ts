@@ -77,7 +77,8 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
     const input = parsed(z.object({ fadeDurationMs: z.number().int().min(0).max(60_000).optional() }), request.body || {});
     response.json(await service.applyRoomPreset(Number(request.params.id), principal(response).name, input.fadeDurationMs || 0));
   }));
-  api.post("/control", requireAuth(store), route(async (request, response) => { const command = parsed(controlRequestSchema, request.body); response.json(await service.control(command, principal(response).name)); }));
+  // `Prefer: return=minimal` skips the snapshot body for clients that already receive it over the SSE stream.
+  api.post("/control", requireAuth(store), route(async (request, response) => { const command = parsed(controlRequestSchema, request.body); const snapshot = await service.control(command, principal(response).name); if (/\breturn=minimal\b/.test(request.get("Prefer") || "")) { response.status(204).set("Preference-Applied", "return=minimal").end(); return; } response.json(snapshot); }));
   api.post("/devices/:id/on", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "on" }, principal(response).name)); }));
   api.post("/devices/:id/off", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "off" }, principal(response).name)); }));
   api.post("/scenes/:id/activate", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "scene", targetId: Number(request.params.id), operation: "activate_scene" }, principal(response).name)); }));

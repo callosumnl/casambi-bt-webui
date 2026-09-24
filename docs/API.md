@@ -44,7 +44,7 @@ curl -sS http://raspberrypi.local:3000/api/v1/network \
 
 ## Generic control request
 
-The `/control` body has `targetType`, optional `targetId`, `operation`, optional `value`, and optional `fadeDurationMs`. `targetType` is one of `unit`, `group`, `room`, `scene`, or `network`. The operations are `on`, `off`, `set_level`, `set_temperature`, `set_color`, `set_white`, `set_vertical`, `set_slider`, `set_xy`, and `activate_scene`. Scene targets accept only `activate_scene`. For `on`, `off`, and `set_level`, `fadeDurationMs` may be an integer from 0 to 60,000.
+The `/control` body has `targetType`, optional `targetId`, `operation`, optional `value`, and optional `fadeDurationMs`. `targetType` is one of `unit`, `group`, `room`, `scene`, or `network`. The operations are `on`, `off`, `set_level`, `set_temperature`, `set_color`, `set_white`, `set_vertical`, `set_slider`, `set_xy`, and `activate_scene`. Scene targets accept only `activate_scene`. For `on`, `off`, and `set_level`, `fadeDurationMs` may be an integer from 0 to 60,000. The response is the updated network snapshot; send `Prefer: return=minimal` to receive `204 No Content` instead when the same snapshot already arrives over the event stream. While an absolute-value command (`set_level`, `set_temperature`, `set_color`, `set_white`, `set_vertical`, `set_slider`, `set_xy`) for a target is still waiting in the bridge queue, a newer one for the same target and operation replaces it, and both requests receive the result of the newer value. Room targets whose lamps exactly match a Casambi group are sent as one group command.
 
 ```bash
 # Set lamp 4 to 65% in upstream 0–255 brightness units with a 1.2-second fade.

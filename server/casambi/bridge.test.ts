@@ -34,6 +34,44 @@ describe("JsonLineCasambiBridge", () => {
     await rejection; bridge.stop();
   });
 
+  it("replaces an unsent queued value for the same key and resolves both callers with the latest result", async () => {
+    const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
+    const first = bridge.executeLatest("unit:1:set_level", "control", { value: 10 });
+    await new Promise(resolve => setImmediate(resolve)); // 10 is now sent, so it can no longer be replaced.
+    const second = bridge.executeLatest("unit:1:set_level", "control", { value: 20 });
+    const third = bridge.executeLatest("unit:1:set_level", "control", { value: 30 });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(worker.commands.map(command => (command.payload as { value: number }).value)).toEqual([10]);
+    worker.stdout.write(`${JSON.stringify({ id: worker.commands[0].id, ok: true, result: "sent-10" })}\n`);
+    await expect(first).resolves.toBe("sent-10");
+    await new Promise(resolve => setImmediate(resolve));
+    expect(worker.commands.map(command => (command.payload as { value: number }).value)).toEqual([10, 30]);
+    worker.stdout.write(`${JSON.stringify({ id: worker.commands[1].id, ok: true, result: "sent-30" })}\n`);
+    await expect(second).resolves.toBe("sent-30");
+    await expect(third).resolves.toBe("sent-30");
+    bridge.stop();
+  });
+
+  it("never merges across another queued command, so ordering is preserved", async () => {
+    const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
+    const answer = async (index: number) => { while (worker.commands.length <= index) await new Promise(resolve => setImmediate(resolve)); worker.stdout.write(`${JSON.stringify({ id: worker.commands[index].id, ok: true, result: index })}\n`); };
+    const results = [
+      bridge.executeLatest("unit:1:set_level", "control", { operation: "set_level", value: 10 }),
+      bridge.executeLatest("unit:1:set_level", "control", { operation: "set_level", value: 20 }),
+      bridge.execute("control", { operation: "off" }),
+      bridge.executeLatest("unit:1:set_level", "control", { operation: "set_level", value: 30 }),
+      bridge.executeLatest("unit:2:set_level", "control", { operation: "set_level", value: 40 }),
+    ];
+    for (let index = 0; index < 4; index++) void answer(index);
+    const settled = await Promise.all(results);
+    // 10 and 20 merge (both unsent, adjacent); 30 must not jump ahead of "off"; unit 2 has its own key.
+    expect(worker.commands.map(command => command.payload)).toEqual([
+      { operation: "set_level", value: 20 }, { operation: "off" }, { operation: "set_level", value: 30 }, { operation: "set_level", value: 40 },
+    ]);
+    expect(settled[0]).toBe(settled[1]);
+    bridge.stop();
+  });
+
   it("correlates a JSON-lines response to the command that created it", async () => {
     const worker = new FakeWorker();
     const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never, commandTimeoutMs: 200 });

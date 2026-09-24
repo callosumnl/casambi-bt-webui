@@ -19,7 +19,8 @@ export class LocalApi {
       headers: { "Content-Type": "application/json", ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}), ...(init.headers || {}) },
     });
     if (response.status === 204) return undefined as T;
-    const data = await response.json() as T & { error?: { message: string } };
+    // Some failures (e.g. the rate limiter's 429) have a non-JSON body; keep the HTTP status message instead of a parse error.
+    const data = await response.json().catch(() => ({})) as T & { error?: { message: string } };
     if (!response.ok) throw new Error(data.error?.message || `Request failed with HTTP ${response.status}.`);
     return data;
   }
