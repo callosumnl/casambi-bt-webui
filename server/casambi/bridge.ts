@@ -40,7 +40,7 @@ export class JsonLineCasambiBridge extends EventEmitter {
   public constructor(options: BridgeOptions = {}) {
     super();
     this.commandTimeoutMs = options.commandTimeoutMs ?? 12_000;
-    const mockMode = options.mockMode ?? (process.env.CASAMBI_MOCK_MODE === "true" || process.env.NODE_ENV !== "production");
+    const mockMode = options.mockMode ?? process.env.CASAMBI_MOCK_MODE === "true";
     this.createChild = options.createChild ?? (() => {
       const worker = resolve(process.cwd(), "server/casambi/casambi_worker.py");
       return spawn(process.env.CASAMBI_PYTHON_COMMAND || "python3", [worker, ...(mockMode ? ["--mock"] : [])], {

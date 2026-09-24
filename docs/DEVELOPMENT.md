@@ -37,7 +37,7 @@ CASAMBI_JWT='…' node scripts/verify-live-bridge.mjs  # hardware smoke test, on
 
 **Python bridge protocol** (`server/casambi/bridge.ts` ↔ `casambi_worker.py`): newline-delimited JSON over stdio. Each command (`discover`, `configure`, `connect`, `disconnect`, `snapshot`, `control`, `ping`) carries a UUID `id` and gets exactly one `{id, ok, result|error}` response. Unsolicited `{event: …}` envelopes carry state, switch, and connection changes. Node serializes commands (one at a time, which keeps BLE writes ordered), puts a timeout on each one, and restarts the child with capped exponential backoff. Shared types and `controlRequestSchema` are in `server/casambi/types.ts`. `CasambiService` overlays local custom names and rooms on bridge snapshots, because upstream has no room model.
 
-**Mock mode:** `bridge.ts` passes `--mock` to the worker when `CASAMBI_MOCK_MODE=true` **or `NODE_ENV !== "production"`**, so dev and tests always use deterministic fake units. Production never substitutes fake devices.
+**Mock mode:** `bridge.ts` passes `--mock` to the worker only when `CASAMBI_MOCK_MODE=true` is set explicitly; `NODE_ENV` never enables it. The app is only ever deployed to a real Pi (there is no test/acceptance environment), so a missing flag must mean real Bluetooth. Tests don't need the flag: they inject a fake bridge or `createChild`.
 
 **Browser Demo mode** is a separate feature from the server mock. It's reached through `?demo=1` or the "Explore Demo" button on the login screen. `client/src/lib/demoNetwork.ts` and `useNetwork(demo)` simulate the network entirely in browser memory, with no HTTP or SSE. Admin routes are hidden in demo mode. New user-facing features have generally shipped with matching Demo behavior and tests (see `todo.md`).
 
