@@ -1,5 +1,5 @@
 import { spawn, spawnSync } from "child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -85,6 +85,58 @@ class Casambi:
     } finally {
       child.kill();
     }
+  });
+});
+
+describe("casambi_worker shutdown", () => {
+  /** Starts the real worker against a fake upstream package whose disconnect() leaves a marker file. */
+  async function connectedWorker() {
+    const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "casambi-worker-shutdown-"));
+    temporaryDirectories.push(temporaryDirectory);
+    const marker = path.join(temporaryDirectory, "disconnected.txt");
+    mkdirSync(path.join(temporaryDirectory, "CasambiBt"), { recursive: true });
+    writeFileSync(path.join(temporaryDirectory, "CasambiBt", "__init__.py"), `
+from types import SimpleNamespace
+
+async def discover():
+    return [SimpleNamespace(address="AB:CD:EF:01:23:45")]
+
+class Casambi:
+    def __init__(self, cachePath):
+        self.units, self.groups, self.scenes = [], [], []
+        self.networkId, self.networkName = "test-network", "Test network"
+    def registerUnitChangedHandler(self, handler): pass
+    def registerSwitchEventHandler(self, handler): pass
+    def registerDisconnectCallback(self, handler): pass
+    async def connect(self, address, password, force_offline): pass
+    async def disconnect(self):
+        with open(${JSON.stringify(marker)}, "a") as handle: handle.write("disconnected\\n")
+`);
+    const child = spawn("python3", [workerPath], {
+      cwd: projectRoot,
+      env: { ...process.env, NODE_ENV: "production", CASAMBI_CACHE_PATH: path.join(temporaryDirectory, "cache"), PYTHONPATH: `${temporaryDirectory}${path.delimiter}${process.env.PYTHONPATH || ""}` },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const exited = new Promise<number | null>(resolve => child.once("exit", code => resolve(code)));
+    const response = waitForResponse(child, "connect");
+    child.stdin.write(`${JSON.stringify({ id: "connect", command: "configure", payload: { networkAddress: "abcdef012345", networkPassword: "not-a-real-password" } })}\n`);
+    await expect(response).resolves.toMatchObject({ ok: true, result: { connected: true } });
+    return { child, marker, exited };
+  }
+
+  it("disconnects Bluetooth and exits cleanly on SIGTERM", async () => {
+    const { child, marker, exited } = await connectedWorker();
+    expect(existsSync(marker)).toBe(false);
+    child.kill("SIGTERM");
+    await expect(exited).resolves.toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("disconnected\n");
+  });
+
+  it("disconnects Bluetooth when Node closes its stdin", async () => {
+    const { child, marker, exited } = await connectedWorker();
+    child.stdin.end();
+    await expect(exited).resolves.toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("disconnected\n");
   });
 });
 

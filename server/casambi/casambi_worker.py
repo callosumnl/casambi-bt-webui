@@ -13,6 +13,7 @@ import asyncio
 import json
 import os
 import re
+import signal
 import sys
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -50,6 +51,10 @@ def normalize_switch_event(event: Any) -> dict[str, Any]:
             "extraData": extra.hex() if isinstance(extra, (bytes, bytearray)) else str(extra),
         },
     }
+
+
+# Well inside systemd's 20 s TimeoutStopSec, so a clean disconnect never turns into a SIGKILL.
+SHUTDOWN_DISCONNECT_SECONDS = 5
 
 
 def utc_now() -> str:
@@ -304,6 +309,20 @@ class CasambiWorker:
         else: raise ValueError(f"Unsupported control operation: {operation}")
         return self.snapshot()
 
+    async def shutdown(self) -> None:
+        """Release the BLE link before the worker exits.
+
+        BlueZ owns a connection, not the process that opened it, so a worker that
+        exits without disconnecting leaves the Pi holding the link and the next
+        worker's connect attempts fail until it is cleared.
+        """
+        if self.casa is None:
+            return
+        try:
+            await asyncio.wait_for(self.casa.disconnect(), timeout=SHUTDOWN_DISCONNECT_SECONDS)
+        except Exception as error:  # Best effort: never block or crash the exit path.
+            print(f"Shutdown disconnect failed: {error!r}", file=sys.stderr, flush=True)
+
     async def disconnect(self) -> dict[str, Any]:
         """Disconnect cleanly and preserve the worker process for a later reconnect."""
         if self.casa: await self.casa.disconnect()
@@ -315,7 +334,39 @@ class CasambiWorker:
 async def run_worker(mock: bool) -> None:
     """Read JSON-lines commands one at a time, ensuring Bluetooth calls remain ordered."""
     worker = CasambiWorker(mock)
+    # SIGTERM (systemd stop, Node's bridge.stop) and SIGINT (Ctrl-C in development) cancel the
+    # loop so the finally block can disconnect; stdin EOF (Node exited) ends the loop normally.
+    main_task = asyncio.current_task()
+    stop_requested = False
+
+    def request_stop() -> None:
+        nonlocal stop_requested
+        stop_requested = True
+        if main_task is not None:
+            main_task.cancel()
+
+    loop = asyncio.get_running_loop()
+    for stop_signal in (signal.SIGTERM, signal.SIGINT):
+        loop.add_signal_handler(stop_signal, request_stop)
     emit({"event": {"type": "bridge", "state": "connected" if mock else "starting"}})
+    try:
+        await serve_commands(worker)
+    except asyncio.CancelledError:
+        if not stop_requested:
+            raise
+    finally:
+        await worker.shutdown()
+    if stop_requested:
+        # The stdin reader thread may still be blocked in readline(); asyncio.run would wait for it.
+        try:
+            sys.stdout.flush()
+        except OSError:  # Node may already have closed the pipe.
+            pass
+        os._exit(0)
+
+
+async def serve_commands(worker: CasambiWorker) -> None:
+    """Handle commands until stdin closes."""
     while True:
         line = await asyncio.to_thread(sys.stdin.readline)
         if not line: break
