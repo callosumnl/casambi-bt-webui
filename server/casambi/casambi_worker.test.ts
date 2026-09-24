@@ -90,12 +90,13 @@ class Casambi:
 
 describe("casambi_worker shutdown", () => {
   /** Starts the real worker against a fake upstream package whose disconnect() leaves a marker file. */
-  async function connectedWorker() {
+  async function connectedWorker(disconnectDelaySeconds = 0) {
     const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "casambi-worker-shutdown-"));
     temporaryDirectories.push(temporaryDirectory);
     const marker = path.join(temporaryDirectory, "disconnected.txt");
     mkdirSync(path.join(temporaryDirectory, "CasambiBt"), { recursive: true });
     writeFileSync(path.join(temporaryDirectory, "CasambiBt", "__init__.py"), `
+import asyncio
 from types import SimpleNamespace
 
 async def discover():
@@ -110,6 +111,7 @@ class Casambi:
     def registerDisconnectCallback(self, handler): pass
     async def connect(self, address, password, force_offline): pass
     async def disconnect(self):
+        await asyncio.sleep(${disconnectDelaySeconds})
         with open(${JSON.stringify(marker)}, "a") as handle: handle.write("disconnected\\n")
 `);
     const child = spawn("python3", [workerPath], {
@@ -127,6 +129,15 @@ class Casambi:
   it("disconnects Bluetooth and exits cleanly on SIGTERM", async () => {
     const { child, marker, exited } = await connectedWorker();
     expect(existsSync(marker)).toBe(false);
+    child.kill("SIGTERM");
+    await expect(exited).resolves.toBe(0);
+    expect(readFileSync(marker, "utf8")).toBe("disconnected\n");
+  });
+
+  it("finishes a slow disconnect when SIGTERM arrives twice, as it does under systemd", async () => {
+    const { child, marker, exited } = await connectedWorker(0.5);
+    child.kill("SIGTERM");
+    await new Promise(resolve => setTimeout(resolve, 50));
     child.kill("SIGTERM");
     await expect(exited).resolves.toBe(0);
     expect(readFileSync(marker, "utf8")).toBe("disconnected\n");

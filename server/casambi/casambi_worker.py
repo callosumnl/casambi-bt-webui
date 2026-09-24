@@ -341,6 +341,10 @@ async def run_worker(mock: bool) -> None:
 
     def request_stop() -> None:
         nonlocal stop_requested
+        # systemd signals every process in the unit and Node's bridge.stop() signals the worker
+        # again, so SIGTERM usually arrives twice; a second cancel would abort the disconnect.
+        if stop_requested:
+            return
         stop_requested = True
         if main_task is not None:
             main_task.cancel()
