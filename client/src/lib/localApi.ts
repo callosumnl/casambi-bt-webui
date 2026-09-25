@@ -15,6 +15,8 @@ export type SwitchPress = { unitId: number | null; button: number | null; trigge
 export type SwitchRule = { id: number; name: string; unitId: number; button: number; trigger: SwitchTrigger; command: { targetType: string; targetId?: number | string | null; operation: string; value?: unknown }; enabled: boolean; lastTriggeredAt: string | null };
 
 const SESSION_KEY = "casambi-bt-webui.session";
+/** Fired on `window` when a signed-in request is rejected with 401, so the app can return to the login screen. */
+export const SESSION_EXPIRED_EVENT = "casambi-bt-webui:session-expired";
 
 /** A typed same-origin API client. No secrets are placed in a URL except SSE’s short-lived browser token. */
 export class LocalApi {
@@ -25,6 +27,13 @@ export class LocalApi {
       ...init,
       headers: { "Content-Type": "application/json", ...(this.token ? { Authorization: `Bearer ${this.token}` } : {}), ...(init.headers || {}) },
     });
+    // A rejected token (expired, or signed with a rotated secret) ends the session. Anonymous
+    // requests such as the login form get their own 401 message instead.
+    if (response.status === 401 && this.token) {
+      clearSession();
+      window.dispatchEvent(new Event(SESSION_EXPIRED_EVENT));
+      throw new Error("Your session has expired. Please sign in again.");
+    }
     if (response.status === 204) return undefined as T;
     // Some failures (e.g. the rate limiter's 429) have a non-JSON body; keep the HTTP status message instead of a parse error.
     const data = await response.json().catch(() => ({})) as T & { error?: { message: string } };
@@ -38,3 +47,20 @@ export class LocalApi {
 export function getSession(): Session | null { try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null") as Session | null; } catch { return null; } }
 export function saveSession(session: Session): void { localStorage.setItem(SESSION_KEY, JSON.stringify(session)); }
 export function clearSession(): void { localStorage.removeItem(SESSION_KEY); }
+
+/** The JWT's `exp` claim in milliseconds, read without verification (the server still verifies); null if unreadable. */
+export function tokenExpiresAt(token: string): number | null {
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/"))) as { exp?: unknown };
+    return typeof payload.exp === "number" ? payload.exp * 1000 : null;
+  } catch { return null; }
+}
+
+/** A stored session whose token has not yet expired. */
+export function getActiveSession(now = Date.now()): Session | null {
+  const session = getSession();
+  if (!session) return null;
+  const expiresAt = tokenExpiresAt(session.token);
+  if (expiresAt !== null && expiresAt <= now) { clearSession(); return null; }
+  return session;
+}

@@ -8,6 +8,8 @@ const Toaster = ({ ...props }: ToasterProps) => {
     <Sonner
       theme={theme as ToasterProps["theme"]}
       className="toaster group"
+      // Keep phone toasts above the fixed bottom navigation bar.
+      mobileOffset={{ bottom: "calc(4.75rem + env(safe-area-inset-bottom))" }}
       style={
         {
           "--normal-bg": "var(--popover)",
