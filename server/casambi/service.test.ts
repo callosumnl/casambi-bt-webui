@@ -5,7 +5,7 @@ import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventHub } from "../events";
 import { LocalStore } from "../store";
-import { CasambiService } from "./service";
+import { CasambiService, summarizeDiagnostic } from "./service";
 import type { NetworkSnapshot } from "./types";
 
 const folders: string[] = [];
@@ -122,6 +122,11 @@ describe("CasambiService connection resilience", () => {
     expect(service.cachedSnapshot().connection).toEqual({ phase: "connected" });
     await vi.advanceTimersByTimeAsync(600_000); expect(bridge.configureCalls).toBe(3);
     expect(actions(database).filter(action => action === "bridge.startup_connect_failed")).toHaveLength(2);
+    // Each attempt records how long it took; the successful third one is logged too.
+    const entries = database.recentAudit().reverse().filter(entry => entry.action.startsWith("bridge.")).map(entry => ({ action: entry.action, ...entry.detail }));
+    expect(entries.filter(entry => entry.action === "bridge.startup_connect_failed").map(entry => entry.attempt)).toEqual([1, 2]);
+    expect(entries.every(entry => typeof entry.durationMs === "number")).toBe(true);
+    expect(entries.find(entry => entry.action === "bridge.connected")).toMatchObject({ reason: "startup", attempt: 3 });
   });
 
   it("reconnects after an unexpected drop, but never after a manual disconnect", async () => {
@@ -136,7 +141,8 @@ describe("CasambiService connection resilience", () => {
     expect(service.cachedSnapshot().connection).toMatchObject({ phase: "retrying", attempt: 1, lastError: "The Bluetooth connection was lost." });
     await vi.advanceTimersByTimeAsync(15_000);
     expect(bridge.configureCalls).toBe(2);
-    expect(actions(database)).toEqual(expect.arrayContaining(["bridge.connection_lost", "bridge.reconnected"]));
+    expect(actions(database)).toEqual(expect.arrayContaining(["bridge.connection_lost"]));
+    expect(database.recentAudit().find(entry => entry.action === "bridge.connected")?.detail).toMatchObject({ reason: "reconnect", attempt: 2 }); // The drop counts as the first failure, as in the status bar.
 
     await service.disconnect();
     expect(service.cachedSnapshot().connection).toEqual({ phase: "idle" });
@@ -184,3 +190,24 @@ describe("CasambiService switch activity", () => {
   });
 });
 
+describe("summarizeDiagnostic", () => {
+  it("keeps short diagnostics unchanged", () => {
+    expect(summarizeDiagnostic("Failed to discover client.")).toBe("Failed to discover client.");
+  });
+
+  it("keeps a long traceback's first line and final exception instead of its head", () => {
+    const traceback = ["Failed to find client.", "Traceback (most recent call last):", ...Array.from({ length: 40 }, (_, index) => `  File "/opt/venv/site-packages/module_${index}.py", line ${index}, in connect`), "bleak.exc.BleakDeviceNotFoundError: Device with address AB:CD:EF:01:23:45 was not found."].join("\n");
+    const summary = summarizeDiagnostic(traceback);
+    expect(summary.length).toBeLessThanOrEqual(600);
+    expect(summary.startsWith("Failed to find client.\n…\n")).toBe(true);
+    expect(summary.endsWith("Device with address AB:CD:EF:01:23:45 was not found.")).toBe(true);
+  });
+
+  it("stores the summarized form when the worker writes to stderr", () => {
+    const database = store(); const bridge = new FakeBridge();
+    new CasambiService(database, bridge as never, new EventHub());
+    bridge.emit("diagnostic", `Failed to find client.\n${"x".repeat(2_000)}\nBleakDeviceNotFoundError: not found`);
+    const detail = database.recentAudit().find(entry => entry.action === "bridge.diagnostic")?.detail as { detail: string };
+    expect(detail.detail.endsWith("BleakDeviceNotFoundError: not found")).toBe(true);
+  });
+});

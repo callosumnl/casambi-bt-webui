@@ -9,6 +9,17 @@ const COALESCIBLE_OPERATIONS = new Set(["set_level", "set_temperature", "set_col
 const RECONNECT_BASE_MS = 15_000;
 const RECONNECT_MAX_MS = 300_000;
 const SWITCH_ACTIVITY_LIMIT = 50;
+const DIAGNOSTIC_LIMIT = 600;
+
+/**
+ * Shortens worker stderr for the audit log. A Python traceback puts the actual exception on its last
+ * line, so a long multi-line message keeps its first line (the log message) and its tail, not its head.
+ */
+export function summarizeDiagnostic(detail: string, limit = DIAGNOSTIC_LIMIT): string {
+  if (detail.length <= limit) return detail;
+  const firstLine = detail.split("\n", 1)[0].slice(0, 160);
+  return `${firstLine}\n…\n${detail.slice(-(limit - firstLine.length - 3))}`;
+}
 export type TimedSwitchPress = SwitchPress & { at: string };
 
 /** What the service is doing about the Casambi connection, shown to users so a slow connect or retry is visible. */
@@ -36,7 +47,7 @@ export class CasambiService {
 
   public constructor(private readonly store: LocalStore, private readonly bridge: JsonLineCasambiBridge, private readonly events: EventHub) {
     this.bridge.on("event", (event: BridgeEvent) => this.handleBridgeEvent(event));
-    this.bridge.on("diagnostic", (detail: string) => this.store.audit("bridge", "bridge.diagnostic", { detail: detail.slice(0, 500) }));
+    this.bridge.on("diagnostic", (detail: string) => this.store.audit("bridge", "bridge.diagnostic", { detail: summarizeDiagnostic(detail) }));
   }
 
   /** Starts supervision and conditionally reconnects only when local settings are complete. */
@@ -78,7 +89,15 @@ export class CasambiService {
   public async connect(): Promise<NetworkSnapshot> {
     this.cancelReconnect();
     this.wantConnected = true;
-    return this.connectOnce();
+    const startedAt = Date.now();
+    try {
+      const snapshot = await this.connectOnce();
+      this.store.audit("bridge", "bridge.connected", { reason: "manual", attempt: 1, durationMs: Date.now() - startedAt });
+      return snapshot;
+    } catch (error) {
+      this.store.audit("bridge", "bridge.connect_failed", { message: this.message(error), durationMs: Date.now() - startedAt });
+      throw error;
+    }
   }
 
   /** Connects from encrypted persisted credentials. Upstream requires address and network password. */
@@ -99,12 +118,14 @@ export class CasambiService {
 
   /** Connects without a user present (startup or after a dropped link), retrying with capped backoff until it succeeds. */
   private async autoConnect(reason: "startup" | "reconnect"): Promise<void> {
+    const attempt = this.reconnectAttempt + 1;
+    const startedAt = Date.now();
     try {
       await this.connectOnce();
-      if (reason === "reconnect") this.store.audit("bridge", "bridge.reconnected", {});
+      this.store.audit("bridge", "bridge.connected", { reason, attempt, durationMs: Date.now() - startedAt });
     } catch (error) {
       const message = this.message(error);
-      this.store.audit("bridge", reason === "startup" ? "bridge.startup_connect_failed" : "bridge.reconnect_failed", { message, attempt: this.reconnectAttempt + 1 });
+      this.store.audit("bridge", reason === "startup" ? "bridge.startup_connect_failed" : "bridge.reconnect_failed", { message, attempt, durationMs: Date.now() - startedAt });
       // A rejected password or incomplete settings will not fix themselves; wait for an administrator instead of retrying forever.
       if (message.startsWith("AuthenticationError") || message.includes("must be configured")) return;
       this.scheduleReconnect(reason, message);
