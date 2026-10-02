@@ -13,6 +13,8 @@ type BridgeEnvelope = BridgeResponse | { event: BridgeEvent };
  * plus key exchange; a discovery is a single 5 s scan.
  */
 const LONG_COMMAND_TIMEOUTS_MS: Record<string, number> = { configure: 90_000, connect: 90_000, discover: 30_000 };
+/** How long a worker restarted for not answering may take to disconnect and exit before it is killed. */
+const FORCE_KILL_AFTER_MS = 8_000;
 
 /** Minimal child-process shape, kept small to enable deterministic bridge tests. */
 export type BridgeChild = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "on" | "kill">;
@@ -67,6 +69,8 @@ export class JsonLineCasambiBridge extends EventEmitter {
     this.child = child;
     child.stdout.on("data", chunk => this.consumeStdout(chunk.toString()));
     child.stderr.on("data", chunk => this.emit("diagnostic", chunk.toString().trim()));
+    // A write racing the worker's exit fails with EPIPE; unhandled, that would crash Node.
+    child.stdin.on("error", error => this.emit("diagnostic", `Worker stdin error: ${error.message}`));
     child.on("exit", () => this.handleExit());
     child.on("error", error => this.handleFailure(error));
   }
@@ -119,6 +123,7 @@ export class JsonLineCasambiBridge extends EventEmitter {
       const timer = setTimeout(() => {
         this.pending.delete(id);
         rejectRequest(new Error(`Casambi bridge command '${command}' timed out.`));
+        this.restartUnresponsiveWorker(command);
       }, LONG_COMMAND_TIMEOUTS_MS[command] ?? this.commandTimeoutMs);
       this.pending.set(id, { resolve: value => resolveRequest(value as T), reject: rejectRequest, timer });
       try {
@@ -165,6 +170,20 @@ export class JsonLineCasambiBridge extends EventEmitter {
     } else {
       request.reject(new Error(`${envelope.error.code}: ${envelope.error.message}`));
     }
+  }
+
+  /**
+   * The worker handles one command at a time, so a command that outlives its timeout means the worker
+   * is stuck on it, and every later command would time out too while the process stays alive. Restart
+   * it instead: SIGTERM lets it release the BLE link, SIGKILL follows if it cannot exit. The normal
+   * exit handling then restarts the worker, and the service reconnects.
+   */
+  private restartUnresponsiveWorker(command: string): void {
+    const child = this.child;
+    if (!child || this.stopped) return;
+    this.emit("diagnostic", `Casambi worker did not answer '${command}' in time; restarting it.`);
+    child.kill("SIGTERM");
+    setTimeout(() => { if (this.child === child) child.kill("SIGKILL"); }, FORCE_KILL_AFTER_MS).unref();
   }
 
   private handleFailure(error: Error): void {

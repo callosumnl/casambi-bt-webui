@@ -8,7 +8,10 @@ class FakeWorker extends EventEmitter {
   public readonly stderr = new PassThrough();
   public readonly commands: Array<Record<string, unknown>> = [];
   public readonly stdin = new Writable({ write: (chunk, _encoding, callback) => { this.commands.push(JSON.parse(chunk.toString())); callback(); } });
-  public kill(): boolean { this.emit("exit", 0); return true; }
+  public readonly signals: string[] = [];
+  /** When true, behaves like a worker stuck in a blocking call: only SIGKILL ends it. */
+  public ignoreSigterm = false;
+  public kill(signal = "SIGTERM"): boolean { this.signals.push(signal); if (!(this.ignoreSigterm && signal === "SIGTERM")) this.emit("exit", 0); return true; }
 }
 
 describe("JsonLineCasambiBridge", () => {
@@ -24,6 +27,35 @@ describe("JsonLineCasambiBridge", () => {
     const rejection = expect(result).rejects.toThrow("Casambi bridge command 'configure' timed out.");
     await vi.advanceTimersByTimeAsync(60_000);
     await rejection; bridge.stop();
+  });
+
+  it("restarts a worker that stops answering, so a stuck command cannot block every later one", async () => {
+    vi.useFakeTimers();
+    const workers: FakeWorker[] = [];
+    const bridge = new JsonLineCasambiBridge({ createChild: () => { const worker = new FakeWorker(); workers.push(worker); return worker as never; } });
+    const states: string[] = [];
+    bridge.on("event", event => { if ((event as { type: string }).type === "bridge") states.push((event as { state: string }).state); });
+    const rejection = expect(bridge.execute("snapshot")).rejects.toThrow("timed out");
+    await vi.advanceTimersByTimeAsync(12_000);
+    await rejection;
+    expect(workers[0].signals).toEqual(["SIGTERM"]);
+    expect(states).toContain("unavailable");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(workers).toHaveLength(2);
+    bridge.stop();
+  });
+
+  it("kills a stuck worker that ignores SIGTERM", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker(); worker.ignoreSigterm = true;
+    const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
+    const rejection = expect(bridge.execute("snapshot")).rejects.toThrow("timed out");
+    await vi.advanceTimersByTimeAsync(12_000);
+    await rejection;
+    expect(worker.signals).toEqual(["SIGTERM"]);
+    await vi.advanceTimersByTimeAsync(8_000);
+    expect(worker.signals).toEqual(["SIGTERM", "SIGKILL"]);
+    bridge.stop();
   });
 
   it("keeps the default timeout for ordinary commands", async () => {
