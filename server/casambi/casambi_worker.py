@@ -55,6 +55,22 @@ def normalize_switch_event(event: Any) -> dict[str, Any]:
 
 # Well inside systemd's 20 s TimeoutStopSec, so a clean disconnect never turns into a SIGKILL.
 SHUTDOWN_DISCONNECT_SECONDS = 5
+# Bounds for the BlueZ steps before a (re)connect. Their D-Bus calls have no timeout of their own,
+# and after a dropped link one of them once hung for 32 hours. The connect itself stays unbounded
+# here (a healthy one has taken 42 s); Node's 90 s command timeout and watchdog cover it.
+PREVIOUS_DISCONNECT_TIMEOUT_SECONDS = 8
+DISCOVERY_TIMEOUT_SECONDS = 20
+
+
+async def discover_with_timeout(discover: Any) -> list[Any]:
+    """Run an upstream Bluetooth scan, failing clearly instead of waiting forever on BlueZ."""
+    try:
+        return await asyncio.wait_for(discover(), timeout=DISCOVERY_TIMEOUT_SECONDS)
+    except TimeoutError as error:
+        raise RuntimeError(
+            f"Bluetooth scan timed out after {DISCOVERY_TIMEOUT_SECONDS} s; BlueZ did not answer. "
+            "Restarting the Pi's bluetooth service usually clears this."
+        ) from error
 
 
 def utc_now() -> str:
@@ -204,12 +220,18 @@ class CasambiWorker:
             raise ValueError("networkAddress/networkUuid and networkPassword are required to connect.")
         address = normalize_network_address(address)
         if self.casa:
-            await self.casa.disconnect()
+            # Detach first, so a late callback from the old instance is ignored by handle_disconnect.
+            previous, self.casa = self.casa, None
+            self.connected = False
+            try:
+                await asyncio.wait_for(previous.disconnect(), timeout=PREVIOUS_DISCONNECT_TIMEOUT_SECONDS)
+            except Exception as error:  # Includes TimeoutError. The new connection does not depend on the old one.
+                print(f"Closing the previous Casambi connection did not finish ({error!r}); continuing with a new connection.", file=sys.stderr, flush=True)
         # Keep the BLEDevice returned by a fresh discovery scan. Passing a raw
         # address makes casambi-bt perform a second BlueZ cache lookup after its
         # network update work; BlueZ can expire that cached object meanwhile,
         # leading to an empty NetworkNotFoundError despite a successful scan.
-        endpoints = await discover()
+        endpoints = await discover_with_timeout(discover)
         endpoint = next((device for device in endpoints if device.address.upper() == address), None)
         if endpoint is None:
             raise RuntimeError(
@@ -271,7 +293,7 @@ class CasambiWorker:
             return [{"address": "00:00:00:00:00:01"}]
         from CasambiBt import discover
 
-        return [{"address": device.address} for device in await discover()]
+        return [{"address": device.address} for device in await discover_with_timeout(discover)]
 
     async def control(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Run one validated control request against a unit, group, scene, or network."""

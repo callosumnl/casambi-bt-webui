@@ -151,6 +151,79 @@ class Casambi:
   });
 });
 
+describe("casambi_worker bounded reconnect steps", () => {
+  /** Real worker with 0.2 s step limits, against a fake upstream whose disconnect() or discover() can hang forever. */
+  function worker(hang: "disconnect" | "discover") {
+    const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "casambi-worker-steps-"));
+    temporaryDirectories.push(temporaryDirectory);
+    mkdirSync(path.join(temporaryDirectory, "CasambiBt"), { recursive: true });
+    writeFileSync(path.join(temporaryDirectory, "CasambiBt", "__init__.py"), `
+import asyncio
+from types import SimpleNamespace
+HANG = ${JSON.stringify(hang)}
+
+async def discover():
+    if HANG == "discover":
+        await asyncio.Event().wait()
+    return [SimpleNamespace(address="AB:CD:EF:01:23:45")]
+
+class Casambi:
+    def __init__(self, cachePath):
+        self.units, self.groups, self.scenes = [], [], []
+        self.networkId, self.networkName = "test-network", "Test network"
+    def registerUnitChangedHandler(self, handler): pass
+    def registerSwitchEventHandler(self, handler): pass
+    def registerDisconnectCallback(self, handler): pass
+    async def connect(self, address, password, force_offline): pass
+    async def disconnect(self):
+        if HANG == "disconnect":
+            await asyncio.Event().wait()
+`);
+    const harness = "import asyncio, sys; sys.path.insert(0, sys.argv[1]); import casambi_worker as w; w.PREVIOUS_DISCONNECT_TIMEOUT_SECONDS = 0.2; w.DISCOVERY_TIMEOUT_SECONDS = 0.2; w.SHUTDOWN_DISCONNECT_SECONDS = 0.2; asyncio.run(w.run_worker(False))";
+    const child = spawn("python3", ["-c", harness, path.join(projectRoot, "server", "casambi")], {
+      cwd: projectRoot,
+      env: { ...process.env, NODE_ENV: "production", CASAMBI_CACHE_PATH: path.join(temporaryDirectory, "cache"), PYTHONPATH: `${temporaryDirectory}${path.delimiter}${process.env.PYTHONPATH || ""}` },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    const responses = new Map<string, (payload: Record<string, unknown>) => void>();
+    let pending = "";
+    child.stdout.on("data", chunk => {
+      pending += chunk.toString();
+      const lines = pending.split("\n"); pending = lines.pop() || "";
+      for (const line of lines.filter(Boolean)) { const payload = JSON.parse(line) as Record<string, unknown>; responses.get(String(payload.id))?.(payload); }
+    });
+    const send = (id: string, command: string, payload: Record<string, unknown> = {}) => new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`No answer to ${command} within 3 s.`)), 3_000);
+      responses.set(id, value => { clearTimeout(timeout); resolve(value); });
+      child.stdin.write(`${JSON.stringify({ id, command, payload })}\n`);
+    });
+    const credentials = { networkAddress: "abcdef012345", networkPassword: "not-a-real-password" };
+    return { child, send, credentials, stderr: () => stderr };
+  }
+
+  it("reconnects even when closing the previous connection never finishes", async () => {
+    const { child, send, credentials, stderr } = worker("disconnect");
+    try {
+      await expect(send("first", "configure", credentials)).resolves.toMatchObject({ ok: true, result: { connected: true } });
+      await expect(send("second", "configure", credentials)).resolves.toMatchObject({ ok: true, result: { connected: true } });
+      expect(stderr()).toContain("Closing the previous Casambi connection did not finish");
+    } finally { child.kill("SIGKILL"); }
+  });
+
+  it("fails a hanging scan with a clear message and keeps answering commands", async () => {
+    const { child, send, credentials } = worker("discover");
+    try {
+      const connect = await send("connect", "configure", credentials);
+      expect(connect).toMatchObject({ ok: false, error: { code: "RuntimeError" } });
+      expect(String((connect.error as { message: string }).message)).toContain("Bluetooth scan timed out after 0.2 s");
+      await expect(send("discover", "discover")).resolves.toMatchObject({ ok: false, error: { code: "RuntimeError" } });
+      await expect(send("ping", "ping")).resolves.toMatchObject({ ok: true, result: { ok: true } });
+    } finally { child.kill("SIGKILL"); }
+  });
+});
+
 describe("casambi_worker switch events", () => {
   // Mirrors upstream's SwitchEvent dataclass and ButtonEventType enum, with the values captured from a real switch.
   const script = `
