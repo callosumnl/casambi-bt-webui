@@ -58,6 +58,36 @@ describe("JsonLineCasambiBridge", () => {
     bridge.stop();
   });
 
+  it("reports the worker state without waiting on the worker", async () => {
+    vi.useFakeTimers();
+    const worker = new FakeWorker();
+    const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
+    expect(bridge.state()).toMatchObject({ running: false, busy: null, lastAnswerAt: null, restarts: 0 });
+    const configure = bridge.execute("configure");
+    await vi.advanceTimersByTimeAsync(47_000);
+    expect(bridge.state()).toMatchObject({ running: true, busy: { command: "configure", forMs: 47_000 } });
+    worker.stdout.write(`${JSON.stringify({ id: worker.commands[0].id, ok: true, result: {} })}\n`);
+    await configure;
+    expect(bridge.state().busy).toBeNull();
+    expect(bridge.state().lastAnswerAt).toEqual(expect.any(String));
+    bridge.stop();
+  });
+
+  it("restarts the worker on request, and starts one when none is running", async () => {
+    vi.useFakeTimers();
+    const workers: FakeWorker[] = [];
+    const bridge = new JsonLineCasambiBridge({ createChild: () => { const worker = new FakeWorker(); workers.push(worker); return worker as never; } });
+    bridge.restart();
+    expect(workers).toHaveLength(1);
+    bridge.restart();
+    expect(workers[0].signals).toEqual(["SIGTERM"]);
+    expect(bridge.state()).toMatchObject({ running: false, restarts: 1 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(workers).toHaveLength(2);
+    expect(bridge.state().running).toBe(true);
+    bridge.stop();
+  });
+
   it("keeps the default timeout for ordinary commands", async () => {
     vi.useFakeTimers();
     const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });

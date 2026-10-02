@@ -17,7 +17,9 @@ const LONG_COMMAND_TIMEOUTS_MS: Record<string, number> = { configure: 90_000, co
 const FORCE_KILL_AFTER_MS = 8_000;
 
 /** Minimal child-process shape, kept small to enable deterministic bridge tests. */
-export type BridgeChild = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "on" | "kill">;
+export type BridgeChild = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "on" | "kill" | "pid">;
+/** Supervisor-side view of the worker, available even when the worker itself cannot answer. */
+export type WorkerState = { running: boolean; pid: number | null; busy: { command: string; forMs: number } | null; lastAnswerAt: string | null; restarts: number };
 export type BridgeChildFactory = () => BridgeChild;
 
 type PendingRequest = {
@@ -42,6 +44,10 @@ export class JsonLineCasambiBridge extends EventEmitter {
   private readonly pending = new Map<string, PendingRequest>();
   private stopped = false;
   private restartAttempt = 0;
+  /** Commands are serialized, so at most one is in flight at a time. */
+  private inFlight: { command: string; startedAt: number } | null = null;
+  private lastAnswerAt: number | null = null;
+  private restarts = 0;
   private readonly commandTimeoutMs: number;
   private readonly createChild: BridgeChildFactory;
   private queue: Promise<unknown> = Promise.resolve();
@@ -110,6 +116,26 @@ export class JsonLineCasambiBridge extends EventEmitter {
     return next;
   }
 
+  /** What the worker is doing, read from the supervisor: it never waits on the worker or its queue. */
+  public state(now = Date.now()): WorkerState {
+    return {
+      running: this.child !== null,
+      pid: this.child?.pid ?? null,
+      busy: this.inFlight ? { command: this.inFlight.command, forMs: now - this.inFlight.startedAt } : null,
+      lastAnswerAt: this.lastAnswerAt === null ? null : new Date(this.lastAnswerAt).toISOString(),
+      restarts: this.restarts,
+    };
+  }
+
+  /** Administrator restart: ends the current worker the same safe way as the watchdog, or starts one if none is running. */
+  public restart(): void {
+    if (this.stopped) return;
+    this.restartAttempt = 0;
+    if (!this.child) { this.start(); return; }
+    this.emit("diagnostic", "Casambi worker restart requested by an administrator.");
+    this.terminate(this.child);
+  }
+
   /** Returns the current normalized network snapshot. */
   public snapshot(): Promise<NetworkSnapshot> {
     return this.execute<NetworkSnapshot>("snapshot");
@@ -122,15 +148,18 @@ export class JsonLineCasambiBridge extends EventEmitter {
     return new Promise<T>((resolveRequest, rejectRequest) => {
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        this.inFlight = null;
         rejectRequest(new Error(`Casambi bridge command '${command}' timed out.`));
         this.restartUnresponsiveWorker(command);
       }, LONG_COMMAND_TIMEOUTS_MS[command] ?? this.commandTimeoutMs);
       this.pending.set(id, { resolve: value => resolveRequest(value as T), reject: rejectRequest, timer });
+      this.inFlight = { command, startedAt: Date.now() };
       try {
         this.child?.stdin.write(`${JSON.stringify({ id, command, payload })}\n`);
       } catch (error) {
         clearTimeout(timer);
         this.pending.delete(id);
+        this.inFlight = null;
         rejectRequest(error instanceof Error ? error : new Error("Unable to write to Casambi bridge."));
       }
     });
@@ -164,6 +193,8 @@ export class JsonLineCasambiBridge extends EventEmitter {
     if (!request) return;
     clearTimeout(request.timer);
     this.pending.delete(envelope.id);
+    this.inFlight = null;
+    this.lastAnswerAt = Date.now();
     if (envelope.ok) {
       this.restartAttempt = 0;
       request.resolve(envelope.result);
@@ -182,6 +213,10 @@ export class JsonLineCasambiBridge extends EventEmitter {
     const child = this.child;
     if (!child || this.stopped) return;
     this.emit("diagnostic", `Casambi worker did not answer '${command}' in time; restarting it.`);
+    this.terminate(child);
+  }
+
+  private terminate(child: BridgeChild): void {
     child.kill("SIGTERM");
     setTimeout(() => { if (this.child === child) child.kill("SIGKILL"); }, FORCE_KILL_AFTER_MS).unref();
   }
@@ -192,8 +227,10 @@ export class JsonLineCasambiBridge extends EventEmitter {
 
   private handleExit(): void {
     this.child = null;
+    this.inFlight = null;
     this.rejectPending(new Error("Casambi bridge terminated unexpectedly."));
     if (this.stopped) return;
+    this.restarts += 1;
     this.emit("event", { type: "bridge", state: "unavailable", detail: "Python bridge exited; reconnecting." } satisfies BridgeEvent);
     const delay = Math.min(30_000, 1_000 * 2 ** this.restartAttempt++);
     setTimeout(() => this.start(), delay).unref();

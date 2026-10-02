@@ -14,7 +14,7 @@ const folders: string[] = [];
 function app() {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
-  const service = { snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
+  const service = { snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
   const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler })); return instance;
 }
@@ -87,6 +87,18 @@ describe("REST API", () => {
     expect((await request(instance).get("/api/v1/admin/switch-activity").set(auth).expect(200)).body[0]).toMatchObject({ unitId: 2, button: 4, trigger: "tap" });
     await request(instance).delete(`/api/v1/admin/switch-rules/${created.body.id}`).set(auth).expect(204);
     await request(instance).delete(`/api/v1/admin/switch-rules/${created.body.id}`).set(auth).expect(404);
+  });
+
+  it("lets only an admin read the worker state and restart the worker", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    await request(instance).post("/api/v1/admin/users").set(auth).send({ username: "operator", password: "another-strong-password", role: "user" }).expect(201);
+    const operator = await request(instance).post("/api/v1/auth/login").send({ username: "operator", password: "another-strong-password" });
+    await request(instance).get("/api/v1/admin/worker").set({ Authorization: `Bearer ${operator.body.token}` }).expect(403);
+    await request(instance).post("/api/v1/admin/worker/restart").set({ Authorization: `Bearer ${operator.body.token}` }).expect(403);
+    expect((await request(instance).get("/api/v1/admin/worker").set(auth).expect(200)).body).toMatchObject({ running: true, pid: 4242 });
+    expect((await request(instance).post("/api/v1/admin/worker/restart").set(auth).expect(202)).body).toMatchObject({ restarts: 1 });
   });
 
   it("creates a reusable away-date set and attaches it to a timer", async () => {

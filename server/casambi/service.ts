@@ -1,7 +1,7 @@
 import { EventHub } from "../events";
 import { CasambiConfig, LocalStore } from "../store";
 import { controlRequestSchema, type BridgeEvent, type ControlRequest, type NetworkSnapshot, type SwitchPress } from "./types";
-import { JsonLineCasambiBridge } from "./bridge";
+import { JsonLineCasambiBridge, type WorkerState } from "./bridge";
 
 /** Operations that set an absolute value, so a newer queued value can safely replace an unsent older one. */
 const COALESCIBLE_OPERATIONS = new Set(["set_level", "set_temperature", "set_color", "set_white", "set_vertical", "set_slider", "set_xy"]);
@@ -81,6 +81,18 @@ export class CasambiService {
 
   /** Registers a handler for every reported switch message; handlers must filter on `trigger` themselves. */
   public onSwitchPress(listener: (press: TimedSwitchPress) => void): void { this.switchListeners.push(listener); }
+
+  /** The Python worker's state as seen by its supervisor; answers even when the worker is stuck. */
+  public workerState(): WorkerState { return this.bridge.state(); }
+
+  /** Restarts (or starts) the Python worker. If the network should be connected, the reconnect loop takes over. */
+  public restartWorker(actor: string): WorkerState {
+    this.store.audit(actor, "bridge.worker_restart_requested", {});
+    // Drop a pending long backoff so the restart's "unavailable" event schedules a prompt (15 s) reconnect.
+    if (this.wantConnected) this.cancelReconnect();
+    this.bridge.restart();
+    return this.bridge.state();
+  }
 
   /** Discovers nearby Casambi networks using the actual Bluetooth adapter. */
   public discover(): Promise<Array<{ address: string }>> { return this.bridge.execute("discover"); }

@@ -20,26 +20,29 @@ class FakeBridge extends EventEmitter {
   /** Error messages the next `configure` calls reject with, in order. */
   public configureFailures: string[] = [];
   start(): void {}
-  public readonly state: NetworkSnapshot = { connected: true, network: { id: "test", name: "Test" }, groups: [], scenes: [], updatedAt: new Date().toISOString(), units: [
+  public restartCalls = 0;
+  restart(): void { this.restartCalls += 1; this.emit("event", { type: "bridge", state: "unavailable" }); }
+  state() { return { running: true, pid: 42, busy: null, lastAnswerAt: null, restarts: this.restartCalls }; }
+  public readonly network: NetworkSnapshot = { connected: true, network: { id: "test", name: "Test" }, groups: [], scenes: [], updatedAt: new Date().toISOString(), units: [
     { id: 1, uuid: "one", address: "one", name: "One", capabilities: [], state: { dimmer: 0, sensors: [], on: false, online: true } },
     { id: 2, uuid: "two", address: "two", name: "Two", capabilities: [], state: { dimmer: 0, sensors: [], on: false, online: true } },
   ] };
 
-  async snapshot(): Promise<NetworkSnapshot> { this.snapshotCalls += 1; return structuredClone(this.state); }
+  async snapshot(): Promise<NetworkSnapshot> { this.snapshotCalls += 1; return structuredClone(this.network); }
   async execute<T>(command: string, payload: Record<string, unknown>): Promise<T> {
     if (command === "configure") {
       this.configureCalls += 1;
       const failure = this.configureFailures.shift();
       if (failure) throw new Error(failure);
-      return structuredClone(this.state) as T;
+      return structuredClone(this.network) as T;
     }
-    if (command === "disconnect") return structuredClone({ ...this.state, connected: false }) as T;
+    if (command === "disconnect") return structuredClone({ ...this.network, connected: false }) as T;
     this.commands.push(payload);
     if (payload.operation === "set_level") {
-      const unit = this.state.units.find(item => item.id === Number(payload.targetId));
+      const unit = this.network.units.find(item => item.id === Number(payload.targetId));
       if (unit) { unit.state.dimmer = Number(payload.value); unit.state.on = Number(payload.value) > 0; }
     }
-    return structuredClone(this.state) as T;
+    return structuredClone(this.network) as T;
   }
   async executeLatest<T>(key: string, command: string, payload: Record<string, unknown>): Promise<T> { this.latestKeys.push(key); return this.execute<T>(command, payload); }
 }
@@ -69,7 +72,7 @@ describe("CasambiService fade controls", () => {
     database.setUnitMetadata(1, null, room.id);
     database.setUnitMetadata(2, null, room.id);
     const bridge = new FakeBridge();
-    bridge.state.groups = [{ id: 7, name: "Partial", unitIds: [1] }, { id: 9, name: "Gallery", unitIds: [2, 1] }];
+    bridge.network.groups = [{ id: 7, name: "Partial", unitIds: [1] }, { id: 9, name: "Gallery", unitIds: [2, 1] }];
     const service = new CasambiService(database, bridge as never, new EventHub());
     await service.snapshot();
 
@@ -85,7 +88,7 @@ describe("CasambiService fade controls", () => {
     database.setUnitMetadata(1, null, room.id);
     database.setUnitMetadata(2, null, room.id);
     const bridge = new FakeBridge();
-    bridge.state.groups = [{ id: 7, name: "Partial", unitIds: [1] }];
+    bridge.network.groups = [{ id: 7, name: "Partial", unitIds: [1] }];
     const service = new CasambiService(database, bridge as never, new EventHub());
     await service.snapshot();
 
@@ -149,6 +152,22 @@ describe("CasambiService connection resilience", () => {
     bridge.emit("event", { type: "bridge", state: "disconnected" });
     await vi.advanceTimersByTimeAsync(600_000);
     expect(bridge.configureCalls).toBe(2);
+  });
+
+  it("reconnects about 15 s after a manual worker restart, even during a long backoff", async () => {
+    vi.useFakeTimers();
+    const database = configured(); const bridge = new FakeBridge();
+    bridge.configureFailures = Array.from({ length: 4 }, () => "Casambi bridge command 'configure' timed out.");
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    await service.initialize(); await vi.advanceTimersByTimeAsync(15_000 + 30_000 + 60_000);
+    expect(bridge.configureCalls).toBe(4);
+    expect(service.cachedSnapshot().connection).toMatchObject({ phase: "retrying", attempt: 4 }); // Next retry in 120 s.
+
+    expect(service.restartWorker("admin")).toMatchObject({ running: true, restarts: 1 });
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(bridge.configureCalls).toBe(5);
+    expect(service.cachedSnapshot().connection).toEqual({ phase: "connected" });
+    expect(database.recentAudit().some(entry => entry.action === "bridge.worker_restart_requested" && entry.actor === "admin")).toBe(true);
   });
 
   it("stops retrying when the network password is rejected", async () => {

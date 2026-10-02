@@ -28,6 +28,8 @@ All application endpoints begin with `/api/v1`. Send either an `Authorization: B
 | `GET`, `POST`, `PATCH` | `/admin/users`, `/admin/users/:id` | admin | Manages local `admin` and `user` accounts. |
 | `GET`, `POST`, `DELETE` | `/admin/api-keys`, `/admin/api-keys/:id` | admin | Lists metadata, generates once-visible API keys, and revokes keys. |
 | `GET` | `/admin/audit` | admin | Reads recent non-secret audit entries. |
+| `GET` | `/admin/worker` | admin | Returns the Python worker's state from its supervisor: `running`, `pid`, `busy` (`command`, `forMs`), `lastAnswerAt`, and `restarts`. Never waits on the worker, so it answers even when the worker is stuck. |
+| `POST` | `/admin/worker/restart` | admin | Restarts the worker (SIGTERM, then SIGKILL after 8 s), or starts it if it is not running; returns `202` with the worker state. A connected network reconnects automatically about 15 s later. |
 | `GET` | `/admin/switch-activity` | admin | Returns the 50 most recent switch messages, newest first. |
 | `GET`, `POST` | `/admin/switch-rules` | admin | Lists or creates physical switch rules. |
 | `PATCH`, `DELETE` | `/admin/switch-rules/:id` | admin | Updates or deletes a switch rule. |
