@@ -168,7 +168,7 @@ export class LocalStore {
   }
 
   /** Makes an API key unusable while retaining its audit history. */
-  public revokeApiKey(id: number): void { this.db.prepare("UPDATE api_keys SET revoked_at = ? WHERE id = ?").run(NOW(), id); }
+  public revokeApiKey(id: number): void { if (this.db.prepare("UPDATE api_keys SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL").run(NOW(), id).changes === 0) throw new Error("API key does not exist."); }
 
   /** Stores Casambi settings, encrypting sensitive values with AES-256-GCM. */
   public saveCasambiConfig(input: CasambiConfig): void {
@@ -181,7 +181,8 @@ export class LocalStore {
     const write = this.db.prepare("INSERT INTO settings (key,value,encrypted) VALUES (?,?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value, encrypted=excluded.encrypted");
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      values.forEach(([key, value, encrypted]) => write.run(key, value == null ? "" : encrypted ? this.encrypt(String(value)) : String(value), encrypted ? 1 : 0));
+      // An empty value clears the setting; encrypting "" would store a ciphertext-less value that decrypt() rejected.
+      values.forEach(([key, value, encrypted]) => write.run(key, value == null || value === "" ? "" : encrypted ? this.encrypt(String(value)) : String(value), encrypted ? 1 : 0));
       this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
@@ -222,7 +223,7 @@ export class LocalStore {
     this.db.prepare("UPDATE rooms SET default_brightness_percent = ? WHERE id = ?").run(this.normalizePercent(defaultBrightnessPercent), id);
     return this.getRoom(id)!;
   }
-  public deleteRoom(id: number): void { this.db.prepare("DELETE FROM rooms WHERE id = ?").run(id); }
+  public deleteRoom(id: number): void { if (this.db.prepare("DELETE FROM rooms WHERE id = ?").run(id).changes === 0) throw new Error("Room does not exist."); }
   public setUnitMetadata(unitId: number, customName: string | null, roomId: number | null): void {
     this.db.prepare("INSERT INTO unit_metadata (unit_id,custom_name,room_id) VALUES (?,?,?) ON CONFLICT(unit_id) DO UPDATE SET custom_name=excluded.custom_name,room_id=excluded.room_id").run(unitId, customName?.trim() || null, roomId);
   }
@@ -300,7 +301,7 @@ export class LocalStore {
     return (this.db.prepare("SELECT id,actor,action,detail_json AS detail,created_at AS createdAt FROM audit_log ORDER BY id DESC LIMIT 100").all() as Array<{ id: number; actor: string; action: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) }));
   }
 
-  private getUserById(id: number): StoredUser | null { return (this.db.prepare("SELECT id,username,role,created_at AS createdAt FROM local_users WHERE id = ?").get(id) as StoredUser | undefined) ?? null; }
+  public getUserById(id: number): StoredUser | null { return (this.db.prepare("SELECT id,username,role,created_at AS createdAt FROM local_users WHERE id = ?").get(id) as StoredUser | undefined) ?? null; }
   private getApiKey(id: number): ApiKeyRecord | null { return (this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt FROM api_keys WHERE id = ?").get(id) as ApiKeyRecord | undefined) ?? null; }
   private normalizePercent(value: number): number { if (!Number.isInteger(value) || value < 0 || value > 100) throw new Error("Default brightness must be an integer from 0 to 100."); return value; }
   private adminCount(): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM local_users WHERE role = 'admin'").get() as { count: number }).count; }
@@ -315,5 +316,5 @@ export class LocalStore {
   private digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
   private safeEqual(left: string, right: string): boolean { const a = Buffer.from(left); const b = Buffer.from(right); return a.length === b.length && timingSafeEqual(a, b); }
   private encrypt(plaintext: string): string { const iv = randomBytes(12); const cipher = createCipheriv("aes-256-gcm", this.encryptionKey, iv); const ciphertext = Buffer.concat([cipher.update(plaintext, "utf8"), cipher.final()]); return `${iv.toString("base64url")}.${cipher.getAuthTag().toString("base64url")}.${ciphertext.toString("base64url")}`; }
-  private decrypt(payload: string): string { if (!payload) return ""; const [ivText, tagText, ciphertextText] = payload.split("."); if (!ivText || !tagText || !ciphertextText) throw new Error("Stored secret cannot be decrypted."); const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, Buffer.from(ivText, "base64url")); decipher.setAuthTag(Buffer.from(tagText, "base64url")); return Buffer.concat([decipher.update(Buffer.from(ciphertextText, "base64url")), decipher.final()]).toString("utf8"); }
+  private decrypt(payload: string): string { if (!payload) return ""; const [ivText, tagText, ciphertextText] = payload.split("."); if (!ivText || !tagText || ciphertextText === undefined) throw new Error("Stored secret cannot be decrypted."); const decipher = createDecipheriv("aes-256-gcm", this.encryptionKey, Buffer.from(ivText, "base64url")); decipher.setAuthTag(Buffer.from(tagText, "base64url")); return Buffer.concat([decipher.update(Buffer.from(ciphertextText, "base64url")), decipher.final()]).toString("utf8"); }
 }

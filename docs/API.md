@@ -1,16 +1,19 @@
 # REST API Reference
 
-All application endpoints begin with `/api/v1`. Send either an `Authorization: Bearer <JWT>` header obtained from `/auth/login`, or an `X-API-Key: <key>` header. API keys are scoped to the `admin` or `user` role chosen when the key is created. Authentication failures return `401`; an authenticated principal without the `admin` role receives `403` for administrative routes.
+All application endpoints begin with `/api/v1`. The complete, machine-readable description is the OpenAPI 3.1 document at **`GET /api/v1/openapi.json`** (public; import it into Postman, Insomnia, or Swagger UI). Admins can browse it in the web UI under **API**, with request schemas, examples, and `curl` commands. A test keeps it in sync with the routes. Send either an `Authorization: Bearer <JWT>` header obtained from `/auth/login`, or an `X-API-Key: <key>` header. API keys are scoped to the `admin` or `user` role chosen when the key is created. Authentication failures return `401`; an authenticated principal without the `admin` role receives `403` for administrative routes.
+
+Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401` unauthenticated, `403` wrong role, `404` unknown id, `409` name already in use, `422` invalid request (including values out of range, e.g. levels outside 0-255), `429` more than 240 requests per minute from one client, `500` unexpected failure.
 
 > The service exposes only operations supplied by the connected fixture’s reported Casambi capabilities. Call `GET /devices` before sending a dimming, colour, temperature, vertical, white, slider, or CIE XY command.
 
 | Method | Path | Role | Purpose |
 | --- | --- | --- | --- |
 | `GET` | `/health` | Public | Reports service status and whether first-run bootstrap is needed. |
+| `GET` | `/openapi.json` | Public | The OpenAPI 3.1 description of this API. |
 | `POST` | `/auth/bootstrap` | Public, first run only | Creates the first `admin` and returns a JWT. |
 | `POST` | `/auth/login` | Public | Returns an eight-hour JWT for a local `admin` or `user`. |
 | `GET` | `/auth/me` | user | Returns the resolved principal. |
-| `GET` | `/events` | user | Streams `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `switch`, `switch_rule.executed`, `switch_rule.failed`, `schedule.executed`, and `schedule.failed` SSE events. |
+| `GET` | `/events` | user | Streams `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `switch`, `switch_rule.executed`, `switch_rule.failed`, `local_scenes.changed`, `schedule.executed`, `schedule.failed`, and `schedule.skipped_holiday` SSE events. |
 | `GET` | `/network` | user | Returns the last known connection status, units, groups, scenes, rooms, and local metadata immediately; `?fresh=1` waits for a new bridge snapshot instead. `/devices`, `/groups`, `/scenes`, and `/sensors` also serve the last known state. The `connection` field is `{ phase }`, where `phase` is `idle`, `connecting` (with `attempt`), `connected`, `retrying` (with `attempt`, `nextRetryAt`, and `lastError`), or `failed` (with `lastError`); `connection.status` events carry the same object whenever it changes. |
 | `GET` | `/devices`, `/groups`, `/scenes`, `/sensors`, `/rooms` | user | Returns the named entity collection. |
 | `POST` | `/control` | user | Runs any supported control request. |
@@ -22,13 +25,16 @@ All application endpoints begin with `/api/v1`. Send either an `Authorization: B
 | `POST` | `/local-scenes/:id/apply` | user | Applies a saved scene, optionally with `{ fadeDurationMs }` (0–60,000). |
 | `POST` | `/rooms/:id/apply-default` | user | Applies the room’s saved default brightness; an optional `fadeDurationMs` from 0 to 60,000 enables a smooth transition. |
 | `GET`, `POST` | `/schedules` | user | Lists permitted schedules, including `nextRunAt`, or creates a timer owned by the caller. |
-| `PATCH`, `DELETE` | `/schedules/:id` | owner or admin | Edits or deletes a timer. |
+| `PATCH`, `DELETE` | `/schedules/:id` | owner or admin | Edits (only the fields sent) or deletes a timer. |
+| `GET` | `/away-date-sets` | user | Lists shared away-date sets for the timer form. |
 | `GET`, `PUT` | `/admin/config` | admin | Reads safe settings or saves encrypted bridge configuration, including bounded polling enablement and interval. |
 | `GET` | `/admin/discovery` | admin | Scans nearby Casambi networks. |
 | `POST` | `/admin/connect`, `/admin/disconnect` | admin | Connects or disconnects the live Bluetooth bridge. |
 | `POST`, `DELETE` | `/admin/rooms`, `/admin/rooms/:id` | admin | Creates or removes local room metadata, including a 0–100 default brightness percentage. |
 | `PUT` | `/admin/rooms/:id/default-brightness` | admin | Updates a room’s 0–100 default brightness percentage. |
 | `PUT` | `/admin/devices/:id/metadata` | admin | Sets a local custom name and room assignment. |
+| `GET`, `POST` | `/admin/away-date-sets` | admin | Lists or creates shared away-date sets. |
+| `PATCH`, `DELETE` | `/admin/away-date-sets/:id` | admin | Updates a set (name, dates) or deletes it, detaching it from its timers. |
 | `GET`, `POST`, `PATCH` | `/admin/users`, `/admin/users/:id` | admin | Manages local `admin` and `user` accounts. |
 | `GET`, `POST`, `DELETE` | `/admin/api-keys`, `/admin/api-keys/:id` | admin | Lists metadata, generates once-visible API keys, and revokes keys. |
 | `GET` | `/admin/audit` | admin | Reads recent non-secret audit entries. |

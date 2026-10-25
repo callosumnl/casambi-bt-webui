@@ -19,6 +19,8 @@ export const switchRuleSchema = z.object({
   command: switchRuleCommandSchema,
   enabled: z.boolean().default(true),
 });
+/** For PATCH: only the fields sent are changed (no defaults, unlike switchRuleSchema.partial()). */
+export const switchRulePatchSchema = switchRuleSchema.extend({ enabled: z.boolean() }).partial();
 
 /** Resolves a toggle to "off" when any targeted lamp is on, otherwise "on". Other commands pass through unchanged. */
 export function resolveSwitchCommand(command: SwitchRuleCommand, snapshot: NetworkSnapshot, unitMetadata: UnitMetadata[]): ControlRequest {
@@ -47,7 +49,9 @@ export class SwitchRuleRunner {
 
   public handle(press: TimedSwitchPress): Promise<void> {
     if (!press.trigger) return this.chain;
-    this.chain = this.chain.then(() => this.run(press));
+    this.chain = this.chain.then(() => this.run(press)).catch(error => {
+      this.store.audit("switch", "switch_rule.failed", { message: error instanceof Error ? error.message : "Unknown error." });
+    });
     return this.chain;
   }
 

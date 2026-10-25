@@ -41,7 +41,7 @@ export default function Dashboard() {
     <section aria-labelledby="collective-heading">
       <h2 id="collective-heading" className="section-label">GROUPS & ROOMS</h2>
       <div className="collective-list">{rows.map(row => <CollectiveRow key={row.key} tag={row.tag} name={row.name} level={averageBrightnessPercent(scopeLamps(network, row.scope))}
-        send={(operation, value) => void command({ targetType: row.scope.type, targetId: row.scope.id, operation, ...(value === undefined ? {} : { value }) })}
+        send={(operation, value) => command({ targetType: row.scope.type, targetId: row.scope.id, operation, ...(value === undefined ? {} : { value }) })}
         chips={[...row.extra, ...sceneChips(row.scope)]} onSave={name => saveScene(name, row.scope)} onUpdate={id => void updateScene(id)} onDelete={id => void deleteScene(id)} />)}</div>
     </section>
 
@@ -59,7 +59,7 @@ export default function Dashboard() {
 }
 
 /** One group, room, or "all lights": on/off, a shared brightness slider, and its scenes as one-tap chips. */
-function CollectiveRow({ tag, name, level, send, chips, onSave, onUpdate, onDelete }: { tag: string; name: string; level: number; send: (operation: string, value?: number) => void; chips: Chip[]; onSave: (name: string) => Promise<void>; onUpdate: (id: number) => void; onDelete: (id: number) => void }) {
+function CollectiveRow({ tag, name, level, send, chips, onSave, onUpdate, onDelete }: { tag: string; name: string; level: number; send: (operation: string, value?: number) => Promise<void>; chips: Chip[]; onSave: (name: string) => Promise<void>; onUpdate: (id: number) => void; onDelete: (id: number) => void }) {
   const brightness = useSliderCommit(level, percent => send("set_level", percentToDimmer(percent)));
   const [naming, setNaming] = useState(false);
   const [sceneName, setSceneName] = useState("");
@@ -67,7 +67,7 @@ function CollectiveRow({ tag, name, level, send, chips, onSave, onUpdate, onDele
   const hasOwnScenes = chips.some(chip => chip.scene);
   const submit = async (event: FormEvent) => { event.preventDefault(); if (!sceneName.trim()) return; await onSave(sceneName.trim()); setSceneName(""); setNaming(false); };
   return <article className="collective-row">
-    <div className="row-head"><span className="row-tag">{tag}</span><strong>{name}</strong><div className="row-switch"><button onClick={() => send("on")}>ON</button><button onClick={() => send("off")}>OFF</button></div></div>
+    <div className="row-head"><span className="row-tag">{tag}</span><strong>{name}</strong><div className="row-switch"><button onClick={() => void send("on")}>ON</button><button onClick={() => void send("off")}>OFF</button></div></div>
     <label className="row-slider"><span className="sr-only">{name} brightness</span><input type="range" min="0" max="100" value={brightness.value} {...brightness.handlers} /><b>{brightness.value}%</b></label>
     <div className="scene-chips">
       {chips.map(chip => <span key={chip.key} className={`scene-chip ${chip.kind ?? ""}`}>

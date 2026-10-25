@@ -108,3 +108,18 @@ describe("LocalStore switch rules", () => {
     expect(() => database.deleteSwitchRule(rule.id)).toThrow("Switch rule does not exist.");
   });
 });
+
+describe("SwitchRuleRunner resilience", () => {
+  it("keeps handling presses after one press failed outside a rule", async () => {
+    const database = store(); const service = new FakeService(snapshot([unit(1, false)]));
+    database.createSwitchRule({ name: "On", unitId: 2, button: 4, trigger: "tap", command: { targetType: "unit", targetId: 1, operation: "on" }, enabled: true });
+    const runner = new SwitchRuleRunner(database, service as never, new EventHub());
+    const original = database.listSwitchRules.bind(database);
+    let failOnce = true;
+    database.listSwitchRules = () => { if (failOnce) { failOnce = false; throw new Error("database is locked"); } return original(); };
+    await expect(runner.handle(press("tap"))).resolves.toBeUndefined();
+    await runner.handle(press("tap"));
+    expect(service.commands).toEqual([{ targetType: "unit", targetId: 1, operation: "on" }]);
+  });
+});
+

@@ -22,8 +22,10 @@ export async function authenticate(request: Request, store: LocalStore): Promise
   if (!authorization?.startsWith("Bearer ")) return null;
   try {
     const result = await jwtVerify(authorization.slice(7), jwtSecret());
-    if (result.payload.kind !== "user" || !result.payload.sub || (result.payload.role !== "admin" && result.payload.role !== "user")) return null;
-    return { kind: "user", id: Number(result.payload.sub), name: String(result.payload.username), role: result.payload.role };
+    if (result.payload.kind !== "user" || !result.payload.sub) return null;
+    // Re-read the account: a role change or removed account takes effect immediately, not when the 8 h token expires.
+    const user = store.getUserById(Number(result.payload.sub));
+    return user ? { kind: "user", id: user.id, name: user.username, role: user.role } : null;
   } catch { return null; }
 }
 

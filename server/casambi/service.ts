@@ -224,7 +224,9 @@ export class CasambiService {
     if (command.targetType === "scene") throw new Error("Scenes cannot be faded by this bridge.");
     const snapshot = await this.snapshot();
     const targetLevel = command.operation === "off" ? 0 : command.operation === "on" ? 255 : Number(command.value);
-    const unitIds = this.targetUnitIds(command, snapshot);
+    // Only lamps can be dimmed; a switch or sensor in the target would make the worker reject a step mid-fade.
+    const lamps = new Set(snapshot.units.filter(isLampUnit).map(unit => unit.id));
+    const unitIds = this.targetUnitIds(command, snapshot).filter(unitId => lamps.has(unitId));
     if (unitIds.length === 0) throw new Error("The control target has no assigned lamps.");
     await this.fadeUnits(new Map(unitIds.map(unitId => [unitId, targetLevel])), command.fadeDurationMs || 0, snapshot);
   }

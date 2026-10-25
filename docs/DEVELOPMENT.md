@@ -22,14 +22,15 @@ CASAMBI_JWT='…' node scripts/verify-live-bridge.mjs  # hardware smoke test, on
 
 - Node 22+ is required: the store uses the built-in `node:sqlite` (`DatabaseSync`), loaded via `createRequire` and marked `ssr.external` in `vitest.config.ts`.
 - `server/casambi/casambi_worker.test.ts` spawns `python3` on the real worker script, so a Python 3.11+ interpreter must be on PATH for the full suite.
-- `pnpm build` and `validate-package.sh` both write to `dist/`, and the Python script deletes it first.
+- `pnpm build` writes the web app to `dist/`; `validate-package.sh` writes the Python package to `build/python-dist/`.
+- CI (`.github/workflows/app.yml`) runs `pnpm check`, `pnpm test`, `pnpm build`, and shellcheck; `python-package.yml` validates the Python companion package.
 
 ## Architecture
 
 **Request path:** `server/_core/index.ts` wires everything together: `LocalStore` (SQLite) → `EventHub` (SSE) → `JsonLineCasambiBridge` (Python supervisor) → `CasambiService` → `DurableScheduler`, then mounts `createCasambiApi` from `server/api.ts` at `/api/v1`. The scheduler runs commands through `casambi.control()`, the same validated path the REST API uses.
 
-**Manus template scaffolding vs. the real app:** The repo started from a Manus web template. `server/_core/*` (OAuth, tRPC, `systemRouter`, LLM/map/storage/voice helpers), `server/routers.ts`, `server/db.ts`, `drizzle/` (MySQL), `client/src/lib/trpc.ts`, `client/src/_core/`, `ComponentShowcase.tsx`, and `AIChatBox.tsx` are template leftovers, and most of them aren't used by the appliance. The real application is:
-- `server/api.ts`: REST routes with zod validation. The `route()` wrapper maps `ZodError` to 422, and maps errors by message text ("does not exist" to 404, "required"/"invalid" to 422). Keep error messages consistent with that mapping.
+**Manus template scaffolding vs. the real app:** The repo started from a Manus web template. `server/_core/*` (OAuth, tRPC, `systemRouter`, LLM/map/storage/voice helpers), `server/routers.ts`, `server/db.ts`, `drizzle/` (MySQL), `client/src/lib/trpc.ts`, `client/src/_core/`, `ComponentShowcase.tsx`, and `AIChatBox.tsx` are template leftovers; none of them is wired into the server or client entry points any more. The real application is:
+- `server/api.ts`: REST routes. Request schemas live in `server/apiSchemas.ts` (zod), shared with `server/openapi.ts`, which builds the OpenAPI 3.1 document served at `/api/v1/openapi.json`; `server/openapi.test.ts` fails when a route is added without documenting it, or when a route's documented role differs from what it enforces. `classifyError()` maps thrown errors to statuses: "does not exist" → 404; "required", "invalid", "must", "cannot" → 422; SQLite UNIQUE → 409. Keep error messages consistent with that mapping. Use a separate PATCH schema without `.default()`s (zod's `.partial()` keeps defaults).
 - `server/store.ts`: the single SQLite repository (users, API keys, encrypted Casambi config, rooms, unit metadata, schedules, away-date sets, audit log). There are no migrations framework or Drizzle here. The schema lives in this file.
 - `server/auth.ts`: JWT (`CASAMBI_JWT_SECRET`) and `X-API-Key` auth, with `admin`/`user` roles.
 - `server/scheduler.ts` + `server/solar.ts`: five-field cron evaluated each minute with a `lastRunKey` idempotency guard. There are also sunrise/sunset schedules with offsets (suncalc, which needs admin-configured lat/long), per-timer holiday dates, and reusable away-date sets.

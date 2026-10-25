@@ -267,3 +267,14 @@ print(json.dumps([normalize_switch_event(event) for event in events]))
     expect(presses[3].raw).toMatchObject({ messageType: 8, event: "RELEASE", extraData: "02" });
   });
 });
+
+describe("casambi_worker input handling", () => {
+  it("answers malformed lines with an error and keeps serving commands", () => {
+    const result = spawnSync("python3", [workerPath, "--mock"], { input: 'not json\n[1]\n{"id":"p","command":"ping"}\n', encoding: "utf8" });
+    const lines = result.stdout.trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>);
+    expect(result.status).toBe(0);
+    expect(lines.filter(line => line.ok === false).map(line => line.id)).toEqual(["unknown", "unknown"]);
+    expect(lines.at(-1)).toEqual({ id: "p", ok: true, result: { ok: true } });
+  });
+});
+

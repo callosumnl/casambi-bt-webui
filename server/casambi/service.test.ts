@@ -24,8 +24,8 @@ class FakeBridge extends EventEmitter {
   restart(): void { this.restartCalls += 1; this.emit("event", { type: "bridge", state: "unavailable" }); }
   state() { return { running: true, pid: 42, busy: null, lastAnswerAt: null, restarts: this.restartCalls }; }
   public readonly network: NetworkSnapshot = { connected: true, network: { id: "test", name: "Test" }, groups: [], scenes: [], updatedAt: new Date().toISOString(), units: [
-    { id: 1, uuid: "one", address: "one", name: "One", capabilities: [], state: { dimmer: 0, sensors: [], on: false, online: true } },
-    { id: 2, uuid: "two", address: "two", name: "Two", capabilities: [], state: { dimmer: 0, sensors: [], on: false, online: true } },
+    { id: 1, uuid: "one", address: "one", name: "One", capabilities: [{ type: "dimmer", min: 0, max: 255, readOnly: false }], state: { dimmer: 0, sensors: [], on: false, online: true } },
+    { id: 2, uuid: "two", address: "two", name: "Two", capabilities: [{ type: "dimmer", min: 0, max: 255, readOnly: false }], state: { dimmer: 0, sensors: [], on: false, online: true } },
   ] };
 
   async snapshot(): Promise<NetworkSnapshot> { this.snapshotCalls += 1; return structuredClone(this.network); }

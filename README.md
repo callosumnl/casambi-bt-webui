@@ -13,9 +13,10 @@ Sign in with a local account; the first visitor creates the initial `admin` acco
 | Casambi Bluetooth bridge | Node.js supervises a long-lived Python JSON-lines subprocess that owns `casambi-bt` discovery, connection, controls, and callbacks. |
 | User Dashboard | Compact status line, then group, room, and all-lights controls with their scenes, then individual lamps with capability-aware brightness and temperature. Switches and sensors are not listed as lamps. |
 | Scenes | Save the current setting of a group, room, or all lights as a named scene, apply it with one tap, update it to the current lights, and use it in timers and switch rules. Scenes stored in the Casambi network can be activated too. |
-| Admin Panel | Casambi connection configuration, discovery, custom names, rooms, local users, scoped API keys, bridge state, and audit data. |
-| Timers and polling | SQLite-backed five-field cron rules in IANA timezones plus configurable 5–3,600 second state polling with capped retry backoff. |
-| REST and real time | Versioned authenticated REST API plus Server-Sent Events for state, bridge, and schedule updates. |
+| Admin Panel | Casambi connection settings, discovery, connect/disconnect, Bluetooth worker state and restart, custom names, rooms with default brightness, local accounts, REST API keys (create, list, revoke), and shared away-date sets. |
+| Timers and polling | SQLite-backed timers at a time on chosen days or at sunrise/sunset (±180 min) in IANA time zones, with away dates and shared away-date sets, optional fades, and saved scenes as targets; plus configurable 5–3,600 second state polling. |
+| Physical switches | Live switch activity and switch rules: a tap, hold, or release-after-hold of a Casambi button can toggle, switch, dim, or apply a scene. |
+| REST and real time | Versioned REST API with JWT or API-key authentication, described by an OpenAPI 3.1 document at `/api/v1/openapi.json` and browsable in the web UI under **API**; Server-Sent Events for live state, connection, switch, and timer updates. |
 | Security | Local `admin`/`user` roles, password hashes, short-lived JWTs, revocable hashed API keys, encrypted Casambi credentials, input validation, and audit records. |
 
 ## Requirements

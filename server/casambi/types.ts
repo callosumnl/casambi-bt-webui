@@ -81,11 +81,29 @@ export const controlRequestSchema = z.object({
   if (numberOps.includes(value.operation) && (typeof value.value !== "number" || !Number.isFinite(value.value))) {
     ctx.addIssue({ code: "custom", message: "A numeric value is required for this operation.", path: ["value"] });
   }
-  if (value.operation === "set_color" && (!Array.isArray(value.value) || value.value.length !== 3 || !value.value.every(item => Number.isInteger(item)))) {
-    ctx.addIssue({ code: "custom", message: "RGB colour must be an array of three integer values.", path: ["value"] });
+  // Upstream raises a bare ValueError (or OverflowError for temperatures) outside these ranges.
+  const byteOps = ["set_level", "set_white", "set_vertical", "set_slider"];
+  if (byteOps.includes(value.operation) && typeof value.value === "number" && (value.value < 0 || value.value > 255)) {
+    ctx.addIssue({ code: "custom", message: "The value must be from 0 to 255.", path: ["value"] });
   }
-  if (value.operation === "set_xy" && (!Array.isArray(value.value) || value.value.length !== 2 || !value.value.every(item => typeof item === "number" && Number.isFinite(item)))) {
-    ctx.addIssue({ code: "custom", message: "XY colour must be an array of two numeric values.", path: ["value"] });
+  if (value.operation === "set_temperature" && typeof value.value === "number" && (value.value < 1000 || value.value > 12000)) {
+    ctx.addIssue({ code: "custom", message: "The colour temperature must be from 1000 to 12000 K.", path: ["value"] });
+  }
+  if (value.operation === "activate_scene" && value.value !== undefined && (typeof value.value !== "number" || !Number.isInteger(value.value) || value.value < 0 || value.value > 255)) {
+    ctx.addIssue({ code: "custom", message: "A scene level must be an integer from 0 to 255.", path: ["value"] });
+  }
+  if (value.operation === "set_color" && (!Array.isArray(value.value) || value.value.length !== 3 || !value.value.every(item => Number.isInteger(item) && item >= 0 && item <= 255))) {
+    ctx.addIssue({ code: "custom", message: "RGB colour must be an array of three integers from 0 to 255.", path: ["value"] });
+  }
+  if (value.operation === "set_xy" && (!Array.isArray(value.value) || value.value.length !== 2 || !value.value.every(item => typeof item === "number" && Number.isFinite(item) && item >= 0 && item <= 1))) {
+    ctx.addIssue({ code: "custom", message: "XY colour must be an array of two numbers from 0 to 1.", path: ["value"] });
+  }
+  if (value.targetType !== "network" && (value.targetId === undefined || value.targetId === null)) {
+    ctx.addIssue({ code: "custom", message: "A targetId is required for this target type.", path: ["targetId"] });
+  }
+  // On a non-scene target upstream turns "activate scene" into "set every light to full".
+  if (value.operation === "activate_scene" && value.targetType !== "scene" && value.targetType !== "local_scene") {
+    ctx.addIssue({ code: "custom", message: "Only scenes can be activated.", path: ["targetType"] });
   }
   if ((value.targetType === "scene" || value.targetType === "local_scene") && value.operation !== "activate_scene") {
     ctx.addIssue({ code: "custom", message: "Scenes can only be activated.", path: ["operation"] });

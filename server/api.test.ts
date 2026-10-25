@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { createCasambiApi } from "./api";
+import { classifyError, createCasambiApi } from "./api";
 import { CasambiService } from "./casambi/service";
 import { EventHub } from "./events";
 import { DurableScheduler } from "./scheduler";
@@ -114,6 +114,67 @@ describe("REST API", () => {
     await request(instance).post(`/api/v1/local-scenes/${created.body.id}/apply`).set(auth).send({ fadeDurationMs: 800 }).expect(200);
     await request(instance).delete(`/api/v1/local-scenes/${created.body.id}`).set(auth).expect(204);
     await request(instance).delete(`/api/v1/local-scenes/${created.body.id}`).set(auth).expect(404);
+  });
+
+  it("maps domain and database errors to 4xx statuses instead of 500", () => {
+    expect(classifyError(new Error("Cron expression must contain five fields: minute hour day month weekday."))).toMatchObject({ status: 422 });
+    expect(classifyError(new Error("Holiday dates must be valid ISO calendar dates."))).toMatchObject({ status: 422 });
+    expect(classifyError(new Error("The room has no assigned lamps."))).toMatchObject({ status: 422 });
+    expect(classifyError(new Error("UNIQUE constraint failed: rooms.name"))).toEqual({ status: 409, code: "CONFLICT", message: "That name is already in use." });
+    expect(classifyError(new Error("FOREIGN KEY constraint failed"))).toMatchObject({ status: 422, message: "A referenced item does not exist." });
+    expect(classifyError(new Error("Scene does not exist."))).toMatchObject({ status: 404 });
+    expect(classifyError(new Error("disk I/O error"))).toMatchObject({ status: 500 });
+  });
+
+  it("applies a role change immediately, not when the 8 h token expires", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    const second = await request(instance).post("/api/v1/admin/users").set(auth).send({ username: "second", password: "another-strong-password", role: "admin" }).expect(201);
+    const login = await request(instance).post("/api/v1/auth/login").send({ username: "second", password: "another-strong-password" }).expect(200);
+    await request(instance).get("/api/v1/admin/config").set({ Authorization: `Bearer ${login.body.token}` }).expect(200);
+    await request(instance).patch(`/api/v1/admin/users/${second.body.id}`).set(auth).send({ role: "user" }).expect(200);
+    await request(instance).get("/api/v1/admin/config").set({ Authorization: `Bearer ${login.body.token}` }).expect(403);
+  });
+
+  it("changes only the fields a timer PATCH sends", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    const set = await request(instance).post("/api/v1/admin/away-date-sets").set(auth).send({ name: "Holiday", dates: ["2026-12-24"] }).expect(201);
+    const timer = await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Quiet", cronExpression: "0 18 * * *", timezone: "Europe/Amsterdam", holidayDates: ["2026-12-31"], enabled: false, command: { targetType: "network", operation: "on" } }).expect(201);
+    const patched = await request(instance).patch(`/api/v1/schedules/${timer.body.id}`).set(auth).send({ awayDateSetId: set.body.id }).expect(200);
+    expect(patched.body).toMatchObject({ holidayDates: ["2026-12-31"], enabled: false, awayDateSetId: set.body.id });
+  });
+
+  it("rejects bad timers, controls, and duplicates with 4xx statuses", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    await request(instance).put("/api/v1/admin/config").set(auth).send({ solarLatitude: 52.37, solarLongitude: 4.9 }).expect(200);
+    await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Mars", timezone: "Mars/Base", solar: { event: "sunset", offsetMinutes: 0 }, command: { targetType: "network", operation: "on" } }).expect(422);
+    await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Six", cronExpression: "0 0 18 * * *", timezone: "UTC", command: { targetType: "network", operation: "on" } }).expect(422);
+    await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Feb", cronExpression: "0 18 * * *", timezone: "UTC", holidayDates: ["2026-02-30"], command: { targetType: "network", operation: "on" } }).expect(422);
+    await request(instance).post("/api/v1/control").set(auth).send({ targetType: "network", operation: "activate_scene" }).expect(422);
+    await request(instance).post("/api/v1/control").set(auth).send({ targetType: "unit", targetId: 1, operation: "set_level", value: 300 }).expect(422);
+    await request(instance).post("/api/v1/control").set(auth).send({ targetType: "unit", operation: "on" }).expect(422);
+    await request(instance).post("/api/v1/admin/rooms").set(auth).send({ name: "Studio" }).expect(201);
+    await request(instance).post("/api/v1/admin/rooms").set(auth).send({ name: "Studio" }).expect(409);
+    await request(instance).delete("/api/v1/admin/rooms/999").set(auth).expect(404);
+  });
+
+  it("keeps API keys from owning or reaching another user's timers", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Admin timer", cronExpression: "0 18 * * *", timezone: "UTC", command: { targetType: "network", operation: "on" } }).expect(201);
+    const userKey = await request(instance).post("/api/v1/admin/api-keys").set(auth).send({ label: "Phone", role: "user" }).expect(201);
+    expect((await request(instance).get("/api/v1/schedules").set({ "X-API-Key": userKey.body.token }).expect(200)).body).toEqual([]);
+    await request(instance).post("/api/v1/schedules").set({ "X-API-Key": userKey.body.token }).send({ name: "Key timer", cronExpression: "0 7 * * *", timezone: "UTC", command: { targetType: "network", operation: "on" } }).expect(422);
+    const adminKey = await request(instance).post("/api/v1/admin/api-keys").set(auth).send({ label: "Home Assistant", role: "admin" }).expect(201);
+    await request(instance).post("/api/v1/schedules").set({ "X-API-Key": adminKey.body.token }).send({ name: "Key timer", cronExpression: "0 7 * * *", timezone: "UTC", command: { targetType: "network", operation: "on" } }).expect(201);
+    await request(instance).delete(`/api/v1/admin/api-keys/${userKey.body.id}`).set(auth).expect(204);
+    await request(instance).get("/api/v1/schedules").set({ "X-API-Key": userKey.body.token }).expect(401);
   });
 
   it("creates a reusable away-date set and attaches it to a timer", async () => {

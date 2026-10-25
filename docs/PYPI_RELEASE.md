@@ -15,7 +15,7 @@ python -m pip install --upgrade pip build twine
 ./scripts/validate-package.sh
 ```
 
-The resulting `dist/` directory is ignored by Git and must be regenerated for each release. Inspect the output with `python -m twine check dist/*` before publishing.
+The resulting `build/python-dist/` directory (kept apart from the web app's `dist/`) is ignored by Git and must be regenerated for each release. Inspect the output with `python -m twine check dist/*` before publishing.
 
 ## TestPyPI and PyPI publication
 
@@ -23,14 +23,14 @@ Publish to TestPyPI first to verify public installation metadata, then create a 
 
 ```bash
 # TestPyPI dry-run publication, after configuring a TestPyPI trusted publisher or token.
-python -m twine upload --repository testpypi dist/*
+python -m twine upload --repository testpypi build/python-dist/*
 
 # Validate the released TestPyPI wheel in a clean environment.
 python -m pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ casambi-bt-webui==0.1.0
 casambi-bt-webui doctor
 
 # Publish the same validated artifacts to production PyPI only after approval.
-python -m twine upload dist/*
+python -m twine upload build/python-dist/*
 ```
 
 ## Version and release checklist

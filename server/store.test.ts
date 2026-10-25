@@ -72,5 +72,18 @@ describe("LocalStore", () => {
     database.deleteLightScene(scene.id);
     expect(() => database.deleteLightScene(scene.id)).toThrow("Scene does not exist.");
   });
-});
 
+  it("treats an empty secret as cleared instead of storing a value it can never decrypt", () => {
+    const database = store();
+    database.saveCasambiConfig({ ...database.getCasambiConfig(), networkAddress: "AB:CD:EF:01:23:45", networkPassword: "", apiKey: "" });
+    expect(database.getCasambiConfig()).toMatchObject({ networkPassword: null, apiKey: null });
+    database.saveCasambiConfig({ ...database.getCasambiConfig(), networkPassword: "secret" });
+    expect(database.getCasambiConfig().networkPassword).toBe("secret");
+  });
+
+  it("reports deleting a missing room or revoking a missing API key", () => {
+    const database = store();
+    expect(() => database.deleteRoom(999)).toThrow("Room does not exist.");
+    expect(() => database.revokeApiKey(999)).toThrow("API key does not exist.");
+  });
+});

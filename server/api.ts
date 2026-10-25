@@ -6,22 +6,14 @@ import { CasambiService } from "./casambi/service";
 import { controlRequestSchema } from "./casambi/types";
 import { EventHub } from "./events";
 import { AwayDateSet, LocalStore, Role, ScheduleRecord } from "./store";
-import { DurableScheduler, nextRunAt, validateCron } from "./scheduler";
+import { DurableScheduler, nextRunAt, validateCron, validateTimezone } from "./scheduler";
 import { SolarSchedule, validateSolarLocation, validateSolarSchedule } from "./solar";
-import { switchRuleSchema } from "./switchRules";
+import { switchRulePatchSchema, switchRuleSchema } from "./switchRules";
+import { openApiDocument } from "./openapi";
+import { apiKeyCreateSchema, awayDateSetSchema, configSchema, credentialsSchema, deviceMetadataSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userRoleSchema } from "./apiSchemas";
 
 type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
-const roleSchema = z.enum(["admin", "user"]);
-const credentialsSchema = z.object({ username: z.string().trim().min(3).max(64).regex(/^[a-z0-9._-]+$/i), password: z.string().min(12).max(256) });
-const configSchema = z.object({ networkAddress: z.string().trim().min(1).max(128).nullable().optional(), networkUuid: z.string().trim().max(128).nullable().optional(), apiKey: z.string().max(512).nullable().optional(), networkPassword: z.string().max(512).nullable().optional(), btAdapter: z.string().trim().max(128).nullable().optional(), forceOffline: z.boolean().optional(), pollingEnabled: z.boolean().optional(), pollingIntervalSeconds: z.number().int().min(5).max(3600).optional(), solarLatitude: z.number().min(-90).max(90).nullable().optional(), solarLongitude: z.number().min(-180).max(180).nullable().optional() });
-const solarSchema = z.object({ event: z.enum(["sunrise", "sunset"]), offsetMinutes: z.number().int().min(-180).max(180) });
-const sceneScopeSchema = z.object({ type: z.enum(["group", "room", "network"]), id: z.number().int().nonnegative().nullable() })
-  .refine(scope => (scope.type === "network") === (scope.id === null), { message: "A group or room scope requires an id; the network scope has none." });
-const sceneNameSchema = z.string().trim().min(1).max(64);
-const holidayDatesSchema = z.array(z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).max(120);
-const awayDateSetSchema = z.object({ name: z.string().trim().min(1).max(96), dates: holidayDatesSchema.min(1) });
-const scheduleSchema = z.object({ name: z.string().trim().min(1).max(96), cronExpression: z.string().trim().min(9).max(128).optional(), timezone: z.string().trim().min(1).max(80), command: controlRequestSchema, solar: solarSchema.nullable().optional(), holidayDates: holidayDatesSchema.default([]), awayDateSetId: z.number().int().positive().nullable().optional(), enabled: z.boolean().default(true) });
 
 /** Wraps async routes in a stable JSON error response. */
 function route(handler: AsyncRoute) {
@@ -30,15 +22,35 @@ function route(handler: AsyncRoute) {
       response.status(422).json({ error: { code: "VALIDATION_ERROR", message: "Request validation failed.", fields: error.flatten() }, requestId: response.locals.requestId });
       return;
     }
-    const message = error instanceof Error ? error.message : "Unexpected server error.";
-    const status = message.includes("does not exist") || message.includes("does not exist") ? 404 : message.includes("required") || message.includes("invalid") ? 422 : 500;
-    response.status(status).json({ error: { code: status === 422 ? "VALIDATION_ERROR" : status === 404 ? "NOT_FOUND" : "INTERNAL_ERROR", message }, requestId: response.locals.requestId });
+    const { status, code, message } = classifyError(error);
+    response.status(status).json({ error: { code, message }, requestId: response.locals.requestId });
   });
+}
+
+/**
+ * Maps a thrown error to an HTTP status. Domain errors are plain Errors whose wording says what went wrong:
+ * "does not exist" → 404; a rule the request broke ("required", "invalid", "must …", "cannot …") → 422.
+ * SQLite constraint errors become 409/422 with a readable message instead of leaking SQL text.
+ */
+export function classifyError(error: unknown): { status: number; code: string; message: string } {
+  const message = error instanceof Error ? error.message : "Unexpected server error.";
+  if (message.includes("UNIQUE constraint failed")) return { status: 409, code: "CONFLICT", message: "That name is already in use." };
+  if (message.includes("FOREIGN KEY constraint failed")) return { status: 422, code: "VALIDATION_ERROR", message: "A referenced item does not exist." };
+  if (message.includes("does not exist")) return { status: 404, code: "NOT_FOUND", message };
+  if (/\b(required|invalid|must|cannot|has no assigned lamps)\b/i.test(message)) return { status: 422, code: "VALIDATION_ERROR", message };
+  return { status: 500, code: "INTERNAL_ERROR", message };
 }
 
 function parsed<T>(schema: z.ZodType<T>, input: unknown): T { return schema.parse(input); }
 function principal(response: Response): Principal { return response.locals.principal as Principal; }
-function assertScheduleAccess(schedule: { ownerUserId: number }, actor: Principal): void { if (actor.role !== "admin" && schedule.ownerUserId !== actor.id) throw new Error("Schedule does not exist."); }
+function assertScheduleAccess(schedule: { ownerUserId: number }, actor: Principal): void { if (actor.role !== "admin" && !(actor.kind === "user" && schedule.ownerUserId === actor.id)) throw new Error("Schedule does not exist."); }
+/** The account that owns a new timer. An API key is not an account: admin keys file timers under the first admin. */
+function scheduleOwnerId(actor: Principal, store: LocalStore): number {
+  if (actor.kind === "user") return actor.id;
+  const admin = actor.role === "admin" ? store.listUsers().find(user => user.role === "admin") : undefined;
+  if (!admin) throw new Error("A user-role API key cannot create timers; use an admin API key or sign in.");
+  return admin.id;
+}
 function serializeSchedule(schedule: ScheduleRecord, store: LocalStore) { let nextRun: Date | null = null; try { nextRun = nextRunAt(schedule, store.getCasambiConfig()); } catch { /* Invalid/missing solar configuration remains visible without claiming a run time. */ } return { ...schedule, nextRunAt: nextRun?.toISOString() ?? null }; }
 function validateSolarForStore(solar: SolarSchedule | null | undefined, store: LocalStore): void { if (!solar) return; validateSolarSchedule(solar); const config = store.getCasambiConfig(); validateSolarLocation({ latitude: config.solarLatitude ?? undefined, longitude: config.solarLongitude ?? undefined }); }
 function normalizeHolidayDates(dates: string[]): string[] { return Array.from(new Set(dates.map(date => { const parsed = new Date(`${date}T00:00:00.000Z`); if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) throw new Error("Holiday dates must be valid ISO calendar dates."); return date; }))).sort(); }
@@ -50,6 +62,8 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
   api.use((_request, response, next) => { response.locals.requestId = crypto.randomUUID(); next(); });
 
+  // Public, so API tools can load it; it describes the routes, never any data.
+  api.get("/openapi.json", (_request, response) => response.json(openApiDocument()));
   api.get("/health", (_request, response) => response.json({ status: "ok", bootstrapRequired: store.needsBootstrap(), eventClients: events.clientCount }));
   api.post("/auth/bootstrap", route(async (request, response) => {
     if (!store.needsBootstrap()) { response.status(409).json({ error: { code: "BOOTSTRAP_COMPLETE", message: "An administrator already exists." } }); return; }
@@ -79,25 +93,25 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
   api.get("/sensors", requireAuth(store), route(async (_request, response) => { response.json(service.cachedSnapshot().units.flatMap(unit => unit.state.sensors.map(sensor => ({ deviceId: unit.id, deviceName: unit.name, ...sensor })))); }));
   api.get("/rooms", requireAuth(store), (request, response) => response.json(store.listRooms()));
   api.post("/rooms/:id/apply-default", requireAuth(store), route(async (request, response) => {
-    const input = parsed(z.object({ fadeDurationMs: z.number().int().min(0).max(60_000).optional() }), request.body || {});
+    const input = parsed(fadeBodySchema, request.body || {});
     response.json(await service.applyRoomPreset(Number(request.params.id), principal(response).name, input.fadeDurationMs || 0));
   }));
   // `Prefer: return=minimal` skips the snapshot body for clients that already receive it over the SSE stream.
   api.post("/control", requireAuth(store), route(async (request, response) => { const command = parsed(controlRequestSchema, request.body); const snapshot = await service.control(command, principal(response).name); if (/\breturn=minimal\b/.test(request.get("Prefer") || "")) { response.status(204).set("Preference-Applied", "return=minimal").end(); return; } response.json(snapshot); }));
   // Scenes saved on the Pi: the captured setting of a group, room, or all lamps. Any signed-in user may manage them, like timers.
   api.get("/local-scenes", requireAuth(store), (_request, response) => response.json(store.listLightScenes()));
-  api.post("/local-scenes", requireAuth(store), route(async (request, response) => { const input = parsed(z.object({ name: sceneNameSchema, scope: sceneScopeSchema }), request.body); const scene = service.captureLightScene(input.name, input.scope); store.audit(principal(response).name, "scene.created", { sceneId: scene.id }); events.publish("local_scenes.changed", {}); response.status(201).json(scene); }));
+  api.post("/local-scenes", requireAuth(store), route(async (request, response) => { const input = parsed(sceneCreateSchema, request.body); const scene = service.captureLightScene(input.name, input.scope); store.audit(principal(response).name, "scene.created", { sceneId: scene.id }); events.publish("local_scenes.changed", {}); response.status(201).json(scene); }));
   api.post("/local-scenes/:id/capture", requireAuth(store), route(async (request, response) => { const scene = service.recaptureLightScene(Number(request.params.id)); store.audit(principal(response).name, "scene.updated", { sceneId: scene.id }); events.publish("local_scenes.changed", {}); response.json(scene); }));
-  api.patch("/local-scenes/:id", requireAuth(store), route(async (request, response) => { const input = parsed(z.object({ name: sceneNameSchema }), request.body); const scene = store.updateLightScene(Number(request.params.id), { name: input.name }); events.publish("local_scenes.changed", {}); response.json(scene); }));
+  api.patch("/local-scenes/:id", requireAuth(store), route(async (request, response) => { const input = parsed(sceneRenameSchema, request.body); const scene = store.updateLightScene(Number(request.params.id), { name: input.name }); events.publish("local_scenes.changed", {}); response.json(scene); }));
   api.delete("/local-scenes/:id", requireAuth(store), route(async (request, response) => { store.deleteLightScene(Number(request.params.id)); store.audit(principal(response).name, "scene.deleted", { sceneId: Number(request.params.id) }); events.publish("local_scenes.changed", {}); response.status(204).send(); }));
-  api.post("/local-scenes/:id/apply", requireAuth(store), route(async (request, response) => { const input = parsed(z.object({ fadeDurationMs: z.number().int().min(0).max(60_000).optional() }), request.body ?? {}); response.json(await service.control({ targetType: "local_scene", targetId: Number(request.params.id), operation: "activate_scene", ...(input.fadeDurationMs ? { fadeDurationMs: input.fadeDurationMs } : {}) }, principal(response).name)); }));
+  api.post("/local-scenes/:id/apply", requireAuth(store), route(async (request, response) => { const input = parsed(fadeBodySchema, request.body ?? {}); response.json(await service.control({ targetType: "local_scene", targetId: Number(request.params.id), operation: "activate_scene", ...(input.fadeDurationMs ? { fadeDurationMs: input.fadeDurationMs } : {}) }, principal(response).name)); }));
   api.post("/devices/:id/on", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "on" }, principal(response).name)); }));
   api.post("/devices/:id/off", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "off" }, principal(response).name)); }));
   api.post("/scenes/:id/activate", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "scene", targetId: Number(request.params.id), operation: "activate_scene" }, principal(response).name)); }));
 
-  api.get("/schedules", requireAuth(store), (_request, response) => { const actor = principal(response); response.json(store.listSchedules().filter(schedule => actor.role === "admin" || schedule.ownerUserId === actor.id).map(schedule => serializeSchedule(schedule, store))); });
-  api.post("/schedules", requireAuth(store), route(async (request, response) => { const input = parsed(scheduleSchema, request.body); const cronExpression = input.cronExpression ?? "0 0 * * *"; if (!input.solar) validateCron(cronExpression, input.timezone); validateSolarForStore(input.solar, store); const awayDateSet = assertAwayDateSet(input.awayDateSetId, store); const schedule = store.createSchedule({ name: input.name, cronExpression, timezone: input.timezone, command: input.command, solar: input.solar ?? null, holidayDates: normalizeHolidayDates(input.holidayDates), awayDateSetId: awayDateSet?.id ?? null, awayDateSet, enabled: input.enabled, ownerUserId: principal(response).id }); scheduler.reload(); store.audit(principal(response).name, "schedule.created", { scheduleId: schedule.id, solar: schedule.solar, holidayDates: schedule.holidayDates, awayDateSetId: schedule.awayDateSetId }); response.status(201).json(serializeSchedule(schedule, store)); }));
-  api.patch("/schedules/:id", requireAuth(store), route(async (request, response) => { const current = store.getSchedule(Number(request.params.id)); if (!current) throw new Error("Schedule does not exist."); assertScheduleAccess(current, principal(response)); const input = parsed(scheduleSchema.partial(), request.body); const solar = input.solar === undefined ? current.solar : input.solar; const cronExpression = input.cronExpression ?? current.cronExpression; const timezone = input.timezone ?? current.timezone; const holidayDates = input.holidayDates === undefined ? current.holidayDates : normalizeHolidayDates(input.holidayDates); const awayDateSetId = input.awayDateSetId === undefined ? current.awayDateSetId : assertAwayDateSet(input.awayDateSetId, store)?.id ?? null; if (!solar) validateCron(cronExpression, timezone); validateSolarForStore(solar, store); const schedule = store.updateSchedule(current.id, { ...input, cronExpression, timezone, solar: solar ?? null, holidayDates, awayDateSetId }); scheduler.reload(); response.json(serializeSchedule(schedule, store)); }));
+  api.get("/schedules", requireAuth(store), (_request, response) => { const actor = principal(response); response.json(store.listSchedules().filter(schedule => actor.role === "admin" || (actor.kind === "user" && schedule.ownerUserId === actor.id)).map(schedule => serializeSchedule(schedule, store))); });
+  api.post("/schedules", requireAuth(store), route(async (request, response) => { const input = parsed(scheduleSchema, request.body); const cronExpression = input.cronExpression ?? "0 0 * * *"; if (!input.solar) validateCron(cronExpression, input.timezone); validateTimezone(input.timezone); validateSolarForStore(input.solar, store); const awayDateSet = assertAwayDateSet(input.awayDateSetId, store); const schedule = store.createSchedule({ name: input.name, cronExpression, timezone: input.timezone, command: input.command, solar: input.solar ?? null, holidayDates: normalizeHolidayDates(input.holidayDates), awayDateSetId: awayDateSet?.id ?? null, awayDateSet, enabled: input.enabled, ownerUserId: scheduleOwnerId(principal(response), store) }); scheduler.reload(); store.audit(principal(response).name, "schedule.created", { scheduleId: schedule.id, solar: schedule.solar, holidayDates: schedule.holidayDates, awayDateSetId: schedule.awayDateSetId }); response.status(201).json(serializeSchedule(schedule, store)); }));
+  api.patch("/schedules/:id", requireAuth(store), route(async (request, response) => { const current = store.getSchedule(Number(request.params.id)); if (!current) throw new Error("Schedule does not exist."); assertScheduleAccess(current, principal(response)); const input = parsed(schedulePatchSchema, request.body); const solar = input.solar === undefined ? current.solar : input.solar; const cronExpression = input.cronExpression ?? current.cronExpression; const timezone = input.timezone ?? current.timezone; const holidayDates = input.holidayDates === undefined ? current.holidayDates : normalizeHolidayDates(input.holidayDates); const awayDateSetId = input.awayDateSetId === undefined ? current.awayDateSetId : assertAwayDateSet(input.awayDateSetId, store)?.id ?? null; if (!solar) validateCron(cronExpression, timezone); validateTimezone(timezone); validateSolarForStore(solar, store); const schedule = store.updateSchedule(current.id, { ...input, cronExpression, timezone, solar: solar ?? null, holidayDates, awayDateSetId }); scheduler.reload(); response.json(serializeSchedule(schedule, store)); }));
   api.delete("/schedules/:id", requireAuth(store), route(async (request, response) => { const current = store.getSchedule(Number(request.params.id)); if (!current) throw new Error("Schedule does not exist."); assertScheduleAccess(current, principal(response)); store.deleteSchedule(current.id); scheduler.reload(); response.status(204).send(); }));
   api.get("/away-date-sets", requireAuth(store), (_request, response) => response.json(store.listAwayDateSets()));
 
@@ -108,25 +122,25 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
   api.post("/admin/worker/restart", requireAuth(store, "admin"), route(async (_request, response) => { response.status(202).json(service.restartWorker(principal(response).name)); }));
   api.post("/admin/connect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.connect()); }));
   api.post("/admin/disconnect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.disconnect()); }));
-  api.post("/admin/rooms", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ name: z.string().trim().min(1).max(96), defaultBrightnessPercent: z.number().int().min(0).max(100).default(100) }), request.body); response.status(201).json(store.createRoom(input.name, input.defaultBrightnessPercent)); }));
-  api.put("/admin/rooms/:id/default-brightness", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ defaultBrightnessPercent: z.number().int().min(0).max(100) }), request.body); const room = store.setRoomDefaultBrightness(Number(request.params.id), input.defaultBrightnessPercent); store.audit(principal(response).name, "room.default_brightness.updated", { roomId: room.id, defaultBrightnessPercent: room.defaultBrightnessPercent }); response.json(room); }));
-  api.delete("/admin/rooms/:id", requireAuth(store, "admin"), (request, response) => { store.deleteRoom(Number(request.params.id)); response.status(204).send(); });
+  api.post("/admin/rooms", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomCreateSchema, request.body); response.status(201).json(store.createRoom(input.name, input.defaultBrightnessPercent)); }));
+  api.put("/admin/rooms/:id/default-brightness", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomDefaultBrightnessSchema, request.body); const room = store.setRoomDefaultBrightness(Number(request.params.id), input.defaultBrightnessPercent); store.audit(principal(response).name, "room.default_brightness.updated", { roomId: room.id, defaultBrightnessPercent: room.defaultBrightnessPercent }); response.json(room); }));
+  api.delete("/admin/rooms/:id", requireAuth(store, "admin"), route(async (request, response) => { store.deleteRoom(Number(request.params.id)); store.audit(principal(response).name, "room.deleted", { roomId: Number(request.params.id) }); response.status(204).send(); }));
   api.get("/admin/away-date-sets", requireAuth(store, "admin"), (_request, response) => response.json(store.listAwayDateSets()));
   api.post("/admin/away-date-sets", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(awayDateSetSchema, request.body); const set = store.createAwayDateSet(input.name, normalizeHolidayDates(input.dates)); scheduler.reload(); store.audit(principal(response).name, "away_date_set.created", { setId: set.id, name: set.name }); response.status(201).json(set); }));
   api.patch("/admin/away-date-sets/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(awayDateSetSchema.partial(), request.body); const patch = { ...(input.name === undefined ? {} : { name: input.name }), ...(input.dates === undefined ? {} : { dates: normalizeHolidayDates(input.dates) }) }; const set = store.updateAwayDateSet(Number(request.params.id), patch); scheduler.reload(); store.audit(principal(response).name, "away_date_set.updated", { setId: set.id, name: set.name }); response.json(set); }));
   api.delete("/admin/away-date-sets/:id", requireAuth(store, "admin"), route(async (request, response) => { store.deleteAwayDateSet(Number(request.params.id)); scheduler.reload(); store.audit(principal(response).name, "away_date_set.deleted", { setId: Number(request.params.id) }); response.status(204).send(); }));
-  api.put("/admin/devices/:id/metadata", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ customName: z.string().trim().max(128).nullable(), roomId: z.number().int().positive().nullable() }), request.body); store.setUnitMetadata(Number(request.params.id), input.customName, input.roomId); response.status(204).send(); }));
+  api.put("/admin/devices/:id/metadata", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(deviceMetadataSchema, request.body); store.setUnitMetadata(Number(request.params.id), input.customName, input.roomId); response.status(204).send(); }));
   api.get("/admin/users", requireAuth(store, "admin"), (_request, response) => response.json(store.listUsers()));
-  api.post("/admin/users", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(credentialsSchema.extend({ role: roleSchema }), request.body); response.status(201).json(store.createUser(input.username, input.password, input.role)); }));
-  api.patch("/admin/users/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ role: roleSchema }), request.body); response.json(store.setUserRole(Number(request.params.id), input.role)); }));
+  api.post("/admin/users", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(userCreateSchema, request.body); response.status(201).json(store.createUser(input.username, input.password, input.role)); }));
+  api.patch("/admin/users/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(userRoleSchema, request.body); response.json(store.setUserRole(Number(request.params.id), input.role)); }));
   api.get("/admin/api-keys", requireAuth(store, "admin"), (_request, response) => response.json(store.listApiKeys()));
-  api.post("/admin/api-keys", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(z.object({ label: z.string().trim().min(1).max(96), role: roleSchema }), request.body); const key = store.createApiKey(input.label, input.role); store.audit(principal(response).name, "api_key.created", { id: key.id, label: key.label, role: key.role }); response.status(201).json(key); }));
-  api.delete("/admin/api-keys/:id", requireAuth(store, "admin"), (request, response) => { store.revokeApiKey(Number(request.params.id)); store.audit(principal(response).name, "api_key.revoked", { id: Number(request.params.id) }); response.status(204).send(); });
+  api.post("/admin/api-keys", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(apiKeyCreateSchema, request.body); const key = store.createApiKey(input.label, input.role); store.audit(principal(response).name, "api_key.created", { id: key.id, label: key.label, role: key.role }); response.status(201).json(key); }));
+  api.delete("/admin/api-keys/:id", requireAuth(store, "admin"), route(async (request, response) => { store.revokeApiKey(Number(request.params.id)); store.audit(principal(response).name, "api_key.revoked", { id: Number(request.params.id) }); response.status(204).send(); }));
   api.get("/admin/audit", requireAuth(store, "admin"), (_request, response) => response.json(store.recentAudit()));
   api.get("/admin/switch-activity", requireAuth(store, "admin"), (_request, response) => response.json(service.recentSwitchActivity()));
   api.get("/admin/switch-rules", requireAuth(store, "admin"), (_request, response) => response.json(store.listSwitchRules()));
   api.post("/admin/switch-rules", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(switchRuleSchema, request.body); const rule = store.createSwitchRule(input); store.audit(principal(response).name, "switch_rule.created", { ruleId: rule.id }); response.status(201).json(rule); }));
-  api.patch("/admin/switch-rules/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(switchRuleSchema.partial(), request.body); const rule = store.updateSwitchRule(Number(request.params.id), input); store.audit(principal(response).name, "switch_rule.updated", { ruleId: rule.id }); response.json(rule); }));
+  api.patch("/admin/switch-rules/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(switchRulePatchSchema, request.body); const rule = store.updateSwitchRule(Number(request.params.id), input); store.audit(principal(response).name, "switch_rule.updated", { ruleId: rule.id }); response.json(rule); }));
   api.delete("/admin/switch-rules/:id", requireAuth(store, "admin"), route(async (request, response) => { store.deleteSwitchRule(Number(request.params.id)); store.audit(principal(response).name, "switch_rule.deleted", { ruleId: Number(request.params.id) }); response.status(204).send(); }));
 
   api.use((error: unknown, _request: Request, response: Response, _next: unknown) => {

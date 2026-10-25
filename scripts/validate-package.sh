@@ -3,7 +3,8 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-DIST_DIR="$ROOT/dist"
+# Not dist/: that holds the web app build the service runs, and this script empties its output directory.
+DIST_DIR="$ROOT/build/python-dist"
 TARGET_DIR="$(mktemp -d)"
 trap 'rm -rf "$TARGET_DIR"' EXIT
 

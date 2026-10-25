@@ -12,6 +12,11 @@ export function validateCron(expression: string, timezone: string): void {
   try { new Cron(expression, { timezone, paused: true }); } catch { throw new Error("The schedule or timezone is invalid."); }
 }
 
+/** Rejects an unknown IANA time zone (solar timers skip the cron check that would otherwise catch it). */
+export function validateTimezone(timezone: string): void {
+  try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }); } catch { throw new Error("The schedule or timezone is invalid."); }
+}
+
 /** Formats a timestamp as the schedule site's ISO calendar date, independent of the Raspberry Pi host timezone. */
 export function localCalendarDate(date: Date, timezone: string): string {
   const parts = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(date);
@@ -51,7 +56,11 @@ export class DurableScheduler {
     Array.from(this.jobs.values()).forEach(job => job.stop());
     Array.from(this.solarTimers.values()).forEach(timer => clearTimeout(timer));
     this.jobs.clear(); this.solarTimers.clear();
-    this.store.listSchedules().filter(schedule => schedule.enabled).forEach(schedule => this.schedule(schedule));
+    // One unusable timer must not stop the others from loading (or the server from starting).
+    for (const schedule of this.store.listSchedules().filter(candidate => candidate.enabled)) {
+      try { this.schedule(schedule); }
+      catch (error) { this.store.audit(`schedule:${schedule.id}`, "schedule.invalid", { scheduleId: schedule.id, message: error instanceof Error ? error.message : "Invalid schedule." }); }
+    }
   }
 
   private schedule(schedule: ScheduleRecord): void {
@@ -70,10 +79,14 @@ export class DurableScheduler {
     const delay = Math.max(1, next.getTime() - Date.now());
     // Node timers cap delays to roughly 24.8 days; re-evaluate long polar-day gaps safely.
     const cappedDelay = Math.min(delay, 24 * 60 * 60 * 1000);
-    const timer = setTimeout(async () => {
+    // A reload() while this timer waits or runs replaces it; the replaced timer must then not re-arm itself,
+    // or an untracked second timer chain would keep firing.
+    const current = () => this.solarTimers.get(schedule.id) === timer;
+    const timer: NodeJS.Timeout = setTimeout(async () => {
+      if (!current()) return;
       if (Date.now() + 1_000 < next!.getTime()) { this.scheduleSolar(schedule); return; }
       try { await this.run(schedule.id); }
-      finally { const refreshed = this.store.getSchedule(schedule.id); if (refreshed?.enabled && refreshed.solar) this.scheduleSolar(refreshed); }
+      finally { const refreshed = this.store.getSchedule(schedule.id); if (current() && refreshed?.enabled && refreshed.solar) this.scheduleSolar(refreshed); }
     }, cappedDelay);
     timer.unref(); this.solarTimers.set(schedule.id, timer);
   }

@@ -12,6 +12,8 @@ export type SolarSchedule = { event: "sunrise" | "sunset"; offsetMinutes: number
 export type AwayDateSet = { id: number; name: string; dates: string[]; createdAt?: string; updatedAt?: string };
 export type Schedule = { id: number; name: string; cronExpression: string; timezone: string; command: { targetType: string; targetId?: number | string | null; operation: string; value?: unknown; fadeDurationMs?: number }; solar?: SolarSchedule | null; holidayDates: string[]; awayDateSetId: number | null; awayDateSet: AwayDateSet | null; enabled: boolean; lastRunAt: string | null; nextRunAt?: string | null };
 
+/** An API key as listed by the server; the secret token is only returned once, at creation. */
+export type ApiKey = { id: number; label: string; prefix: string; role: Role; createdAt: string; lastUsedAt: string | null; revokedAt: string | null };
 export type SwitchTrigger = "tap" | "hold" | "release_after_hold";
 /** A reported button message; `trigger` is null for raw activity that never drives a rule. */
 export type SwitchPress = { unitId: number | null; button: number | null; trigger: SwitchTrigger | null; raw: Record<string, unknown>; at: string };

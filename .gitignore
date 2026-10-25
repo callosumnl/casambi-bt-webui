@@ -117,6 +117,7 @@ casambi-bt-webui.env
 client/public/__manus__/version.json
 .project-config.json
 
-# Python bytecode
+# Python bytecode and the bridge environment created by deploy/install.sh
+.venv/
 __pycache__/
 *.py[cod]

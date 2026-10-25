@@ -73,12 +73,19 @@ export class JsonLineCasambiBridge extends EventEmitter {
     this.emit("event", { type: "bridge", state: "starting" } satisfies BridgeEvent);
     const child = this.createChild();
     this.child = child;
+    // Decode as a stream so a multi-byte character split across two pipe chunks stays intact.
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
     child.stdout.on("data", chunk => this.consumeStdout(chunk.toString()));
     child.stderr.on("data", chunk => this.emit("diagnostic", chunk.toString().trim()));
     // A write racing the worker's exit fails with EPIPE; unhandled, that would crash Node.
     child.stdin.on("error", error => this.emit("diagnostic", `Worker stdin error: ${error.message}`));
     child.on("exit", () => this.handleExit());
-    child.on("error", error => this.handleFailure(error));
+    child.on("error", error => {
+      this.handleFailure(error);
+      // A spawn failure (ENOENT for a wrong CASAMBI_PYTHON_COMMAND) emits "error" but never "exit".
+      if (child.pid === undefined && this.child === child) this.handleExit();
+    });
   }
 
   /** Stops the Python worker and prevents automatic restart. */

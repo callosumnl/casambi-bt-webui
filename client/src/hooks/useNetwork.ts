@@ -12,6 +12,7 @@ export function useNetwork() {
   // While the event stream is open it delivers every post-command snapshot, so the POST can skip its duplicate body.
   const live = useRef(false);
   const lastCommandError = useRef<string | null>(null);
+  const LIVE_LOST = "Live connection interrupted; reconnecting automatically.";
 
   /** Surfaces a failed control in the dashboard warning, and clears it again after the next successful control. */
   const reportCommand = useCallback((reason: unknown) => {
@@ -62,21 +63,40 @@ export function useNetwork() {
 
   useEffect(() => { void refresh(); void loadScenes(); }, [refresh, loadScenes]);
   useEffect(() => {
-    const source = new EventSource(api.eventUrl());
-    source.onopen = () => { live.current = true; };
-    source.addEventListener("unit.state", event => {
-      const unit = (JSON.parse(event.data) as { payload: NetworkSnapshot["units"][number] }).payload;
-      setNetwork(current => current ? { ...current, units: current.units.map(item => item.id === unit.id ? { ...item, ...unit } : item) } : current);
-    });
-    source.addEventListener("local_scenes.changed", () => void loadScenes());
-    source.addEventListener("connection.status", event => { setConnection((JSON.parse(event.data) as { payload: ConnectionStatus }).payload); });
-    source.addEventListener("network.snapshot", event => {
-      const snapshot = (JSON.parse(event.data) as { payload: NetworkSnapshot }).payload;
-      setNetwork(current => ({ ...snapshot, rooms: current?.rooms ?? [] }));
-    });
-    source.onerror = () => { live.current = false; setError(current => current || "Live connection interrupted; reconnecting automatically."); };
-    return () => { live.current = false; source.close(); };
-  }, [api, loadScenes]);
+    let source: EventSource;
+    let reopen: number | undefined;
+    let lost = false;
+    const open = () => {
+      source = new EventSource(api.eventUrl());
+      source.onopen = () => {
+        live.current = true;
+        // Changes made while the stream was down (other users, timers, switches) were missed: fetch them.
+        if (lost) { lost = false; setError(current => current === LIVE_LOST ? null : current); void refresh(); }
+      };
+      source.addEventListener("unit.state", event => {
+        const unit = (JSON.parse(event.data) as { payload: NetworkSnapshot["units"][number] }).payload;
+        setNetwork(current => current ? { ...current, units: current.units.map(item => item.id === unit.id ? { ...item, ...unit } : item) } : current);
+      });
+      source.addEventListener("local_scenes.changed", () => void loadScenes());
+      source.addEventListener("connection.status", event => { setConnection((JSON.parse(event.data) as { payload: ConnectionStatus }).payload); });
+      source.addEventListener("network.snapshot", event => {
+        const snapshot = (JSON.parse(event.data) as { payload: NetworkSnapshot }).payload;
+        setNetwork(current => ({ ...snapshot, rooms: current?.rooms ?? [] }));
+      });
+      source.onerror = () => {
+        live.current = false; lost = true;
+        setError(current => current || LIVE_LOST);
+        // The browser retries by itself, except after a non-200 answer (e.g. an expired session or a rate limit).
+        // Then check the session (a 401 ends it via LocalApi) and open a new stream a little later.
+        if (source.readyState === EventSource.CLOSED) {
+          void api.request("/auth/me").catch(() => undefined);
+          reopen = window.setTimeout(open, 5_000);
+        }
+      };
+    };
+    open();
+    return () => { live.current = false; window.clearTimeout(reopen); source.close(); };
+  }, [api, loadScenes, refresh]);
 
   return { network, loading, error, connection, refresh, command, applyRoomDefault, scenes, saveScene, updateScene, deleteScene, applyScene, api };
 }

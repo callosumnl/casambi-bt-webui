@@ -88,6 +88,29 @@ describe("JsonLineCasambiBridge", () => {
     bridge.stop();
   });
 
+  it("treats a worker that could not be spawned as exited, so it is retried instead of hanging", async () => {
+    vi.useFakeTimers();
+    const workers: FakeWorker[] = [];
+    const bridge = new JsonLineCasambiBridge({ createChild: () => { const worker = new FakeWorker(); workers.push(worker); return worker as never; } });
+    bridge.start();
+    workers[0].emit("error", Object.assign(new Error("spawn python3 ENOENT"), { code: "ENOENT" }));
+    expect(bridge.state().running).toBe(false);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(workers).toHaveLength(2);
+    bridge.stop();
+  });
+
+  it("keeps a multi-byte character intact when it is split across two output chunks", async () => {
+    const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
+    const result = bridge.execute<{ name: string }>("ping");
+    await new Promise(resolve => setImmediate(resolve));
+    const line = Buffer.from(`${JSON.stringify({ id: worker.commands[0].id, ok: true, result: { name: "Caf\u00e9" } })}\n`);
+    const split = line.indexOf(Buffer.from("\u00e9")) + 1;
+    worker.stdout.write(line.subarray(0, split)); worker.stdout.write(line.subarray(split));
+    await expect(result).resolves.toEqual({ name: "Caf\u00e9" });
+    bridge.stop();
+  });
+
   it("keeps the default timeout for ordinary commands", async () => {
     vi.useFakeTimers();
     const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });

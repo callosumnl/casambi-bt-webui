@@ -396,8 +396,11 @@ async def serve_commands(worker: CasambiWorker) -> None:
     while True:
         line = await asyncio.to_thread(sys.stdin.readline)
         if not line: break
+        request: Any = None
         try:
             request = json.loads(line)
+            if not isinstance(request, dict):
+                raise ValueError("A bridge command must be a JSON object.")
             command = request["command"]
             payload = request.get("payload", {})
             if command == "ping": result = {"ok": True}
@@ -409,7 +412,8 @@ async def serve_commands(worker: CasambiWorker) -> None:
             else: raise ValueError(f"Unknown bridge command: {command}")
             emit({"id": request["id"], "ok": True, "result": result})
         except Exception as error:  # The protocol must never crash the service for a malformed command.
-            emit({"id": request.get("id", "unknown"), "ok": False, "error": {"code": type(error).__name__, "message": str(error)}})
+            request_id = request.get("id", "unknown") if isinstance(request, dict) else "unknown"
+            emit({"id": request_id, "ok": False, "error": {"code": type(error).__name__, "message": str(error)}})
 
 
 if __name__ == "__main__":

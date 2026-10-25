@@ -2,10 +2,6 @@ import "dotenv/config";
 import express from "express";
 import { createServer } from "http";
 import net from "net";
-import { createExpressMiddleware } from "@trpc/server/adapters/express";
-import { registerOAuthRoutes } from "./oauth";
-import { registerStorageProxy } from "./storageProxy";
-import { appRouter } from "../routers";
 import { createCasambiApi } from "../api";
 import { JsonLineCasambiBridge } from "../casambi/bridge";
 import { CasambiService } from "../casambi/service";
@@ -13,8 +9,9 @@ import { EventHub } from "../events";
 import { DurableScheduler } from "../scheduler";
 import { LocalStore } from "../store";
 import { SwitchRuleRunner } from "../switchRules";
-import { createContext } from "./context";
 import { serveStatic, setupVite } from "./vite";
+
+const production = process.env.NODE_ENV === "production";
 
 function isPortAvailable(port: number): Promise<boolean> {
   return new Promise(resolve => {
@@ -35,10 +32,22 @@ async function findAvailablePort(startPort: number = 3000): Promise<number> {
   throw new Error(`No available port found starting from ${startPort}`);
 }
 
+/** Refuses to run in production on the development fallback secrets, which would make tokens forgeable. */
+function assertProductionSecrets(): void {
+  if (!production) return;
+  const missing = ["CASAMBI_ENCRYPTION_KEY", "CASAMBI_JWT_SECRET"].filter(name => {
+    const value = process.env[name];
+    return !value || value.startsWith("replace-with") || value === "development-only-change-me";
+  });
+  if (missing.length) throw new Error(`${missing.join(" and ")} must be set to unique secrets in /etc/casambi-bt-webui.env (re-run deploy/install.sh to generate them).`);
+}
+
 async function startServer() {
+  assertProductionSecrets();
   const app = express();
-  // The managed gateway and common Raspberry Pi reverse proxies add one trusted forwarding hop.
-  app.set("trust proxy", 1);
+  // Only behind a reverse proxy may X-Forwarded-For be trusted; otherwise any client could pick its own
+  // address and bypass the rate limit (including on login).
+  app.set("trust proxy", process.env.CASAMBI_TRUST_PROXY === "true" ? 1 : false);
   const server = createServer(app);
   const store = new LocalStore();
   const events = new EventHub();
@@ -47,20 +56,8 @@ async function startServer() {
   const scheduler = new DurableScheduler(store, (command, actor) => casambi.control(command, actor).then(() => undefined), events);
   const switchRules = new SwitchRuleRunner(store, casambi, events);
   casambi.onSwitchPress(press => void switchRules.handle(press));
-  // Configure body parser with larger size limit for file uploads
-  app.use(express.json({ limit: "50mb" }));
-  app.use(express.urlencoded({ limit: "50mb", extended: true }));
-  registerStorageProxy(app);
-  registerOAuthRoutes(app);
+  app.use(express.json({ limit: "1mb" }));
   app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler }));
-  // tRPC API
-  app.use(
-    "/api/trpc",
-    createExpressMiddleware({
-      router: appRouter,
-      createContext,
-    })
-  );
   await casambi.initialize();
   scheduler.reload();
   // development mode uses Vite, production mode uses static files
@@ -71,12 +68,14 @@ async function startServer() {
   }
 
   const preferredPort = parseInt(process.env.PORT || "3000");
-  const port = await findAvailablePort(preferredPort);
+  // In production the installer, health check, and users rely on the configured port; a busy port is an error.
+  const port = production ? preferredPort : await findAvailablePort(preferredPort);
 
   if (port !== preferredPort) {
     console.log(`Port ${preferredPort} is busy, using port ${port} instead`);
   }
 
+  server.on("error", error => { console.error(error); bridge.stop(); process.exit(1); });
   server.listen(port, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
@@ -86,4 +85,5 @@ async function startServer() {
   process.once("SIGINT", shutdown);
 }
 
-startServer().catch(console.error);
+// Exit on a startup failure so systemd records it and restarts the service, instead of an idle process with no listener.
+startServer().catch(error => { console.error(error); process.exit(1); });

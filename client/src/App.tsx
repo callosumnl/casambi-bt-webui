@@ -5,6 +5,7 @@ import { AppShell } from "./components/AppShell";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { clearSession, getActiveSession, Session, SESSION_EXPIRED_EVENT, tokenExpiresAt } from "./lib/localApi";
 import AdminEnhanced from "./pages/AdminEnhanced";
+import ApiDocs from "./pages/ApiDocs";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
@@ -27,7 +28,7 @@ function App() {
     return () => { window.removeEventListener(SESSION_EXPIRED_EVENT, expire); window.clearTimeout(timer); };
   }, [session]);
   if (!session) return <ThemeProvider defaultTheme="dark"><Login onAuthenticated={setSession} /><Toaster /></ThemeProvider>;
-  return <ThemeProvider defaultTheme="dark"><ErrorBoundary><AppShell role={session.user.role} username={session.user.username} onLogout={logout}><Switch><Route path="/" component={Dashboard} /><Route path="/schedules" component={Schedules} />{session.user.role === "admin" && <Route path="/admin" component={AdminEnhanced} />}<Route component={NotFound} /></Switch></AppShell><Toaster /></ErrorBoundary></ThemeProvider>;
+  return <ThemeProvider defaultTheme="dark"><ErrorBoundary><AppShell role={session.user.role} username={session.user.username} onLogout={logout}><Switch><Route path="/" component={Dashboard} /><Route path="/schedules" component={Schedules} />{session.user.role === "admin" && <Route path="/admin" component={AdminEnhanced} />}{session.user.role === "admin" && <Route path="/api" component={ApiDocs} />}<Route component={NotFound} /></Switch></AppShell><Toaster /></ErrorBoundary></ThemeProvider>;
 }
 
 export default App;

@@ -38,6 +38,8 @@ if [[ "$(node_major)" -lt "$NODE_MAJOR" ]]; then
 fi
 [[ "$(node_major)" -ge "$NODE_MAJOR" ]] || die "Node.js $NODE_MAJOR or newer is required; found $(node --version 2>/dev/null || echo none)."
 NODE_BIN="$(command -v node)"
+# Node.js 25+ no longer bundles corepack (which provides the pinned pnpm); install it when missing.
+command -v corepack >/dev/null 2>&1 || sudo env "PATH=$PATH" npm install --global --silent corepack
 # corepack writes its pnpm shim next to node, which needs root for a system-wide Node.js.
 corepack enable 2>/dev/null || sudo env "PATH=$PATH" corepack enable
 
@@ -102,10 +104,14 @@ fi
 while IFS= read -r line; do
   [[ "$line" =~ ^[A-Z_]+= ]] || continue
   key="${line%%=*}"
+  line="${line//\/opt\/casambi-bt-webui/$APP_DIR}"
   sudo grep -q "^$key=" "$ENV_FILE" || { echo "$line" | sudo tee -a "$ENV_FILE" >/dev/null; echo "Added $key."; }
 done < "$APP_DIR/deploy/environment.template"
 sudo chown root:"$SERVICE_USER" "$ENV_FILE"
 sudo chmod 0640 "$ENV_FILE"
+if sudo grep -q "^CASAMBI_MOCK_MODE=true" "$ENV_FILE" || ! sudo grep -q "^NODE_ENV=production" "$ENV_FILE"; then
+  echo "Warning: $ENV_FILE enables development settings (CASAMBI_MOCK_MODE=true or NODE_ENV other than production). A Pi needs CASAMBI_MOCK_MODE=false and NODE_ENV=production." >&2
+fi
 if sudo grep -q "^CASAMBI_[A-Z_]*=replace-with" "$ENV_FILE"; then
   echo "Warning: $ENV_FILE still contains a placeholder secret. Replace it with: sudoedit $ENV_FILE" >&2
 fi
