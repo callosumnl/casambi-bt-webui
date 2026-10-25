@@ -1,8 +1,10 @@
-# Copy this file to /opt/casambi-bt-webui/.env and replace every placeholder.
+# Template for /etc/casambi-bt-webui.env. deploy/install.sh creates that file with fresh secrets
+# and keeps it on later runs; change settings afterwards with: sudoedit /etc/casambi-bt-webui.env
 PORT=3000
 NODE_ENV=production
 
-# Generate unique values with: openssl rand -base64 48
+# Unique per installation; the installer generates them. Changing CASAMBI_ENCRYPTION_KEY later
+# makes stored Casambi credentials unreadable.
 CASAMBI_ENCRYPTION_KEY=replace-with-a-unique-high-entropy-secret
 CASAMBI_JWT_SECRET=replace-with-a-different-unique-high-entropy-secret
 

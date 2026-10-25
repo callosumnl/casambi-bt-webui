@@ -26,64 +26,48 @@ The connected Casambi network must be configured to accept the Bluetooth workflo
 
 ## Raspberry Pi installation
 
-Clone the repository into the system location and create a dedicated system account. The commands below assume the production deployment uses `/opt/casambi-bt-webui` and a Pi account with `sudo` access.
+On a fresh Raspberry Pi 5 (or 4) with **Raspberry Pi OS 64-bit** (Bookworm or newer), sign in with your normal account and run:
 
 ```bash
-sudo apt update
-sudo apt install -y git python3 python3-venv build-essential bluetooth bluez
-sudo mkdir -p /opt
+sudo apt update && sudo apt install -y git
 sudo git clone https://github.com/callosumnl/casambi-bt-webui.git /opt/casambi-bt-webui
-sudo chown -R "$USER":"$USER" /opt/casambi-bt-webui
-cd /opt/casambi-bt-webui
-
-# Install Node.js 22+ using your distribution’s supported NodeSource or nvm process.
-node --version
-corepack enable
-cp deploy/environment.template .env
-chmod 600 .env
+/opt/casambi-bt-webui/deploy/install.sh
 ```
 
-Edit `.env` before installing the service. Generate **different** high-entropy values for `CASAMBI_ENCRYPTION_KEY` and `CASAMBI_JWT_SECRET`; changing the encryption key later renders previously stored Casambi secrets unreadable. Set `CASAMBI_MOCK_MODE=false` for a physical installation and set `CASAMBI_PYTHON_COMMAND` to the project virtual environment path shown in the example.
+That single installer sets up everything and can be run again at any time:
 
-```bash
-openssl rand -base64 48
-nano .env
-chmod +x deploy/install.sh
-APP_DIR=/opt/casambi-bt-webui ./deploy/install.sh
-```
+- system packages (Python 3 with venv, build tools, BlueZ, rfkill) and **Node.js 22** from NodeSource when the installed Node.js is older;
+- the checkout handed to your account (also after `sudo git clone`), so later updates never hit root-owned files;
+- a least-privilege `casambi` service account in the `bluetooth` group, and its data directory `/var/lib/casambi-bt-webui/` (database and the upstream `casambi-bt-store` cache);
+- Bluetooth unblocked and the `bluetooth` service enabled;
+- the Python bridge environment (`.venv`) and the web application build, both owned by your account;
+- `/etc/casambi-bt-webui.env` with **freshly generated, unique secrets** on the first run; later runs keep it and only add settings introduced by newer versions;
+- the systemd service, enabled at boot and restarted on the new build, followed by a check that the web interface answers.
 
-Run the installer as your own account, not with `sudo`: it asks for `sudo` itself where root is needed, and it builds the Python environment, `node_modules`, and `dist/` as the owner of the checkout. Likewise, never run `pnpm install` or `pnpm build` with `sudo`.
+Run the installer as your normal account, not with `sudo`; it asks for `sudo` itself where needed (started with `sudo` it still builds as the checkout's owner). It prints the address to open, for example `http://casambi.local:3000`. The first visitor creates the initial `admin` account. From the Admin Panel, save the Casambi network address and **network password** (or use Discover), then connect. The current upstream library's connection method uses the address and password; the WebUI stores UUID, adapter, and optional API-key metadata for administration and future upstream support without claiming that `casambi-bt` currently consumes each of those fields. [1]
 
-The installer creates a least-privilege `casambi` service user, Python virtual environment, build output, environment file, systemd service, and a protected runtime-data directory. The upstream `casambi-bt` package caches network state in `/var/lib/casambi-bt-webui/casambi-bt-store`; this directory is owned by the service account and is deliberately separate from the read-only application code in `/opt`. Confirm the service is running and watch its logs.
-
-```bash
-sudo systemctl status casambi-bt-webui.service
-sudo journalctl -u casambi-bt-webui.service -f
-```
-
-Open `http://<pi-hostname-or-ip>:3000`. The first visitor must create the initial `admin` account. From the Admin Panel, save the Casambi network address, optional UUID/API key, Bluetooth adapter label, and **network password**, then run discovery or connect. The current upstream library’s connection method uses the address and password; the WebUI stores UUID, adapter, and optional API-key metadata for administration and future upstream support without claiming that `casambi-bt` currently consumes each of those fields. [1]
+Settings live in `/etc/casambi-bt-webui.env`; change them with `sudoedit /etc/casambi-bt-webui.env` and restart the service. Never change `CASAMBI_ENCRYPTION_KEY` after the first start: stored Casambi credentials would become unreadable.
 
 ## Operations and recovery
 
 | Task | Command or action |
 | --- | --- |
-| Restart after configuration or upgrade | `sudo systemctl restart casambi-bt-webui` |
+| Restart after a settings change | `sudo systemctl restart casambi-bt-webui` |
 | Inspect service logs | `sudo journalctl -u casambi-bt-webui.service -n 200 --no-pager` |
-| Update code | `git pull && corepack pnpm install --frozen-lockfile && pnpm build && sudo systemctl restart casambi-bt-webui` |
+| Update | `cd /opt/casambi-bt-webui && git pull && ./deploy/install.sh` |
 | Back up state | Stop the service and securely copy all of `/var/lib/casambi-bt-webui/`, including the SQLite database and upstream Casambi cache. |
 | Restore state | Stop the service, restore `/var/lib/casambi-bt-webui/` with owner `casambi:casambi`, then start the service. |
 | Development without hardware | Set `CASAMBI_MOCK_MODE=true`, then run `pnpm dev`; mock fixtures are clearly marked development-only. |
 
 ### Troubleshooting `EACCES` during `pnpm build`
 
-If an update fails with `EACCES: permission denied, open '/opt/casambi-bt-webui/node_modules/.vite-temp/…'`, an earlier install or build ran as root and left root-owned files in the checkout. Give the checkout back to your account and build again:
+If a manual `pnpm install` or `pnpm build` fails with `EACCES: permission denied` in `node_modules` (for example `node_modules/.vite-temp`), something was once run as root in the checkout. Run the installer, which gives the checkout back to your account and rebuilds:
 
 ```bash
-sudo chown -R "$USER":"$USER" /opt/casambi-bt-webui
-cd /opt/casambi-bt-webui && corepack pnpm install --frozen-lockfile && pnpm build && sudo systemctl restart casambi-bt-webui
+cd /opt/casambi-bt-webui && ./deploy/install.sh
 ```
 
-The service only reads the application code, so this does not affect it; its data in `/var/lib/casambi-bt-webui/` keeps its own owner.
+Never prefix `pnpm` with `sudo`.
 
 ### Troubleshooting a `casambi-bt-store` permission error
 
