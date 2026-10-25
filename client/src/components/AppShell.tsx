@@ -11,10 +11,10 @@ export function AppShell({ role, username, onLogout, children }: { role: Role; u
   const items = role === "admin" ? [...nav, { href: "/admin", label: "ADMIN", icon: Settings2 }] : nav;
   return <div className="app-shell">
     <aside className="side-rail">
-      <div className="brand-mark"><span>CB</span><small>CASAMBI<br />CONTROL</small></div>
+      <div className="brand-mark"><span>CB</span><small>Casambi BT<br />WebGUI</small></div>
       <nav>{items.map(item => <Link key={item.href} href={item.href} className={`rail-link ${location === item.href ? "active" : ""}`}><item.icon /><span>{item.label}</span></Link>)}</nav>
       <div className="rail-bottom"><div className="identity"><ShieldCheck /><div><strong>{username}</strong><small>{role}</small></div></div><button className="icon-button" onClick={onLogout} aria-label="Sign out"><LogOut /></button></div>
     </aside>
-    <main className="main-stage"><header className="topbar"><div><p className="eyebrow"><Activity /> LIVE LIGHTING CONTROL</p><h1>NEON <em>GRID</em></h1></div><div className="system-pulse"><span /> RASPBERRY PI // LOCAL</div></header>{children}</main>
+    <main className="main-stage"><header className="topbar"><div><p className="eyebrow"><Activity /> LIVE LIGHTING CONTROL</p><h1>Casambi BT <em>WebGUI</em></h1></div><div className="system-pulse"><span /> RASPBERRY PI // LOCAL</div></header>{children}</main>
   </div>;
 }
