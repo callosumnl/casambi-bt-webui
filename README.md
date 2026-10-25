@@ -2,7 +2,7 @@
 
 **Casambi BT WebUI** is a self-hosted lighting-control appliance for a Raspberry Pi. It places a cyberpunk-styled React interface, a JWT- and API-key-protected REST API, a local SQLite configuration store, durable timer rules, and a supervised Node.js-to-Python Bluetooth bridge behind one local service. The Python bridge uses [`lkempf/casambi-bt`](https://github.com/lkempf/casambi-bt), which must be treated as an unofficial, alpha-quality Casambi protocol implementation. [1]
 
-The login screen includes an anonymous **Explore Demo** entry point. Demo mode uses a sample network entirely in browser memory: its lamps, rooms, scenes, sensors, and timer rules are simulated; it sends no HTTP requests, opens no bridge event stream, and cannot read or modify Raspberry Pi accounts, settings, schedules, API keys, or Casambi fixtures. Exit Demo to return to the normal local sign-in screen.
+Sign in with a local account; the first visitor creates the initial `admin` account.
 
 > Run this on a trusted local network. A lighting controller has physical-world effects. Do not expose it directly to the public internet; place it behind a VPN or a carefully configured HTTPS reverse proxy if remote access is needed.
 
@@ -11,7 +11,8 @@ The login screen includes an anonymous **Explore Demo** entry point. Demo mode u
 | Capability | Implementation |
 | --- | --- |
 | Casambi Bluetooth bridge | Node.js supervises a long-lived Python JSON-lines subprocess that owns `casambi-bt` discovery, connection, controls, and callbacks. |
-| User Dashboard | Live lamp, group, room, and scene control with on/off, brightness, and capability-aware temperature controls. |
+| User Dashboard | Compact status line, then group, room, and all-lights controls with their scenes, then individual lamps with capability-aware brightness and temperature. Switches and sensors are not listed as lamps. |
+| Scenes | Save the current setting of a group, room, or all lights as a named scene, apply it with one tap, update it to the current lights, and use it in timers and switch rules. Scenes stored in the Casambi network can be activated too. |
 | Admin Panel | Casambi connection configuration, discovery, custom names, rooms, local users, scoped API keys, bridge state, and audit data. |
 | Timers and polling | SQLite-backed five-field cron rules in IANA timezones plus configurable 5–3,600 second state polling with capped retry backoff. |
 | REST and real time | Versioned authenticated REST API plus Server-Sent Events for state, bridge, and schedule updates. |

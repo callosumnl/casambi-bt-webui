@@ -2,7 +2,8 @@ import { MousePointerClick, Plus, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { HudFrame } from "@/components/HudFrame";
 import { dimmerToPercent, percentToDimmer } from "@/lib/brightness";
-import { LocalApi, NetworkSnapshot, SwitchPress, SwitchRule, SwitchTrigger } from "@/lib/localApi";
+import { LocalApi, LocalScene, NetworkSnapshot, SwitchPress, SwitchRule, SwitchTrigger } from "@/lib/localApi";
+import { isLamp, parseSceneTarget, sceneTargetOptions } from "@/lib/scenes";
 
 type Props = { api: LocalApi; onNotice: (message: string) => void };
 type RuleForm = { name: string; unitId: string; button: string; trigger: SwitchTrigger; targetType: string; targetId: string; operation: string; value: string };
@@ -14,6 +15,7 @@ const initialForm: RuleForm = { name: "", unitId: "", button: "", trigger: "tap"
 /** Live switch activity for identifying buttons, plus rules that run a lighting command when a button is used. */
 export function SwitchRulesPanel({ api, onNotice }: Props) {
   const [network, setNetwork] = useState<NetworkSnapshot | null>(null);
+  const [scenes, setScenes] = useState<LocalScene[]>([]);
   const [activity, setActivity] = useState<SwitchPress[]>([]);
   const [rules, setRules] = useState<SwitchRule[]>([]);
   const [showRaw, setShowRaw] = useState(false);
@@ -23,8 +25,8 @@ export function SwitchRulesPanel({ api, onNotice }: Props) {
   useEffect(() => {
     void (async () => {
       try {
-        const [nextRules, nextActivity, nextNetwork] = await Promise.all([api.request<SwitchRule[]>("/admin/switch-rules"), api.request<SwitchPress[]>("/admin/switch-activity"), api.request<NetworkSnapshot>("/network")]);
-        setRules(nextRules); setActivity(nextActivity); setNetwork(nextNetwork);
+        const [nextRules, nextActivity, nextNetwork, nextScenes] = await Promise.all([api.request<SwitchRule[]>("/admin/switch-rules"), api.request<SwitchPress[]>("/admin/switch-activity"), api.request<NetworkSnapshot>("/network"), api.request<LocalScene[]>("/local-scenes")]);
+        setRules(nextRules); setActivity(nextActivity); setNetwork(nextNetwork); setScenes(nextScenes);
       } catch (error) { onNotice(error instanceof Error ? error.message : "Unable to load switch activity."); }
     })();
     const source = new EventSource(api.eventUrl());
@@ -35,15 +37,18 @@ export function SwitchRulesPanel({ api, onNotice }: Props) {
   }, []);
 
   const targets = [
-    ...(network?.units.map(unit => ({ type: "unit", id: unit.id, label: unit.name })) ?? []),
+    ...(network?.units.filter(isLamp).map(unit => ({ type: "unit", id: unit.id, label: unit.name })) ?? []),
     ...(network?.groups.map(group => ({ type: "group", id: group.id, label: group.name })) ?? []),
     ...(network?.rooms.map(room => ({ type: "room", id: room.id, label: room.name })) ?? []),
   ];
-  const targetLabel = (type: string, id: unknown) => type === "network" ? "all lights" : targets.find(target => target.type === type && String(target.id) === String(id))?.label ?? `${type} ${id}`;
+  const sceneOptions = sceneTargetOptions(network, scenes);
+  const isScene = form.targetType === "scene";
+  const targetLabel = (type: string, id: unknown) => type === "network" ? "all lights" : type === "scene" || type === "local_scene" ? `scene ${sceneOptions.find(option => option.value === `${type}:${id}`)?.label.split(" · ")[0] ?? "(deleted)"}` : targets.find(target => target.type === type && String(target.id) === String(id))?.label ?? `${type} ${id}`;
   const switchLabel = (unitId: number | null) => network?.units.find(unit => unit.id === unitId)?.name ?? `Switch ${unitId ?? "?"}`;
   const actionLabel = (command: SwitchRule["command"]) => {
     const target = targetLabel(command.targetType, command.targetId);
     if (command.operation === "toggle") return `toggle ${target}`;
+    if (command.operation === "activate_scene") return `activate ${target}`;
     if (command.operation === "set_level") return `set ${target} to ${dimmerToPercent(Number(command.value))}%`;
     return `turn ${command.operation} ${target}`;
   };
@@ -56,8 +61,8 @@ export function SwitchRulesPanel({ api, onNotice }: Props) {
   const createRule = async (event: FormEvent) => {
     event.preventDefault();
     try {
-      if (form.targetType !== "network" && !form.targetId) throw new Error("Choose the lamp, group, or room to control.");
-      const command = { targetType: form.targetType, targetId: form.targetType === "network" ? null : Number(form.targetId), operation: form.operation, ...(form.operation === "set_level" ? { value: percentToDimmer(Number(form.value)) } : {}) };
+      if (form.targetType !== "network" && !form.targetId) throw new Error(isScene ? "Choose the scene to activate." : "Choose the lamp, group, or room to control.");
+      const command = isScene ? { ...parseSceneTarget(form.targetId), operation: "activate_scene" } : { targetType: form.targetType, targetId: form.targetType === "network" ? null : Number(form.targetId), operation: form.operation, ...(form.operation === "set_level" ? { value: percentToDimmer(Number(form.value)) } : {}) };
       await api.request("/admin/switch-rules", { method: "POST", body: JSON.stringify({ name: form.name, unitId: Number(form.unitId), button: Number(form.button), trigger: form.trigger, command }) });
       setForm(current => ({ ...current, name: "" })); onNotice("Switch rule created. It runs the next time that button is used.");
       await loadRules();
@@ -82,8 +87,8 @@ export function SwitchRulesPanel({ api, onNotice }: Props) {
       <label>RULE NAME<input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="e.g. Eiland toggle" required /></label>
       <div className="form-grid"><label>SWITCH UNIT ID<input type="number" min="0" value={form.unitId} onChange={event => setForm({ ...form, unitId: event.target.value })} required /></label><label>BUTTON<input type="number" min="0" value={form.button} onChange={event => setForm({ ...form, button: event.target.value })} required /></label></div>
       <label>WHEN THE BUTTON IS…<select value={form.trigger} onChange={event => setForm({ ...form, trigger: event.target.value as SwitchTrigger })}><option value="tap">Tapped (short press)</option><option value="hold">Held (fires after ~0.7 s)</option><option value="release_after_hold">Released after a hold</option></select></label>
-      <div className="form-grid"><label>WHICH LIGHTS?<select value={form.targetType} onChange={event => setForm({ ...form, targetType: event.target.value, targetId: "" })}><option value="unit">A lamp</option><option value="group">A group</option><option value="room">A room</option><option value="network">All lights</option></select></label>{form.targetType !== "network" && <label>CHOOSE {form.targetType.toUpperCase()}<select value={form.targetId} onChange={event => setForm({ ...form, targetId: event.target.value })}><option value="">Select…</option>{targets.filter(target => target.type === form.targetType).map(target => <option key={`${target.type}-${target.id}`} value={target.id}>{target.label}</option>)}</select></label>}</div>
-      <div className="form-grid"><label>WHAT SHOULD HAPPEN?<select value={form.operation} onChange={event => setForm({ ...form, operation: event.target.value })}><option value="toggle">Toggle on/off</option><option value="on">Turn on</option><option value="off">Turn off</option><option value="set_level">Set brightness</option></select></label>{form.operation === "set_level" && <label>BRIGHTNESS<input type="number" min="0" max="100" value={form.value} onChange={event => setForm({ ...form, value: event.target.value })} /><small>0–100%</small></label>}</div>
+      <div className="form-grid"><label>WHICH LIGHTS?<select value={form.targetType} onChange={event => setForm({ ...form, targetType: event.target.value, targetId: "" })}><option value="unit">A lamp</option><option value="group">A group</option><option value="room">A room</option><option value="network">All lights</option><option value="scene">A scene</option></select></label>{form.targetType !== "network" && <label>CHOOSE {form.targetType.toUpperCase()}<select value={form.targetId} onChange={event => setForm({ ...form, targetId: event.target.value })}><option value="">Select…</option>{isScene ? sceneOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>) : targets.filter(target => target.type === form.targetType).map(target => <option key={`${target.type}-${target.id}`} value={target.id}>{target.label}</option>)}</select></label>}</div>
+      {!isScene && <div className="form-grid"><label>WHAT SHOULD HAPPEN?<select value={form.operation} onChange={event => setForm({ ...form, operation: event.target.value })}><option value="toggle">Toggle on/off</option><option value="on">Turn on</option><option value="off">Turn off</option><option value="set_level">Set brightness</option></select></label>{form.operation === "set_level" && <label>BRIGHTNESS<input type="number" min="0" max="100" value={form.value} onChange={event => setForm({ ...form, value: event.target.value })} /><small>0–100%</small></label>}</div>}
       <button className="neon-button" disabled={!form.name || form.unitId === "" || form.button === ""}><Plus /> CREATE SWITCH RULE</button>
     </form>
     <div className="away-set-list">{rules.length === 0 ? <p className="muted-copy">No switch rules yet.</p> : rules.map(rule => <article key={rule.id}><div><strong>{rule.name}</strong><small>{switchLabel(rule.unitId)} · button {rule.button} · {TRIGGER_LABELS[rule.trigger]} → {actionLabel(rule.command)}{rule.lastTriggeredAt ? ` · last run ${new Date(rule.lastTriggeredAt).toLocaleString()}` : ""}</small></div><div className="away-set-actions"><label className="switch-rule-enabled"><input type="checkbox" checked={rule.enabled} onChange={event => void setEnabled(rule, event.target.checked)} /> Enabled</label><button type="button" className="icon-button danger" aria-label={`Delete ${rule.name}`} onClick={() => void removeRule(rule)}><Trash2 /></button></div></article>)}</div>

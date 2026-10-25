@@ -5,6 +5,9 @@ export type Device = { id: number; name: string; address: string; model?: string
 /** Mirrors the server's `ConnectionStatus`: what the Pi is doing about its Casambi connection. */
 export type ConnectionStatus = { phase: "idle" } | { phase: "connecting"; attempt: number } | { phase: "connected" } | { phase: "retrying"; attempt: number; nextRetryAt: string; lastError: string } | { phase: "failed"; lastError: string };
 export type NetworkSnapshot = { connected: boolean; network: { id: string; name: string } | null; units: Device[]; groups: { id: number; name: string; unitIds: number[] }[]; scenes: { id: number; name: string }[]; rooms: { id: number; name: string; sortOrder: number; defaultBrightnessPercent: number }[]; updatedAt: string };
+/** A scene saved on the Pi: the captured setting of a group, room, or all lamps (levels 0-255, 0 = off). */
+export type SceneScope = { type: "group" | "room" | "network"; id: number | null };
+export type LocalScene = { id: number; name: string; scope: SceneScope; lamps: Array<{ unitId: number; level: number; temperature: number | null }> };
 export type SolarSchedule = { event: "sunrise" | "sunset"; offsetMinutes: number };
 export type AwayDateSet = { id: number; name: string; dates: string[]; createdAt?: string; updatedAt?: string };
 export type Schedule = { id: number; name: string; cronExpression: string; timezone: string; command: { targetType: string; targetId?: number | string | null; operation: string; value?: unknown; fadeDurationMs?: number }; solar?: SolarSchedule | null; holidayDates: string[]; awayDateSetId: number | null; awayDateSet: AwayDateSet | null; enabled: boolean; lastRunAt: string | null; nextRunAt?: string | null };

@@ -62,4 +62,15 @@ describe("LocalStore", () => {
     expect(database.getSchedule(schedule.id)?.awayDateSetId).toBeNull();
     expect(database.getSchedule(schedule.id)?.awayDateSet).toBeNull();
   });
+
+  it("stores, renames, recaptures, and deletes light scenes", () => {
+    const database = store();
+    const scene = database.createLightScene(" Dinner ", { type: "room", id: 3 }, [{ unitId: 1, level: 128, temperature: null }]);
+    expect(scene).toMatchObject({ name: "Dinner", scope: { type: "room", id: 3 }, lamps: [{ unitId: 1, level: 128, temperature: null }] });
+    expect(database.updateLightScene(scene.id, { name: "Late dinner", lamps: [{ unitId: 1, level: 40, temperature: 2700 }] })).toMatchObject({ name: "Late dinner", lamps: [{ level: 40 }] });
+    expect(database.listLightScenes()).toHaveLength(1);
+    database.deleteLightScene(scene.id);
+    expect(() => database.deleteLightScene(scene.id)).toThrow("Scene does not exist.");
+  });
 });
+

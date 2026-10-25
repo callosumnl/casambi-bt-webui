@@ -14,7 +14,7 @@ const folders: string[] = [];
 function app() {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
-  const service = { snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
+  const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
   const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler })); return instance;
 }
@@ -99,6 +99,21 @@ describe("REST API", () => {
     await request(instance).post("/api/v1/admin/worker/restart").set({ Authorization: `Bearer ${operator.body.token}` }).expect(403);
     expect((await request(instance).get("/api/v1/admin/worker").set(auth).expect(200)).body).toMatchObject({ running: true, pid: 4242 });
     expect((await request(instance).post("/api/v1/admin/worker/restart").set(auth).expect(202)).body).toMatchObject({ restarts: 1 });
+  });
+
+  it("lets a signed-in user save, update, rename, apply, and delete scenes", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    await request(instance).post("/api/v1/local-scenes").set(auth).send({ name: "Dinner", scope: { type: "group", id: null } }).expect(422);
+    const created = await request(instance).post("/api/v1/local-scenes").set(auth).send({ name: "Dinner", scope: { type: "group", id: 5 } }).expect(201);
+    expect(created.body).toMatchObject({ name: "Dinner", scope: { type: "group", id: 5 }, lamps: [{ unitId: 1, level: 128 }] });
+    expect((await request(instance).post(`/api/v1/local-scenes/${created.body.id}/capture`).set(auth).expect(200)).body.lamps[0].level).toBe(64);
+    expect((await request(instance).patch(`/api/v1/local-scenes/${created.body.id}`).set(auth).send({ name: "Late dinner" }).expect(200)).body.name).toBe("Late dinner");
+    expect((await request(instance).get("/api/v1/local-scenes").set(auth).expect(200)).body).toHaveLength(1);
+    await request(instance).post(`/api/v1/local-scenes/${created.body.id}/apply`).set(auth).send({ fadeDurationMs: 800 }).expect(200);
+    await request(instance).delete(`/api/v1/local-scenes/${created.body.id}`).set(auth).expect(204);
+    await request(instance).delete(`/api/v1/local-scenes/${created.body.id}`).set(auth).expect(404);
   });
 
   it("creates a reusable away-date set and attaches it to a timer", async () => {

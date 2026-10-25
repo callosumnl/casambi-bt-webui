@@ -230,3 +230,60 @@ describe("summarizeDiagnostic", () => {
     expect(detail.detail.endsWith("BleakDeviceNotFoundError: not found")).toBe(true);
   });
 });
+
+describe("CasambiService light scenes", () => {
+  const lamp = [{ type: "dimmer", min: 0, max: 255, readOnly: false }, { type: "temperature", min: 2700, max: 6500, readOnly: false }];
+  async function setup() {
+    const database = store(); const bridge = new FakeBridge();
+    bridge.network.units[0] = { ...bridge.network.units[0], capabilities: lamp, state: { dimmer: 200, temperature: 3000, sensors: [], on: true, online: true } };
+    bridge.network.units[1] = { ...bridge.network.units[1], capabilities: lamp, state: { dimmer: 90, temperature: 4000, sensors: [], on: false, online: true } };
+    bridge.network.units.push({ id: 9, uuid: "nine", address: "nine", name: "Wall switch", capabilities: [], state: { sensors: [], on: false, online: true } });
+    bridge.network.groups = [{ id: 5, name: "Kitchen", unitIds: [1, 2, 9] }];
+    database.saveCasambiConfig({ ...database.getCasambiConfig(), networkAddress: "AB:CD:EF:01:23:45", networkPassword: "network-secret" });
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    await service.connect();
+    bridge.commands = [];
+    return { database, bridge, service };
+  }
+
+  it("captures each lamp of a group, leaving out switches and storing off lamps as level 0", async () => {
+    const { service } = await setup();
+    const scene = service.captureLightScene("Dinner", { type: "group", id: 5 });
+    expect(scene).toMatchObject({ name: "Dinner", scope: { type: "group", id: 5 } });
+    expect(scene.lamps).toEqual([{ unitId: 1, level: 200, temperature: 3000 }, { unitId: 2, level: 0, temperature: 4000 }]);
+  });
+
+  it("restores temperature first, then each lamp's own level", async () => {
+    const { service, bridge } = await setup();
+    const scene = service.captureLightScene("Dinner", { type: "group", id: 5 });
+    await service.applyLightScene(scene.id, "tester");
+    expect(bridge.commands).toEqual([
+      { targetType: "unit", targetId: 1, operation: "set_temperature", value: 3000 },
+      { targetType: "unit", targetId: 1, operation: "set_level", value: 200 },
+      { targetType: "unit", targetId: 2, operation: "set_level", value: 0 },
+    ]);
+  });
+
+  it("applies a scene through the normal control path, with a fade, for timers and switch rules", async () => {
+    const { service, bridge, database } = await setup();
+    const scene = service.captureLightScene("Dinner", { type: "group", id: 5 });
+    bridge.network.units[0].state = { ...bridge.network.units[0].state, dimmer: 0, on: false };
+    await service.snapshot();
+    const snapshot = await service.control({ targetType: "local_scene", targetId: scene.id, operation: "activate_scene", fadeDurationMs: 1 }, "timer");
+    expect(snapshot.units.find(unit => unit.id === 1)?.state.dimmer).toBe(200);
+    expect(database.recentAudit().find(entry => entry.action === "lighting.scene_applied")?.detail).toEqual({ sceneId: scene.id, fadeDurationMs: 1 });
+  });
+
+  it("updates a scene to the current setting and rejects a scene without lamps", async () => {
+    const { service, bridge } = await setup();
+    const scene = service.captureLightScene("Dinner", { type: "group", id: 5 });
+    bridge.network.units[1].state = { ...bridge.network.units[1].state, on: true, dimmer: 150 };
+    await service.snapshot();
+    expect(service.recaptureLightScene(scene.id).lamps[1]).toEqual({ unitId: 2, level: 150, temperature: 4000 });
+    bridge.network.groups.push({ id: 6, name: "Switches", unitIds: [9] });
+    await service.snapshot();
+    expect(() => service.captureLightScene("Empty", { type: "group", id: 6 })).toThrow("At least one connected lamp is required for a scene.");
+    await expect(service.applyLightScene(999, "tester")).rejects.toThrow("Scene does not exist.");
+  });
+});
+

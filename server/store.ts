@@ -17,6 +17,10 @@ export type UnitMetadata = { unitId: number; customName: string | null; roomId: 
 /** A rule's action: any validated control, or a toggle resolved against current lamp state when it fires. */
 export type SwitchRuleCommand = ControlRequest | { targetType: "unit" | "group" | "room" | "network"; targetId?: number | string | null; operation: "toggle" };
 export type SwitchRuleRecord = { id: number; name: string; unitId: number; button: number; trigger: SwitchTrigger; command: SwitchRuleCommand; enabled: boolean; createdAt: string; updatedAt: string; lastTriggeredAt: string | null };
+/** A saved lighting setting of a group of lamps; levels are Casambi 0-255 and 0 means off. */
+export type SceneScope = { type: "group" | "room" | "network"; id: number | null };
+export type SceneLamp = { unitId: number; level: number; temperature: number | null };
+export type LightSceneRecord = { id: number; name: string; scope: SceneScope; lamps: SceneLamp[]; createdAt: string; updatedAt: string };
 export type AwayDateSet = { id: number; name: string; dates: string[]; createdAt: string; updatedAt: string };
 export type ScheduleRecord = {
   id: number; name: string; cronExpression: string; timezone: string; command: ControlRequest;
@@ -81,6 +85,10 @@ export class LocalStore {
       CREATE TABLE IF NOT EXISTS switch_rules (
         id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, unit_id INTEGER NOT NULL, button INTEGER NOT NULL, trigger TEXT NOT NULL,
         command_json TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_triggered_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS light_scenes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, scope_type TEXT NOT NULL, scope_id INTEGER, lamps_json TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL, detail_json TEXT NOT NULL, created_at TEXT NOT NULL
@@ -245,6 +253,22 @@ export class LocalStore {
   public createAwayDateSet(name: string, dates: string[]): AwayDateSet { const now = NOW(); const info = this.db.prepare("INSERT INTO away_date_sets (name,dates_json,created_at,updated_at) VALUES (?,?,?,?)").run(name.trim(), JSON.stringify(dates), now, now); return this.getAwayDateSet(Number(info.lastInsertRowid))!; }
   public updateAwayDateSet(id: number, patch: { name?: string; dates?: string[] }): AwayDateSet { const existing = this.getAwayDateSet(id); if (!existing) throw new Error("Away-date set does not exist."); const next = { ...existing, ...patch, updatedAt: NOW() }; this.db.prepare("UPDATE away_date_sets SET name=?,dates_json=?,updated_at=? WHERE id=?").run(next.name.trim(), JSON.stringify(next.dates), next.updatedAt, id); return this.getAwayDateSet(id)!; }
   public deleteAwayDateSet(id: number): void { this.db.exec("BEGIN IMMEDIATE"); try { this.db.prepare("UPDATE schedules SET away_date_set_id = NULL WHERE away_date_set_id = ?").run(id); this.db.prepare("DELETE FROM away_date_sets WHERE id = ?").run(id); this.db.exec("COMMIT"); } catch (error) { this.db.exec("ROLLBACK"); throw error; } }
+  /** Scenes saved on the Pi, each the captured setting of one group, room, or the whole network. */
+  public listLightScenes(): LightSceneRecord[] { return (this.db.prepare("SELECT * FROM light_scenes ORDER BY scope_type,scope_id,name").all() as Array<Record<string, unknown>>).map(row => this.mapLightScene(row)); }
+  public getLightScene(id: number): LightSceneRecord | null { const row = this.db.prepare("SELECT * FROM light_scenes WHERE id = ?").get(id) as Record<string, unknown> | undefined; return row ? this.mapLightScene(row) : null; }
+  public createLightScene(name: string, scope: SceneScope, lamps: SceneLamp[]): LightSceneRecord {
+    const now = NOW();
+    const info = this.db.prepare("INSERT INTO light_scenes (name,scope_type,scope_id,lamps_json,created_at,updated_at) VALUES (?,?,?,?,?,?)").run(name.trim(), scope.type, scope.id, JSON.stringify(lamps), now, now);
+    return this.getLightScene(Number(info.lastInsertRowid))!;
+  }
+  public updateLightScene(id: number, patch: { name?: string; lamps?: SceneLamp[] }): LightSceneRecord {
+    const existing = this.getLightScene(id); if (!existing) throw new Error("Scene does not exist.");
+    const next = { ...existing, ...patch };
+    this.db.prepare("UPDATE light_scenes SET name=?,lamps_json=?,updated_at=? WHERE id=?").run(next.name.trim(), JSON.stringify(next.lamps), NOW(), id);
+    return this.getLightScene(id)!;
+  }
+  public deleteLightScene(id: number): void { if (this.db.prepare("DELETE FROM light_scenes WHERE id = ?").run(id).changes === 0) throw new Error("Scene does not exist."); }
+
   /** Physical-switch automations, matched by the switch's unit id, button, and trigger. */
   public listSwitchRules(): SwitchRuleRecord[] { return (this.db.prepare("SELECT * FROM switch_rules ORDER BY unit_id,button,id").all() as Array<Record<string, unknown>>).map(row => this.mapSwitchRule(row)); }
   public getSwitchRule(id: number): SwitchRuleRecord | null { const row = this.db.prepare("SELECT * FROM switch_rules WHERE id = ?").get(id) as Record<string, unknown> | undefined; return row ? this.mapSwitchRule(row) : null; }
@@ -280,6 +304,9 @@ export class LocalStore {
   private getApiKey(id: number): ApiKeyRecord | null { return (this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt FROM api_keys WHERE id = ?").get(id) as ApiKeyRecord | undefined) ?? null; }
   private normalizePercent(value: number): number { if (!Number.isInteger(value) || value < 0 || value > 100) throw new Error("Default brightness must be an integer from 0 to 100."); return value; }
   private adminCount(): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM local_users WHERE role = 'admin'").get() as { count: number }).count; }
+  private mapLightScene(row: Record<string, unknown>): LightSceneRecord {
+    return { id: Number(row.id), name: String(row.name), scope: { type: String(row.scope_type) as SceneScope["type"], id: row.scope_id == null ? null : Number(row.scope_id) }, lamps: JSON.parse(String(row.lamps_json)) as SceneLamp[], createdAt: String(row.created_at), updatedAt: String(row.updated_at) };
+  }
   private mapSwitchRule(row: Record<string, unknown>): SwitchRuleRecord {
     return { id: Number(row.id), name: String(row.name), unitId: Number(row.unit_id), button: Number(row.button), trigger: String(row.trigger) as SwitchTrigger, command: JSON.parse(String(row.command_json)) as SwitchRuleCommand, enabled: Boolean(row.enabled), createdAt: String(row.created_at), updatedAt: String(row.updated_at), lastTriggeredAt: row.last_triggered_at == null ? null : String(row.last_triggered_at) };
   }

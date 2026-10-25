@@ -39,7 +39,7 @@ CASAMBI_JWT='…' node scripts/verify-live-bridge.mjs  # hardware smoke test, on
 
 **Mock mode:** `bridge.ts` passes `--mock` to the worker only when `CASAMBI_MOCK_MODE=true` is set explicitly; `NODE_ENV` never enables it. The app is only ever deployed to a real Pi (there is no test/acceptance environment), so a missing flag must mean real Bluetooth. Tests don't need the flag: they inject a fake bridge or `createChild`.
 
-**Browser Demo mode** is a separate feature from the server mock. It's reached through `?demo=1` or the "Explore Demo" button on the login screen. `client/src/lib/demoNetwork.ts` and `useNetwork(demo)` simulate the network entirely in browser memory, with no HTTP or SSE. Admin routes are hidden in demo mode. New user-facing features have generally shipped with matching Demo behavior and tests (see `todo.md`).
+**Scenes:** besides scenes stored in the Casambi network (`targetType: "scene"`), users save scenes on the Pi: the captured level and colour temperature of each lamp in a group, room, or the whole network (`light_scenes` table, `/local-scenes` routes). `CasambiService.control` handles `targetType: "local_scene"` itself (it never reaches the worker), so timers and switch rules can activate saved scenes, with an optional fade. Lamps are units with a controllable capability (`isLampUnit` / client `isLamp`); switches and sensors are excluded from lamp lists and target pickers.
 
 **Units/conventions:**
 - The UI shows brightness as 0–100%, while Casambi commands use 0–255. Convert with `client/src/lib/brightness.ts`.

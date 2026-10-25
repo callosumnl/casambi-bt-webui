@@ -54,7 +54,8 @@ export type GroupSnapshot = z.infer<typeof groupSchema>;
 export type SceneSnapshot = z.infer<typeof sceneSchema>;
 export type NetworkSnapshot = z.infer<typeof networkSnapshotSchema>;
 
-export const targetTypeSchema = z.enum(["unit", "group", "room", "scene", "network"]);
+/** `scene` is a scene stored in the Casambi network; `local_scene` is a scene saved on the Pi (see LocalStore light scenes). */
+export const targetTypeSchema = z.enum(["unit", "group", "room", "scene", "local_scene", "network"]);
 export const operationSchema = z.enum([
   "on",
   "off",
@@ -86,12 +87,16 @@ export const controlRequestSchema = z.object({
   if (value.operation === "set_xy" && (!Array.isArray(value.value) || value.value.length !== 2 || !value.value.every(item => typeof item === "number" && Number.isFinite(item)))) {
     ctx.addIssue({ code: "custom", message: "XY colour must be an array of two numeric values.", path: ["value"] });
   }
-  if (value.targetType === "scene" && value.operation !== "activate_scene") {
+  if ((value.targetType === "scene" || value.targetType === "local_scene") && value.operation !== "activate_scene") {
     ctx.addIssue({ code: "custom", message: "Scenes can only be activated.", path: ["operation"] });
   }
 });
 
 export type ControlRequest = z.infer<typeof controlRequestSchema>;
+
+/** Capabilities that make a unit a controllable light. Switches and sensors report none of these. */
+export const LAMP_CAPABILITIES = new Set(["dimmer", "onoff", "white", "rgb", "temperature", "vertical", "colorsource", "xy", "slider"]);
+export function isLampUnit(unit: Pick<UnitSnapshot, "capabilities">): boolean { return unit.capabilities.some(capability => LAMP_CAPABILITIES.has(capability.type)); }
 
 /** Button triggers a switch rule can react to, derived from upstream's reliable type 0x10 switch messages. */
 export const switchTriggerSchema = z.enum(["tap", "hold", "release_after_hold"]);

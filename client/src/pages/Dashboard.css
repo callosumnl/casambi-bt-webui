@@ -1,17 +1,69 @@
-.collective-controls { display: grid; gap: .55rem; }
-.collective-control { display: grid; grid-template-columns: 1fr auto; gap: .55rem .8rem; padding: .65rem; background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.08); }
-.collective-control div:first-child { display: grid; gap: .18rem; }
-.collective-control span { color: var(--pink); font: .54rem "DM Mono"; letter-spacing: .1em; }
-.collective-control strong { font-size: .8rem; }
-.collective-buttons { display: flex; gap: .3rem; }
-.collective-buttons button { min-width: 0; padding: .35rem .48rem; color: var(--cyan); background: rgba(99,244,255,.08); border: 1px solid rgba(99,244,255,.23); font: .56rem "DM Mono"; }
-.collective-buttons button:last-child { color: var(--pink); background: rgba(255,63,175,.08); border-color: rgba(255,63,175,.24); }
-.collective-control input { grid-column: 1 / -1; }
-.sensor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 1rem; }
-.sensor-card { display: grid; gap: .35rem; }
-.sensor-card strong { color: var(--cyan); font-size: 1.8rem; letter-spacing: -.06em; }
-.sensor-card small { color: var(--muted); font-size: .75rem; margin-left: .25rem; }
-.sensor-card > span { color: var(--muted); font-size: .72rem; }
-.sensor-pulse { justify-self: start; margin-top: .25rem; padding: .32rem .45rem; color: var(--pink); background: rgba(255,63,175,.07); border: 1px solid rgba(255,63,175,.35); font: .55rem "DM Mono"; letter-spacing: .07em; }
-.room-default { width: 100%; margin-top: .45rem; padding: .35rem .45rem; color: var(--cyan); background: rgba(99,244,255,.06); border: 1px solid rgba(99,244,255,.3); font: .56rem "DM Mono"; letter-spacing: .06em; }
-.demo-banner { display: flex; align-items: flex-start; gap: .55rem; margin: 0 0 1rem; padding: .7rem .8rem; color: #b6fbff; background: rgba(99,244,255,.08); border: 1px solid rgba(99,244,255,.38); font: .65rem "DM Mono"; line-height: 1.55; letter-spacing: .03em; }
+/* Dashboard: compact status, then collective controls, then lamps. */
+.dashboard-page { gap: 1.1rem; }
+.loading-grid { color: var(--muted); font: .7rem "DM Mono"; letter-spacing: .1em; }
+.section-label { margin: 0 0 .55rem; color: var(--muted); font: 500 .62rem "DM Mono"; letter-spacing: .14em; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.status-strip { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .75rem; color: var(--muted); font: .66rem "DM Mono"; letter-spacing: .05em; }
+.status-strip strong { color: var(--lavender); font-weight: 500; }
+.status-light { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+.status-light.on { background: #6dffb5; box-shadow: 0 0 8px rgba(109,255,181,.7); }
+.strip-sync { display: grid; place-items: center; width: 28px; height: 28px; margin-left: auto; color: var(--muted); background: transparent; border: 1px solid rgba(255,255,255,.1); }
+.strip-sync:hover { color: var(--cyan); border-color: rgba(99,244,255,.4); }
+.strip-sync svg { width: 14px; }
+
+.collective-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: .6rem; }
+.collective-row { display: grid; gap: .55rem; padding: .7rem .8rem; background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.08); }
+.row-head { display: flex; align-items: center; gap: .55rem; min-width: 0; }
+.row-head strong { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
+.row-tag { color: var(--pink); font: .52rem "DM Mono"; letter-spacing: .12em; }
+.row-switch { display: flex; gap: .3rem; }
+.row-switch button { padding: .38rem .55rem; color: var(--cyan); background: rgba(99,244,255,.08); border: 1px solid rgba(99,244,255,.23); font: .56rem "DM Mono"; }
+.row-switch button:last-child { color: var(--pink); background: rgba(255,63,175,.08); border-color: rgba(255,63,175,.24); }
+.row-slider, .lamp-slider { display: grid; grid-template-columns: 1fr 3.4rem; align-items: center; gap: .6rem; }
+.row-slider b, .lamp-slider b { color: var(--lavender); font: 500 .62rem "DM Mono"; text-align: right; }
+
+.scene-chips { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; }
+.scene-chip { display: inline-flex; align-items: stretch; border: 1px solid rgba(99,244,255,.28); background: rgba(99,244,255,.06); }
+.scene-chip > button:first-child { padding: .32rem .6rem; color: var(--foreground); background: transparent; font-size: .72rem; }
+.scene-chip > button:first-child:hover { color: var(--cyan); }
+.scene-chip.casambi { border-style: dashed; }
+.scene-chip.default { border-color: rgba(255,255,255,.14); background: transparent; }
+.scene-chip.default > button:first-child { color: var(--muted); }
+.chip-icon { display: grid; place-items: center; padding: 0 .4rem; color: var(--muted); background: transparent; border-left: 1px solid rgba(255,255,255,.1); }
+.chip-icon:hover { color: var(--pink); }
+.chip-icon svg { width: 13px; }
+.scene-add, .scene-edit { display: inline-flex; align-items: center; gap: .25rem; padding: .32rem .5rem; color: var(--muted); background: transparent; border: 1px dashed rgba(255,255,255,.18); font: .56rem "DM Mono"; letter-spacing: .06em; }
+.scene-add svg { width: 12px; }
+.scene-add:hover, .scene-edit:hover, .scene-edit[aria-pressed="true"] { color: var(--cyan); border-color: rgba(99,244,255,.45); }
+.scene-name { display: inline-flex; flex-wrap: wrap; align-items: center; gap: .3rem; }
+.scene-name input { min-height: 30px; width: 11rem; max-width: 100%; padding: .3rem .5rem; color: var(--foreground); background: rgba(0,0,0,.25); border: 1px solid rgba(99,244,255,.35); font-size: .75rem; }
+.scene-name > button:not(.chip-icon) { padding: .32rem .6rem; color: var(--ink); background: var(--cyan); font: .56rem "DM Mono"; }
+.scene-name > button:disabled { opacity: .45; }
+.scene-name .chip-icon { border: 0; padding: .3rem; }
+
+.lamp-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: .6rem; }
+.lamp-card { display: grid; gap: .5rem; padding: .7rem .8rem; background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.08); transition: border-color .18s; }
+.lamp-card.lit { border-color: rgba(255,63,175,.4); }
+.lamp-card.offline { opacity: .6; }
+.lamp-head { display: flex; align-items: center; gap: .6rem; min-width: 0; }
+.lamp-head > div { flex: 1; min-width: 0; }
+.lamp-head h3 { margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: .85rem; }
+.lamp-head p { margin: .1rem 0 0; color: var(--muted); font: .58rem "DM Mono"; letter-spacing: .06em; }
+.lamp-offline { display: inline-flex; align-items: center; gap: .25rem; color: var(--danger); font: .54rem "DM Mono"; }
+.lamp-offline svg { width: 12px; }
+.lamp-power { display: grid; place-items: center; flex: none; width: 34px; height: 34px; color: var(--muted); background: transparent; border: 1px solid rgba(255,255,255,.16); transition: color .18s, background .18s, border-color .18s; }
+.lamp-power[aria-pressed="true"] { color: var(--ink); background: var(--pink); border-color: var(--pink); }
+.lamp-power svg { width: 16px; }
+.lamp-slider { grid-template-columns: 2.4rem 1fr 3.4rem; }
+.lamp-slider span { color: var(--muted); font: .54rem "DM Mono"; letter-spacing: .08em; }
+
+.sensor-list { display: grid; gap: .3rem; margin: 0; padding: 0; list-style: none; }
+.sensor-list li { display: flex; flex-wrap: wrap; align-items: center; gap: .3rem .6rem; color: var(--muted); font-size: .72rem; }
+.sensor-list li span { flex: 1; min-width: 0; }
+.sensor-list strong { color: var(--cyan); font: 500 .72rem "DM Mono"; }
+
+@media (max-width: 640px) {
+  .collective-list, .lamp-grid { grid-template-columns: 1fr; }
+  .collective-row, .lamp-card { padding: .6rem .65rem; }
+}

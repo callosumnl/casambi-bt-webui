@@ -1,4 +1,5 @@
-import { AlertTriangle, Layers3, Radio, Sparkles, UsersRound } from "lucide-react";
+import { AlertTriangle, Plus, RefreshCw, X } from "lucide-react";
+import { FormEvent, useState } from "react";
 import "./Dashboard.css";
 import { ConnectionStatusBar } from "@/components/ConnectionStatusBar";
 import { DeviceControlCard } from "@/components/DeviceControlCard";
@@ -6,27 +7,77 @@ import { HudFrame } from "@/components/HudFrame";
 import { useNetwork } from "@/hooks/useNetwork";
 import { useSliderCommit } from "@/hooks/useSliderCommit";
 import { percentToDimmer } from "@/lib/brightness";
+import type { LocalScene, SceneScope } from "@/lib/localApi";
+import { averageBrightnessPercent, isLamp, sameScope, scopeLamps } from "@/lib/scenes";
 
-/** Main lamp, group, room, and scene control surface. */
-export default function Dashboard({ demo = false }: { demo?: boolean }) {
-  const { network, loading, error, connection, command, applyRoomDefault, refresh } = useNetwork(demo);
+type Chip = { key: string; label: string; kind?: "casambi" | "default"; scene?: LocalScene; apply: () => void };
+
+/** Lighting controls first: groups and rooms (with their scenes), then individual lamps. Switches are not shown here. */
+export default function Dashboard() {
+  const { network, loading, error, connection, command, applyRoomDefault, refresh, scenes, saveScene, updateScene, deleteScene, applyScene } = useNetwork();
   if (loading) return <div className="loading-grid">CONNECTING TO LIGHTING GRID…</div>;
   if (!network) return <HudFrame className="empty-state"><AlertTriangle /><h2>NETWORK OFFLINE</h2><p>{error || "No Casambi snapshot is available yet."}</p><button className="neon-button" onClick={() => void refresh(true)}>RETRY LINK</button></HudFrame>;
-  const quickControl = (targetType: "group" | "room" | "scene", targetId: number, operation: string) => void command({ targetType, targetId, operation });
-  return <div className="dashboard-page">{demo && <p className="demo-banner"><Sparkles /> DEMO MODE — all fixtures, sensors, scenes, and controls are simulated in this browser. No Raspberry Pi, Bluetooth bridge, account, timer, or stored data is accessed.</p>}<section className="grid-overview"><HudFrame className="overview-card"><p className="eyebrow"><Radio /> NETWORK STATUS</p><strong className={network.connected ? "status-live" : "status-offline"}>{network.connected ? "ONLINE" : "OFFLINE"}</strong><span>{network.network?.name || "Bridge not connected"}</span></HudFrame><HudFrame className="overview-card"><p className="eyebrow"><Sparkles /> ACTIVE LAMPS</p><strong>{network.units.filter(unit => unit.state.on).length}<small>/{network.units.length}</small></strong><span>{demo ? "Interactive simulation" : "Responsive in real time"}</span></HudFrame><HudFrame className="overview-card"><p className="eyebrow"><UsersRound /> LOCAL ROOMS</p><strong>{network.rooms.length}</strong><span>{demo ? "Sample room assignments" : "Custom Pi metadata"}</span></HudFrame></section>
+
+  const lamps = network.units.filter(isLamp);
+  const sensors = network.units.flatMap(unit => unit.state.sensors.map(sensor => ({ unit, sensor })));
+  const sceneChips = (scope: SceneScope): Chip[] => scenes.filter(scene => sameScope(scene.scope, scope)).map(scene => ({ key: `scene-${scene.id}`, label: scene.name, scene, apply: () => void applyScene(scene.id) }));
+  const rows = [
+    { key: "network", tag: "ALL", name: "All lights", scope: { type: "network", id: null } as SceneScope, extra: network.scenes.map(scene => ({ key: `casambi-${scene.id}`, label: scene.name, kind: "casambi" as const, apply: () => void command({ targetType: "scene", targetId: scene.id, operation: "activate_scene" }) })) },
+    ...network.groups.map(group => ({ key: `group-${group.id}`, tag: "GROUP", name: group.name, scope: { type: "group", id: group.id } as SceneScope, extra: [] as Chip[] })),
+    ...network.rooms.map(room => ({ key: `room-${room.id}`, tag: "ROOM", name: room.name, scope: { type: "room", id: room.id } as SceneScope, extra: [{ key: `default-${room.id}`, label: `Default ${room.defaultBrightnessPercent}%`, kind: "default" as const, apply: () => void applyRoomDefault(room.id) }] })),
+  ];
+
+  return <div className="dashboard-page">
+    <div className="status-strip">
+      <span className={`status-light ${network.connected ? "on" : "off"}`} aria-hidden="true" />
+      <strong>{network.connected ? "Online" : "Offline"}</strong>
+      <span>{network.network?.name || "No network"}</span>
+      <span>{lamps.filter(lamp => lamp.state.on).length}/{lamps.length} on</span>
+      <button className="strip-sync" onClick={() => void refresh(true)} aria-label="Sync status with the lamps"><RefreshCw /></button>
+    </div>
     <ConnectionStatusBar status={connection} />
     {error && <p className="live-warning"><AlertTriangle /> {error}</p>}
-    <section className="quick-grid"><HudFrame><div className="section-title"><Layers3 /><div><p className="eyebrow">COLLECTIVE CONTROL</p><h2>GROUPS & ROOMS</h2></div></div><div className="collective-controls">{network.groups.map(group => <CollectiveControl key={`group-${group.id}`} type="GROUP" name={group.name} onCommand={(operation, value) => quickControl("group", group.id, operation) && value} command={(operation, value) => void command({ targetType: "group", targetId: group.id, operation, ...(value === undefined ? {} : { value }) })} />)}{network.rooms.map(room => <RoomControl key={`room-${room.id}`} name={room.name} defaultBrightnessPercent={room.defaultBrightnessPercent} applyDefault={() => void applyRoomDefault(room.id)} command={(operation, value) => void command({ targetType: "room", targetId: room.id, operation, ...(value === undefined ? {} : { value }) })} />)}{network.groups.length + network.rooms.length === 0 && <p className="muted-copy">Create rooms in the Admin Panel or connect a network with groups.</p>}</div></HudFrame><HudFrame><div className="section-title"><Sparkles /><div><p className="eyebrow">PRESET ACTIVATION</p><h2>SCENES</h2></div></div><div className="quick-actions scenes">{network.scenes.map(scene => <button key={scene.id} onClick={() => quickControl("scene", scene.id, "activate_scene")}><span>SCENE</span>{scene.name}</button>)}{network.scenes.length === 0 && <p className="muted-copy">No scenes were reported by the connected Casambi network.</p>}</div></HudFrame></section>
-    <section><div className="section-heading"><div><p className="eyebrow">DIRECT CONTROL</p><h2>LAMPS <em>//</em> DEVICES</h2></div><button className="outline-button" onClick={() => void refresh(true)}>SYNC STATUS</button></div><div className="device-grid">{network.units.map(device => <DeviceControlCard key={device.id} device={device} onCommand={command} />)}{network.units.length === 0 && <HudFrame className="empty-state"><Radio /><h2>AWAITING NETWORK</h2><p>Ask an admin to configure and connect the Casambi Bluetooth bridge.</p></HudFrame>}</div></section><section className="sensor-grid">{network.units.flatMap(unit => unit.state.sensors.map(sensor => <HudFrame key={`${unit.id}-${sensor.label}`} className="sensor-card"><p className="eyebrow">SENSOR // {unit.name}</p><strong>{sensor.value ?? "—"}<small>{sensor.unit || ""}</small></strong><span>{sensor.label}</span>{demo && <button className="sensor-pulse" onClick={() => void command({ targetType: "unit", targetId: unit.id, operation: "simulate_sensor" })}>PULSE SENSOR</button>}</HudFrame>))}</section>
+
+    <section aria-labelledby="collective-heading">
+      <h2 id="collective-heading" className="section-label">GROUPS & ROOMS</h2>
+      <div className="collective-list">{rows.map(row => <CollectiveRow key={row.key} tag={row.tag} name={row.name} level={averageBrightnessPercent(scopeLamps(network, row.scope))}
+        send={(operation, value) => void command({ targetType: row.scope.type, targetId: row.scope.id, operation, ...(value === undefined ? {} : { value }) })}
+        chips={[...row.extra, ...sceneChips(row.scope)]} onSave={name => saveScene(name, row.scope)} onUpdate={id => void updateScene(id)} onDelete={id => void deleteScene(id)} />)}</div>
+    </section>
+
+    <section aria-labelledby="lamps-heading">
+      <h2 id="lamps-heading" className="section-label">LAMPS</h2>
+      {lamps.length === 0 ? <p className="muted-copy">No lamps yet. Ask an admin to connect the Casambi Bluetooth bridge.</p>
+        : <div className="lamp-grid">{lamps.map(device => <DeviceControlCard key={device.id} device={device} onCommand={command} />)}</div>}
+    </section>
+
+    {sensors.length > 0 && <section aria-labelledby="sensors-heading">
+      <h2 id="sensors-heading" className="section-label">SENSORS</h2>
+      <ul className="sensor-list">{sensors.map(({ unit, sensor }) => <li key={`${unit.id}-${sensor.label}`}><span>{unit.name} · {sensor.label}</span><strong>{sensor.value ?? "—"}{sensor.unit ? ` ${sensor.unit}` : ""}</strong></li>)}</ul>
+    </section>}
   </div>;
 }
 
-function CollectiveControl({ type, name, command: send }: { type: string; name: string; onCommand: (operation: string, value?: number) => unknown; command: (operation: string, value?: number) => void }) {
-  const level = useSliderCommit(71, percent => send("set_level", percentToDimmer(percent)));
-  return <article className="collective-control"><div><span>{type}</span><strong>{name}</strong></div><div className="collective-buttons"><button onClick={() => send("on")}>ON</button><button onClick={() => send("off")}>OFF</button></div><input aria-label={`${name} brightness percent`} type="range" min="0" max="100" defaultValue="71" {...level.handlers} /></article>;
-}
-
-function RoomControl({ name, defaultBrightnessPercent, applyDefault, command: send }: { name: string; defaultBrightnessPercent: number; applyDefault: () => void; command: (operation: string, value?: number) => void }) {
-  const level = useSliderCommit(defaultBrightnessPercent, percent => send("set_level", percentToDimmer(percent)));
-  return <article className="collective-control room-control"><div><span>ROOM</span><strong>{name}</strong></div><div className="collective-buttons"><button onClick={() => send("on")}>ON</button><button onClick={() => send("off")}>OFF</button></div><input aria-label={`${name} brightness percent`} type="range" min="0" max="100" defaultValue={defaultBrightnessPercent} {...level.handlers} /><button className="room-default" onClick={applyDefault}>APPLY DEFAULT {defaultBrightnessPercent}%</button></article>;
+/** One group, room, or "all lights": on/off, a shared brightness slider, and its scenes as one-tap chips. */
+function CollectiveRow({ tag, name, level, send, chips, onSave, onUpdate, onDelete }: { tag: string; name: string; level: number; send: (operation: string, value?: number) => void; chips: Chip[]; onSave: (name: string) => Promise<void>; onUpdate: (id: number) => void; onDelete: (id: number) => void }) {
+  const brightness = useSliderCommit(level, percent => send("set_level", percentToDimmer(percent)));
+  const [naming, setNaming] = useState(false);
+  const [sceneName, setSceneName] = useState("");
+  const [editing, setEditing] = useState(false);
+  const hasOwnScenes = chips.some(chip => chip.scene);
+  const submit = async (event: FormEvent) => { event.preventDefault(); if (!sceneName.trim()) return; await onSave(sceneName.trim()); setSceneName(""); setNaming(false); };
+  return <article className="collective-row">
+    <div className="row-head"><span className="row-tag">{tag}</span><strong>{name}</strong><div className="row-switch"><button onClick={() => send("on")}>ON</button><button onClick={() => send("off")}>OFF</button></div></div>
+    <label className="row-slider"><span className="sr-only">{name} brightness</span><input type="range" min="0" max="100" value={brightness.value} {...brightness.handlers} /><b>{brightness.value}%</b></label>
+    <div className="scene-chips">
+      {chips.map(chip => <span key={chip.key} className={`scene-chip ${chip.kind ?? ""}`}>
+        <button onClick={chip.apply} title={chip.kind === "casambi" ? "Scene stored in the Casambi network" : chip.kind === "default" ? "Room default brightness" : "Apply this scene"}>{chip.label}</button>
+        {editing && chip.scene && <><button className="chip-icon" onClick={() => onUpdate(chip.scene!.id)} aria-label={`Update ${chip.label} to the current lights`} title="Update to the current lights"><RefreshCw /></button><button className="chip-icon" onClick={() => onDelete(chip.scene!.id)} aria-label={`Delete ${chip.label}`} title="Delete"><X /></button></>}
+      </span>)}
+      {naming
+        ? <form className="scene-name" onSubmit={event => void submit(event)}><input autoFocus value={sceneName} maxLength={64} onChange={event => setSceneName(event.target.value)} placeholder="Scene name" aria-label={`Name for the new ${name} scene`} /><button disabled={!sceneName.trim()}>SAVE</button><button type="button" className="chip-icon" onClick={() => { setNaming(false); setSceneName(""); }} aria-label="Cancel"><X /></button></form>
+        : <button className="scene-add" onClick={() => setNaming(true)} title="Save the current lights as a scene"><Plus /> SCENE</button>}
+      {hasOwnScenes && !naming && <button className="scene-edit" aria-pressed={editing} onClick={() => setEditing(!editing)}>{editing ? "DONE" : "EDIT"}</button>}
+    </div>
+  </article>;
 }

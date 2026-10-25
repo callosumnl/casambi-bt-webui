@@ -1,6 +1,6 @@
 import { EventHub } from "../events";
-import { CasambiConfig, LocalStore } from "../store";
-import { controlRequestSchema, type BridgeEvent, type ControlRequest, type NetworkSnapshot, type SwitchPress } from "./types";
+import { CasambiConfig, LightSceneRecord, LocalStore, SceneLamp, SceneScope } from "../store";
+import { controlRequestSchema, isLampUnit, type BridgeEvent, type ControlRequest, type NetworkSnapshot, type SwitchPress } from "./types";
 import { JsonLineCasambiBridge, type WorkerState } from "./bridge";
 
 /** Operations that set an absolute value, so a newer queued value can safely replace an unsent older one. */
@@ -183,6 +183,7 @@ export class CasambiService {
   /** Applies a control command to its actual Casambi target, expanding local room membership first. */
   public async control(input: ControlRequest, actor: string): Promise<NetworkSnapshot> {
     const command = controlRequestSchema.parse(input);
+    if (command.targetType === "local_scene") return this.applyLightScene(Number(command.targetId), actor, command.fadeDurationMs ?? 0);
     if (command.fadeDurationMs && ["on", "off", "set_level"].includes(command.operation)) {
       await this.fadeToLevel(command);
       this.store.audit(actor, "lighting.control", { targetType: command.targetType, targetId: command.targetId ?? null, operation: command.operation, fadeDurationMs: command.fadeDurationMs });
@@ -225,10 +226,15 @@ export class CasambiService {
     const targetLevel = command.operation === "off" ? 0 : command.operation === "on" ? 255 : Number(command.value);
     const unitIds = this.targetUnitIds(command, snapshot);
     if (unitIds.length === 0) throw new Error("The control target has no assigned lamps.");
+    await this.fadeUnits(new Map(unitIds.map(unitId => [unitId, targetLevel])), command.fadeDurationMs || 0, snapshot);
+  }
+
+  /** Steps each unit from its current level to its own target level in bounded 200 ms increments. */
+  private async fadeUnits(targets: Map<number, number>, fadeDurationMs: number, snapshot: NetworkSnapshot): Promise<void> {
     const startLevels = new Map(snapshot.units.map(unit => [unit.id, unit.state.dimmer ?? (unit.state.on ? 255 : 0)]));
-    const steps = Math.max(1, Math.min(60, Math.ceil((command.fadeDurationMs || 0) / 200)));
+    const steps = Math.max(1, Math.min(60, Math.ceil(fadeDurationMs / 200)));
     for (let step = 1; step <= steps; step += 1) {
-      for (const unitId of unitIds) {
+      for (const [unitId, targetLevel] of Array.from(targets)) {
         const start = startLevels.get(unitId) ?? 0;
         const level = Math.round(start + ((targetLevel - start) * step) / steps);
         await this.bridge.execute("control", { targetType: "unit", targetId: unitId, operation: "set_level", value: level });
@@ -236,6 +242,47 @@ export class CasambiService {
       if (step < steps) await new Promise(resolve => setTimeout(resolve, 200));
     }
     this.lastSnapshot = await this.bridge.snapshot();
+  }
+
+  /** Saves the current setting of a group, room, or the whole network as a named scene. */
+  public captureLightScene(name: string, scope: SceneScope): LightSceneRecord {
+    return this.store.createLightScene(name, scope, this.captureSceneLamps(scope));
+  }
+
+  /** Overwrites a scene with its scope's current setting, keeping its name. */
+  public recaptureLightScene(id: number): LightSceneRecord {
+    const scene = this.store.getLightScene(id);
+    if (!scene) throw new Error("Scene does not exist.");
+    return this.store.updateLightScene(id, { lamps: this.captureSceneLamps(scene.scope) });
+  }
+
+  /** Restores every lamp of a scene: colour temperature first, then brightness, optionally as one smooth fade. */
+  public async applyLightScene(id: number, actor: string, fadeDurationMs = 0): Promise<NetworkSnapshot> {
+    const scene = this.store.getLightScene(id);
+    if (!scene) throw new Error("Scene does not exist.");
+    for (const lamp of scene.lamps) {
+      if (lamp.temperature !== null && lamp.level > 0) await this.runControl({ targetType: "unit", targetId: lamp.unitId, operation: "set_temperature", value: lamp.temperature });
+    }
+    if (fadeDurationMs > 0) await this.fadeUnits(new Map(scene.lamps.map(lamp => [lamp.unitId, lamp.level])), fadeDurationMs, this.cachedSnapshot());
+    else {
+      for (const lamp of scene.lamps) await this.runControl({ targetType: "unit", targetId: lamp.unitId, operation: "set_level", value: lamp.level });
+      this.lastSnapshot = await this.bridge.snapshot();
+    }
+    this.store.audit(actor, "lighting.scene_applied", { sceneId: id, fadeDurationMs });
+    const snapshot = this.withMetadata(this.lastSnapshot);
+    this.events.publish("network.snapshot", snapshot);
+    return snapshot;
+  }
+
+  private captureSceneLamps(scope: SceneScope): SceneLamp[] {
+    const scoped = new Set(this.targetUnitIds({ targetType: scope.type, targetId: scope.id, operation: "on" }, this.lastSnapshot));
+    const lamps = this.lastSnapshot.units.filter(unit => scoped.has(unit.id) && isLampUnit(unit)).map(unit => ({
+      unitId: unit.id,
+      level: unit.state.on ? unit.state.dimmer ?? 255 : 0,
+      temperature: unit.capabilities.some(capability => capability.type === "temperature") ? unit.state.temperature ?? null : null,
+    }));
+    if (lamps.length === 0) throw new Error("At least one connected lamp is required for a scene.");
+    return lamps;
   }
 
   /** Sends one control command, letting a newer absolute value replace an unsent older one for the same target. */

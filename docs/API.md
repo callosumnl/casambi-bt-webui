@@ -16,6 +16,10 @@ All application endpoints begin with `/api/v1`. Send either an `Authorization: B
 | `POST` | `/control` | user | Runs any supported control request. |
 | `POST` | `/devices/:id/on`, `/devices/:id/off` | user | Convenience lamp on/off controls. |
 | `POST` | `/scenes/:id/activate` | user | Activates an upstream Casambi scene. |
+| `GET`, `POST` | `/local-scenes` | user | Lists saved scenes, or saves the current setting of a scope as a new scene: `{ name, scope: { type: "group" \| "room" \| "network", id } }` (`id` is `null` for `network`). |
+| `POST` | `/local-scenes/:id/capture` | user | Updates a saved scene to the current setting of its scope. |
+| `PATCH`, `DELETE` | `/local-scenes/:id` | user | Renames (`{ name }`) or deletes a saved scene. |
+| `POST` | `/local-scenes/:id/apply` | user | Applies a saved scene, optionally with `{ fadeDurationMs }` (0–60,000). |
 | `POST` | `/rooms/:id/apply-default` | user | Applies the room’s saved default brightness; an optional `fadeDurationMs` from 0 to 60,000 enables a smooth transition. |
 | `GET`, `POST` | `/schedules` | user | Lists permitted schedules, including `nextRunAt`, or creates a timer owned by the caller. |
 | `PATCH`, `DELETE` | `/schedules/:id` | owner or admin | Edits or deletes a timer. |
@@ -49,7 +53,7 @@ curl -sS http://raspberrypi.local:3000/api/v1/network \
 
 ## Generic control request
 
-The `/control` body has `targetType`, optional `targetId`, `operation`, optional `value`, and optional `fadeDurationMs`. `targetType` is one of `unit`, `group`, `room`, `scene`, or `network`. The operations are `on`, `off`, `set_level`, `set_temperature`, `set_color`, `set_white`, `set_vertical`, `set_slider`, `set_xy`, and `activate_scene`. Scene targets accept only `activate_scene`. For `on`, `off`, and `set_level`, `fadeDurationMs` may be an integer from 0 to 60,000. The response is the updated network snapshot; send `Prefer: return=minimal` to receive `204 No Content` instead when the same snapshot already arrives over the event stream. While an absolute-value command (`set_level`, `set_temperature`, `set_color`, `set_white`, `set_vertical`, `set_slider`, `set_xy`) for a target is still waiting in the bridge queue, a newer one for the same target and operation replaces it, and both requests receive the result of the newer value. Room targets whose lamps exactly match a Casambi group are sent as one group command.
+The `/control` body has `targetType`, optional `targetId`, `operation`, optional `value`, and optional `fadeDurationMs`. `targetType` is one of `unit`, `group`, `room`, `scene` (stored in the Casambi network), `local_scene` (saved on the Pi), or `network`. The operations are `on`, `off`, `set_level`, `set_temperature`, `set_color`, `set_white`, `set_vertical`, `set_slider`, `set_xy`, and `activate_scene`. Scene and saved-scene targets accept only `activate_scene`; a saved scene also accepts `fadeDurationMs`. For `on`, `off`, and `set_level`, `fadeDurationMs` may be an integer from 0 to 60,000. The response is the updated network snapshot; send `Prefer: return=minimal` to receive `204 No Content` instead when the same snapshot already arrives over the event stream. While an absolute-value command (`set_level`, `set_temperature`, `set_color`, `set_white`, `set_vertical`, `set_slider`, `set_xy`) for a target is still waiting in the bridge queue, a newer one for the same target and operation replaces it, and both requests receive the result of the newer value. Room targets whose lamps exactly match a Casambi group are sent as one group command.
 
 ```bash
 # Set lamp 4 to 65% in upstream 0–255 brightness units with a 1.2-second fade.
