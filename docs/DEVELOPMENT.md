@@ -49,6 +49,6 @@ CASAMBI_JWT='…' node scripts/verify-live-bridge.mjs  # hardware smoke test, on
 
 ## Deployment notes
 
-- `deploy/install.sh` installs to `/opt/casambi-bt-webui`, which is read-only to the service. It runs as the `casambi` user (member of the `bluetooth` group) and keeps runtime data in `/var/lib/casambi-bt-webui/` (`CASAMBI_DB_PATH`, and `CASAMBI_CACHE_PATH` for the upstream `casambi-bt-store` cache). Env template: `deploy/environment.template`.
+- `deploy/install.sh` installs to `/opt/casambi-bt-webui`, which is read-only to the service. Run it as the checkout's owner (it uses `sudo` itself); it builds `.venv`, `node_modules`, and `dist/` as that owner even when started with `sudo`, because root-owned build files break later updates (`EACCES` in `node_modules/.vite-temp`). It runs as the `casambi` user (member of the `bluetooth` group) and keeps runtime data in `/var/lib/casambi-bt-webui/` (`CASAMBI_DB_PATH`, and `CASAMBI_CACHE_PATH` for the upstream `casambi-bt-store` cache). Env template: `deploy/environment.template`.
 - The unit and env templates are duplicated under `src/casambi_bt_webui/templates/` for the Python companion package (`casambi-bt-webui doctor|systemd-template|write-templates`). Keep both copies identical; `scripts/validate-package.sh` (CI) fails on any drift.
 - Upstream quirk: the bridge keeps the `BLEDevice` from its immediate discovery scan, because otherwise upstream re-looks it up in the BlueZ cache, where the entry may have expired.

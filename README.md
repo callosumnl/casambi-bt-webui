@@ -49,8 +49,10 @@ Edit `.env` before installing the service. Generate **different** high-entropy v
 openssl rand -base64 48
 nano .env
 chmod +x deploy/install.sh
-sudo APP_DIR=/opt/casambi-bt-webui ./deploy/install.sh
+APP_DIR=/opt/casambi-bt-webui ./deploy/install.sh
 ```
+
+Run the installer as your own account, not with `sudo`: it asks for `sudo` itself where root is needed, and it builds the Python environment, `node_modules`, and `dist/` as the owner of the checkout. Likewise, never run `pnpm install` or `pnpm build` with `sudo`.
 
 The installer creates a least-privilege `casambi` service user, Python virtual environment, build output, environment file, systemd service, and a protected runtime-data directory. The upstream `casambi-bt` package caches network state in `/var/lib/casambi-bt-webui/casambi-bt-store`; this directory is owned by the service account and is deliberately separate from the read-only application code in `/opt`. Confirm the service is running and watch its logs.
 
@@ -71,6 +73,17 @@ Open `http://<pi-hostname-or-ip>:3000`. The first visitor must create the initia
 | Back up state | Stop the service and securely copy all of `/var/lib/casambi-bt-webui/`, including the SQLite database and upstream Casambi cache. |
 | Restore state | Stop the service, restore `/var/lib/casambi-bt-webui/` with owner `casambi:casambi`, then start the service. |
 | Development without hardware | Set `CASAMBI_MOCK_MODE=true`, then run `pnpm dev`; mock fixtures are clearly marked development-only. |
+
+### Troubleshooting `EACCES` during `pnpm build`
+
+If an update fails with `EACCES: permission denied, open '/opt/casambi-bt-webui/node_modules/.vite-temp/…'`, an earlier install or build ran as root and left root-owned files in the checkout. Give the checkout back to your account and build again:
+
+```bash
+sudo chown -R "$USER":"$USER" /opt/casambi-bt-webui
+cd /opt/casambi-bt-webui && corepack pnpm install --frozen-lockfile && pnpm build && sudo systemctl restart casambi-bt-webui
+```
+
+The service only reads the application code, so this does not affect it; its data in `/var/lib/casambi-bt-webui/` keeps its own owner.
 
 ### Troubleshooting a `casambi-bt-store` permission error
 
