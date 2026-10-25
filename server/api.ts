@@ -10,7 +10,7 @@ import { DurableScheduler, nextRunAt, validateCron, validateTimezone } from "./s
 import { SolarSchedule, validateSolarLocation, validateSolarSchedule } from "./solar";
 import { switchRulePatchSchema, switchRuleSchema } from "./switchRules";
 import { openApiDocument } from "./openapi";
-import { apiKeyCreateSchema, awayDateSetSchema, configSchema, credentialsSchema, deviceMetadataSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userRoleSchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, configSchema, credentialsSchema, deviceMetadataSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
 
 type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
@@ -37,8 +37,15 @@ export function classifyError(error: unknown): { status: number; code: string; m
   if (message.includes("UNIQUE constraint failed")) return { status: 409, code: "CONFLICT", message: "That name is already in use." };
   if (message.includes("FOREIGN KEY constraint failed")) return { status: 422, code: "VALIDATION_ERROR", message: "A referenced item does not exist." };
   if (message.includes("does not exist")) return { status: 404, code: "NOT_FOUND", message };
+  if (message.includes("is used by")) return { status: 409, code: "IN_USE", message };
   if (/\b(required|invalid|must|cannot|has no assigned lamps)\b/i.test(message)) return { status: 422, code: "VALIDATION_ERROR", message };
   return { status: 500, code: "INTERNAL_ERROR", message };
+}
+
+/** Refuses to delete a room or saved scene that timers, switch rules, or scenes still point at. */
+function assertUnused(store: LocalStore, target: { type: "room" | "local_scene"; id: number }, label: string): void {
+  const usage = store.usageOf(target);
+  if (usage.length) throw new Error(`This ${label} is used by ${usage.join(", ")}. Change or delete those first.`);
 }
 
 function parsed<T>(schema: z.ZodType<T>, input: unknown): T { return schema.parse(input); }
@@ -103,7 +110,7 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
   api.post("/local-scenes", requireAuth(store), route(async (request, response) => { const input = parsed(sceneCreateSchema, request.body); const scene = service.captureLightScene(input.name, input.scope); store.audit(principal(response).name, "scene.created", { sceneId: scene.id }); events.publish("local_scenes.changed", {}); response.status(201).json(scene); }));
   api.post("/local-scenes/:id/capture", requireAuth(store), route(async (request, response) => { const scene = service.recaptureLightScene(Number(request.params.id)); store.audit(principal(response).name, "scene.updated", { sceneId: scene.id }); events.publish("local_scenes.changed", {}); response.json(scene); }));
   api.patch("/local-scenes/:id", requireAuth(store), route(async (request, response) => { const input = parsed(sceneRenameSchema, request.body); const scene = store.updateLightScene(Number(request.params.id), { name: input.name }); events.publish("local_scenes.changed", {}); response.json(scene); }));
-  api.delete("/local-scenes/:id", requireAuth(store), route(async (request, response) => { store.deleteLightScene(Number(request.params.id)); store.audit(principal(response).name, "scene.deleted", { sceneId: Number(request.params.id) }); events.publish("local_scenes.changed", {}); response.status(204).send(); }));
+  api.delete("/local-scenes/:id", requireAuth(store), route(async (request, response) => { assertUnused(store, { type: "local_scene", id: Number(request.params.id) }, "scene"); store.deleteLightScene(Number(request.params.id)); store.audit(principal(response).name, "scene.deleted", { sceneId: Number(request.params.id) }); events.publish("local_scenes.changed", {}); response.status(204).send(); }));
   api.post("/local-scenes/:id/apply", requireAuth(store), route(async (request, response) => { const input = parsed(fadeBodySchema, request.body ?? {}); response.json(await service.control({ targetType: "local_scene", targetId: Number(request.params.id), operation: "activate_scene", ...(input.fadeDurationMs ? { fadeDurationMs: input.fadeDurationMs } : {}) }, principal(response).name)); }));
   api.post("/devices/:id/on", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "on" }, principal(response).name)); }));
   api.post("/devices/:id/off", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "off" }, principal(response).name)); }));
@@ -124,19 +131,33 @@ export function createCasambiApi({ store, service, events, scheduler }: Dependen
   api.post("/admin/disconnect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.disconnect()); }));
   api.post("/admin/rooms", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomCreateSchema, request.body); response.status(201).json(store.createRoom(input.name, input.defaultBrightnessPercent)); }));
   api.put("/admin/rooms/:id/default-brightness", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomDefaultBrightnessSchema, request.body); const room = store.setRoomDefaultBrightness(Number(request.params.id), input.defaultBrightnessPercent); store.audit(principal(response).name, "room.default_brightness.updated", { roomId: room.id, defaultBrightnessPercent: room.defaultBrightnessPercent }); response.json(room); }));
-  api.delete("/admin/rooms/:id", requireAuth(store, "admin"), route(async (request, response) => { store.deleteRoom(Number(request.params.id)); store.audit(principal(response).name, "room.deleted", { roomId: Number(request.params.id) }); response.status(204).send(); }));
+  api.patch("/admin/rooms/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomRenameSchema, request.body); const room = store.renameRoom(Number(request.params.id), input.name); store.audit(principal(response).name, "room.renamed", { roomId: room.id, name: room.name }); response.json(room); }));
+  api.delete("/admin/rooms/:id", requireAuth(store, "admin"), route(async (request, response) => { assertUnused(store, { type: "room", id: Number(request.params.id) }, "room"); store.deleteRoom(Number(request.params.id)); store.audit(principal(response).name, "room.deleted", { roomId: Number(request.params.id) }); response.status(204).send(); }));
   api.get("/admin/away-date-sets", requireAuth(store, "admin"), (_request, response) => response.json(store.listAwayDateSets()));
   api.post("/admin/away-date-sets", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(awayDateSetSchema, request.body); const set = store.createAwayDateSet(input.name, normalizeHolidayDates(input.dates)); scheduler.reload(); store.audit(principal(response).name, "away_date_set.created", { setId: set.id, name: set.name }); response.status(201).json(set); }));
   api.patch("/admin/away-date-sets/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(awayDateSetSchema.partial(), request.body); const patch = { ...(input.name === undefined ? {} : { name: input.name }), ...(input.dates === undefined ? {} : { dates: normalizeHolidayDates(input.dates) }) }; const set = store.updateAwayDateSet(Number(request.params.id), patch); scheduler.reload(); store.audit(principal(response).name, "away_date_set.updated", { setId: set.id, name: set.name }); response.json(set); }));
   api.delete("/admin/away-date-sets/:id", requireAuth(store, "admin"), route(async (request, response) => { store.deleteAwayDateSet(Number(request.params.id)); scheduler.reload(); store.audit(principal(response).name, "away_date_set.deleted", { setId: Number(request.params.id) }); response.status(204).send(); }));
-  api.put("/admin/devices/:id/metadata", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(deviceMetadataSchema, request.body); store.setUnitMetadata(Number(request.params.id), input.customName, input.roomId); response.status(204).send(); }));
+  api.put("/admin/devices/:id/metadata", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(deviceMetadataSchema, request.body); const id = Number(request.params.id); const current = store.getUnitMetadata().find(metadata => metadata.unitId === id); store.setUnitMetadata(id, input.customName === undefined ? current?.customName ?? null : input.customName, input.roomId === undefined ? current?.roomId ?? null : input.roomId); response.status(204).send(); }));
   api.get("/admin/users", requireAuth(store, "admin"), (_request, response) => response.json(store.listUsers()));
   api.post("/admin/users", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(userCreateSchema, request.body); response.status(201).json(store.createUser(input.username, input.password, input.role)); }));
-  api.patch("/admin/users/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(userRoleSchema, request.body); response.json(store.setUserRole(Number(request.params.id), input.role)); }));
+  api.patch("/admin/users/:id", requireAuth(store, "admin"), route(async (request, response) => {
+    const input = parsed(userUpdateSchema, request.body); const id = Number(request.params.id);
+    if (input.role) store.setUserRole(id, input.role);
+    if (input.password) store.setUserPassword(id, input.password);
+    store.audit(principal(response).name, "user.updated", { userId: id, ...(input.role ? { role: input.role } : {}), passwordReset: Boolean(input.password) });
+    response.json(store.getUserById(id));
+  }));
+  api.delete("/admin/users/:id", requireAuth(store, "admin"), route(async (request, response) => {
+    // The deleted account's timers move to the admin who deletes it (or, for an admin API key, to another admin).
+    const actor = principal(response); const id = Number(request.params.id);
+    const heir = actor.kind === "user" ? actor.id : store.listUsers().find(user => user.role === "admin" && user.id !== id)?.id;
+    if (!heir) throw new Error("At least one admin account must remain.");
+    store.deleteUser(id, heir); store.audit(actor.name, "user.deleted", { userId: id, timersMovedTo: heir }); response.status(204).send();
+  }));
   api.get("/admin/api-keys", requireAuth(store, "admin"), (_request, response) => response.json(store.listApiKeys()));
   api.post("/admin/api-keys", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(apiKeyCreateSchema, request.body); const key = store.createApiKey(input.label, input.role); store.audit(principal(response).name, "api_key.created", { id: key.id, label: key.label, role: key.role }); response.status(201).json(key); }));
   api.delete("/admin/api-keys/:id", requireAuth(store, "admin"), route(async (request, response) => { store.revokeApiKey(Number(request.params.id)); store.audit(principal(response).name, "api_key.revoked", { id: Number(request.params.id) }); response.status(204).send(); }));
-  api.get("/admin/audit", requireAuth(store, "admin"), (_request, response) => response.json(store.recentAudit()));
+  api.get("/admin/audit", requireAuth(store, "admin"), route(async (request, response) => { const query = parsed(auditQuerySchema, request.query); response.json(store.recentAudit(query.limit, query.action)); }));
   api.get("/admin/switch-activity", requireAuth(store, "admin"), (_request, response) => response.json(service.recentSwitchActivity()));
   api.get("/admin/switch-rules", requireAuth(store, "admin"), (_request, response) => response.json(store.listSwitchRules()));
   api.post("/admin/switch-rules", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(switchRuleSchema, request.body); const rule = store.createSwitchRule(input); store.audit(principal(response).name, "switch_rule.created", { ruleId: rule.id }); response.status(201).json(rule); }));

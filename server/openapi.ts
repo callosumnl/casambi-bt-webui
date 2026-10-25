@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   apiKeyCreateSchema, awayDateSetSchema, configSchema, credentialsSchema, deviceMetadataSchema, fadeBodySchema, roomCreateSchema,
-  roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userRoleSchema,
+  roomDefaultBrightnessSchema, roomRenameSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userUpdateSchema,
 } from "./apiSchemas";
 import { controlRequestSchema, groupSchema, networkSnapshotSchema, sceneSchema, unitSchema } from "./casambi/types";
 import { switchRulePatchSchema, switchRuleSchema } from "./switchRules";
@@ -34,7 +34,8 @@ const schemas: Record<string, JsonSchema> = {
   // Requests: generated from the schemas the API validates with.
   Credentials: fromZod(credentialsSchema),
   UserCreate: fromZod(userCreateSchema),
-  UserRoleChange: fromZod(userRoleSchema),
+  UserUpdate: { ...fromZod(userUpdateSchema), examples: [{ role: "user" }, { password: "a-new-long-password" }] },
+  RoomRename: fromZod(roomRenameSchema),
   ApiKeyCreate: fromZod(apiKeyCreateSchema),
   CasambiConfigUpdate: { ...fromZod(configSchema), examples: [{ networkAddress: "AB:CD:EF:01:23:45", networkPassword: "network password", pollingEnabled: true, pollingIntervalSeconds: 60 }] },
   ControlRequest: { ...fromZod(controlRequestSchema), examples: [{ targetType: "unit", targetId: 1, operation: "set_level", value: 128 }, { targetType: "group", targetId: 2, operation: "off", fadeDurationMs: 2000 }, { targetType: "local_scene", targetId: 3, operation: "activate_scene" }] },
@@ -140,7 +141,7 @@ const operations: Operation[] = [
   { method: "post", path: "/local-scenes", tag: "Scenes", summary: "Save the current lights as a scene", description: "Captures each lamp of the group, room, or whole network (`id` null).", access: "user", body: "LightSceneCreate", bodyRequired: true, responses: { 201: { description: "Scene saved.", schema: "LightScene" } } },
   { method: "post", path: "/local-scenes/{id}/capture", tag: "Scenes", summary: "Update a scene to the current lights", access: "user", responses: { 200: { description: "Scene updated.", schema: "LightScene" } } },
   { method: "patch", path: "/local-scenes/{id}", tag: "Scenes", summary: "Rename a scene", access: "user", body: "LightSceneRename", bodyRequired: true, responses: { 200: { description: "Scene renamed.", schema: "LightScene" } } },
-  { method: "delete", path: "/local-scenes/{id}", tag: "Scenes", summary: "Delete a scene", access: "user", responses: { 204: noContent } },
+  { method: "delete", path: "/local-scenes/{id}", tag: "Scenes", summary: "Delete a scene", description: "Refused while timers or switch rules use it.", access: "user", responses: { 204: noContent, 409: { description: "Still in use; the message names the users.", schema: "Error" } } },
   { method: "post", path: "/local-scenes/{id}/apply", tag: "Scenes", summary: "Apply a scene", access: "user", body: "Fade", responses: { 200: snapshot } },
   // Timers.
   { method: "get", path: "/schedules", tag: "Timers", summary: "Timers", description: "Admins see all timers, users their own.", access: "user", responses: { 200: { description: "Timers.", schema: list("Schedule") } } },
@@ -159,8 +160,9 @@ const operations: Operation[] = [
   // Administration: rooms, devices, away dates.
   { method: "post", path: "/admin/rooms", tag: "Admin: rooms and devices", summary: "Create a room", access: "admin", body: "RoomCreate", bodyRequired: true, responses: { 201: { description: "Room created.", schema: "Room" }, 409: { description: "The name is already in use.", schema: "Error" } } },
   { method: "put", path: "/admin/rooms/{id}/default-brightness", tag: "Admin: rooms and devices", summary: "Set a room's default brightness", access: "admin", body: "RoomDefaultBrightness", bodyRequired: true, responses: { 200: { description: "Updated.", schema: "Room" } } },
-  { method: "delete", path: "/admin/rooms/{id}", tag: "Admin: rooms and devices", summary: "Delete a room", access: "admin", responses: { 204: noContent } },
-  { method: "put", path: "/admin/devices/{id}/metadata", tag: "Admin: rooms and devices", summary: "Name a unit and assign its room", access: "admin", body: "DeviceMetadata", bodyRequired: true, responses: { 204: noContent } },
+  { method: "patch", path: "/admin/rooms/{id}", tag: "Admin: rooms and devices", summary: "Rename a room", access: "admin", body: "RoomRename", bodyRequired: true, responses: { 200: { description: "Renamed.", schema: "Room" }, 409: { description: "The name is already in use.", schema: "Error" } } },
+  { method: "delete", path: "/admin/rooms/{id}", tag: "Admin: rooms and devices", summary: "Delete a room", description: "Refused while timers, switch rules, or scenes use it.", access: "admin", responses: { 204: noContent, 409: { description: "Still in use; the message names the users.", schema: "Error" } } },
+  { method: "put", path: "/admin/devices/{id}/metadata", tag: "Admin: rooms and devices", summary: "Name a unit and assign its room", description: "Fields left out keep their value; an empty or null name restores the name from Casambi.", access: "admin", body: "DeviceMetadata", bodyRequired: true, responses: { 204: noContent } },
   { method: "get", path: "/admin/away-date-sets", tag: "Admin: rooms and devices", summary: "Away-date sets", access: "admin", responses: { 200: { description: "Sets.", schema: list("AwayDateSet") } } },
   { method: "post", path: "/admin/away-date-sets", tag: "Admin: rooms and devices", summary: "Create an away-date set", access: "admin", body: "AwayDateSetCreate", bodyRequired: true, responses: { 201: { description: "Created.", schema: "AwayDateSet" } } },
   { method: "patch", path: "/admin/away-date-sets/{id}", tag: "Admin: rooms and devices", summary: "Update an away-date set", access: "admin", body: "AwayDateSetUpdate", bodyRequired: true, responses: { 200: { description: "Updated.", schema: "AwayDateSet" } } },
@@ -168,11 +170,12 @@ const operations: Operation[] = [
   // Administration: accounts and keys.
   { method: "get", path: "/admin/users", tag: "Admin: accounts", summary: "Accounts", access: "admin", responses: { 200: { description: "Accounts.", schema: list("User") } } },
   { method: "post", path: "/admin/users", tag: "Admin: accounts", summary: "Create an account", access: "admin", body: "UserCreate", bodyRequired: true, responses: { 201: { description: "Created.", schema: "User" }, 409: { description: "The username is already in use.", schema: "Error" } } },
-  { method: "patch", path: "/admin/users/{id}", tag: "Admin: accounts", summary: "Change an account's role", description: "Takes effect immediately; at least one admin must remain.", access: "admin", body: "UserRoleChange", bodyRequired: true, responses: { 200: { description: "Updated.", schema: "User" } } },
+  { method: "patch", path: "/admin/users/{id}", tag: "Admin: accounts", summary: "Change an account's role or reset its password", description: "Takes effect immediately; at least one admin must remain.", access: "admin", body: "UserUpdate", bodyRequired: true, responses: { 200: { description: "Updated.", schema: "User" } } },
+  { method: "delete", path: "/admin/users/{id}", tag: "Admin: accounts", summary: "Delete an account", description: "Its timers move to the admin who deletes it. You cannot delete your own account or the last admin.", access: "admin", responses: { 204: noContent } },
   { method: "get", path: "/admin/api-keys", tag: "Admin: accounts", summary: "API keys", access: "admin", responses: { 200: { description: "Keys (without the secret).", schema: list("ApiKey") } } },
   { method: "post", path: "/admin/api-keys", tag: "Admin: accounts", summary: "Create an API key", access: "admin", body: "ApiKeyCreate", bodyRequired: true, responses: { 201: { description: "Created; the token is shown only now.", schema: "ApiKeyCreated" } } },
   { method: "delete", path: "/admin/api-keys/{id}", tag: "Admin: accounts", summary: "Revoke an API key", access: "admin", responses: { 204: noContent } },
-  { method: "get", path: "/admin/audit", tag: "Admin: accounts", summary: "Recent audit entries", access: "admin", responses: { 200: { description: "The latest 100 entries.", schema: list("AuditEntry") } } },
+  { method: "get", path: "/admin/audit", tag: "Admin: accounts", summary: "Recent audit entries", description: "Newest first. The log keeps the latest 20,000 entries.", access: "admin", query: [{ name: "limit", description: "1-500, default 100.", schema: { type: "integer", minimum: 1, maximum: 500 } }, { name: "action", description: "Action prefix, e.g. `bridge.` or `schedule.`.", schema: { type: "string" } }], responses: { 200: { description: "Entries.", schema: list("AuditEntry") } } },
   // Administration: switches.
   { method: "get", path: "/admin/switch-activity", tag: "Admin: switches", summary: "Recent switch presses", access: "admin", responses: { 200: { description: "Newest first.", schema: list("SwitchPress") } } },
   { method: "get", path: "/admin/switch-rules", tag: "Admin: switches", summary: "Switch rules", access: "admin", responses: { 200: { description: "Rules.", schema: list("SwitchRule") } } },

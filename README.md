@@ -1,6 +1,8 @@
-# Casambi BT WebUI
+# Casambi BT WebGUI
 
-**Casambi BT WebUI** is a self-hosted lighting-control appliance for a Raspberry Pi. It places a cyberpunk-styled React interface, a JWT- and API-key-protected REST API, a local SQLite configuration store, durable timer rules, and a supervised Node.js-to-Python Bluetooth bridge behind one local service. The Python bridge uses [`lkempf/casambi-bt`](https://github.com/lkempf/casambi-bt), which must be treated as an unofficial, alpha-quality Casambi protocol implementation. [1]
+**Casambi BT WebGUI** is a self-hosted lighting-control appliance for a Raspberry Pi. It places a cyberpunk-styled React interface, a JWT- and API-key-protected REST API, a local SQLite configuration store, durable timer rules, and a supervised Node.js-to-Python Bluetooth bridge behind one local service. The Python bridge uses [`lkempf/casambi-bt`](https://github.com/lkempf/casambi-bt), which must be treated as an unofficial, alpha-quality Casambi protocol implementation. [1]
+
+> **Disclaimer:** Casambi BT WebGUI is an independent open-source project. It is not affiliated with, endorsed by, or supported by Casambi Technologies. "Casambi" is a trademark of Casambi Technologies and is used here only to describe the lighting system this software works with. The Bluetooth protocol support comes from the unofficial [`casambi-bt`](https://github.com/lkempf/casambi-bt) library; use this software at your own risk.
 
 Sign in with a local account; the first visitor creates the initial `admin` account.
 
@@ -13,7 +15,7 @@ Sign in with a local account; the first visitor creates the initial `admin` acco
 | Casambi Bluetooth bridge | Node.js supervises a long-lived Python JSON-lines subprocess that owns `casambi-bt` discovery, connection, controls, and callbacks. |
 | User Dashboard | Compact status line, then group, room, and all-lights controls with their scenes, then individual lamps with capability-aware brightness and temperature. Switches and sensors are not listed as lamps. |
 | Scenes | Save the current setting of a group, room, or all lights as a named scene, apply it with one tap, update it to the current lights, and use it in timers and switch rules. Scenes stored in the Casambi network can be activated too. |
-| Admin Panel | Casambi connection settings, discovery, connect/disconnect, Bluetooth worker state and restart, custom names, rooms with default brightness, local accounts, REST API keys (create, list, revoke), and shared away-date sets. |
+| Admin Panel | Casambi connection settings, discovery, connect/disconnect, Bluetooth worker state and restart, unit names and rooms, rooms (rename, default brightness, delete), local accounts (create, role, new password, delete), REST API keys (create, list, revoke), shared away-date sets, switch rules, and the audit log. |
 | Timers and polling | SQLite-backed timers at a time on chosen days or at sunrise/sunset (±180 min) in IANA time zones, with away dates and shared away-date sets, optional fades, and saved scenes as targets; plus configurable 5–3,600 second state polling. |
 | Physical switches | Live switch activity and switch rules: a tap, hold, or release-after-hold of a Casambi button can toggle, switch, dim, or apply a scene. |
 | REST and real time | Versioned REST API with JWT or API-key authentication, described by an OpenAPI 3.1 document at `/api/v1/openapi.json` and browsable in the web UI under **API**; Server-Sent Events for live state, connection, switch, and timer updates. |
@@ -141,6 +143,10 @@ git add .
 git commit -m "Describe the change"
 git push origin main
 ```
+
+## License
+
+Casambi BT WebGUI is licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE) for attribution and the trademark notice. It depends on [`casambi-bt`](https://github.com/lkempf/casambi-bt) by [lkempf](https://github.com/lkempf), which is also licensed under the Apache License 2.0 and is installed as a separate package.
 
 ## References
 

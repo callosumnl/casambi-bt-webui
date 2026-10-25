@@ -1,0 +1,12 @@
+Casambi BT WebGUI
+Copyright 2026 Casambi BT WebUI contributors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+It controls Casambi lighting through the casambi-bt library
+(https://github.com/lkempf/casambi-bt), which is licensed separately under the
+Apache License, Version 2.0. casambi-bt is installed as a dependency and is not
+included in this repository.
+
+"Casambi" is a trademark of Casambi Technologies. This project is independent
+and is not affiliated with, endorsed by, or supported by Casambi Technologies.

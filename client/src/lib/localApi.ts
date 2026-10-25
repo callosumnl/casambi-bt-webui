@@ -13,6 +13,9 @@ export type AwayDateSet = { id: number; name: string; dates: string[]; createdAt
 export type Schedule = { id: number; name: string; cronExpression: string; timezone: string; command: { targetType: string; targetId?: number | string | null; operation: string; value?: unknown; fadeDurationMs?: number }; solar?: SolarSchedule | null; holidayDates: string[]; awayDateSetId: number | null; awayDateSet: AwayDateSet | null; enabled: boolean; lastRunAt: string | null; nextRunAt?: string | null };
 
 /** An API key as listed by the server; the secret token is only returned once, at creation. */
+export type Room = NetworkSnapshot["rooms"][number];
+export type LocalUser = { id: number; username: string; role: Role; createdAt: string };
+export type AuditEntry = { id: number; actor: string; action: string; detail: Record<string, unknown>; createdAt: string };
 export type ApiKey = { id: number; label: string; prefix: string; role: Role; createdAt: string; lastUsedAt: string | null; revokedAt: string | null };
 export type SwitchTrigger = "tap" | "hold" | "release_after_hold";
 /** A reported button message; `trigger` is null for raw activity that never drives a rule. */
@@ -41,12 +44,24 @@ export class LocalApi {
     }
     if (response.status === 204) return undefined as T;
     // Some failures (e.g. the rate limiter's 429) have a non-JSON body; keep the HTTP status message instead of a parse error.
-    const data = await response.json().catch(() => ({})) as T & { error?: { message: string } };
-    if (!response.ok) throw new Error(data.error?.message || `Request failed with HTTP ${response.status}.`);
+    const data = await response.json().catch(() => ({})) as T & { error?: { message: string; fields?: ValidationFields } };
+    if (!response.ok) throw new Error(describeError(data.error, response.status));
     return data;
   }
 
   public eventUrl(): string { return `/api/v1/events?access_token=${encodeURIComponent(this.token || "")}`; }
+}
+
+type ValidationFields = { formErrors?: string[]; fieldErrors?: Record<string, string[] | undefined> };
+
+/** The server's message plus, for validation errors, which field failed and why. */
+export function describeError(error: { message: string; fields?: ValidationFields } | undefined, status: number): string {
+  if (!error) return `Request failed with HTTP ${status}.`;
+  const details = [
+    ...(error.fields?.formErrors ?? []),
+    ...Object.entries(error.fields?.fieldErrors ?? {}).flatMap(([field, messages]) => messages?.length ? [`${field}: ${messages[0]}`] : []),
+  ];
+  return details.length ? `${error.message} ${details.join("; ")}` : error.message;
 }
 
 export function getSession(): Session | null { try { return JSON.parse(localStorage.getItem(SESSION_KEY) || "null") as Session | null; } catch { return null; } }

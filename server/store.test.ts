@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import { LocalStore } from "./store";
+import { AUDIT_RETENTION, LocalStore } from "./store";
 
 const folders: string[] = [];
 function store(): LocalStore { const folder = mkdtempSync(join(tmpdir(), "casambi-store-")); folders.push(folder); return new LocalStore(join(folder, "state.db"), "test-key"); }
@@ -86,4 +86,16 @@ describe("LocalStore", () => {
     expect(() => database.deleteRoom(999)).toThrow("Room does not exist.");
     expect(() => database.revokeApiKey(999)).toThrow("API key does not exist.");
   });
+
+  it("prunes the audit log to the newest entries and matches action prefixes literally", () => {
+    const database = store();
+    for (let index = 1; index <= AUDIT_RETENTION + 500; index += 1) database.audit("test", index % 2 ? "bridge.poll_failed" : "lighting.control", { index });
+    expect(database.recentAudit(500).length).toBe(500);
+    expect(database.recentAudit(1)[0].detail).toEqual({ index: AUDIT_RETENTION + 500 });
+    const count = (database as unknown as { db: { prepare(sql: string): { get(): { count: number } } } }).db.prepare("SELECT COUNT(*) AS count FROM audit_log").get().count;
+    expect(count).toBe(AUDIT_RETENTION);
+    expect(database.recentAudit(3, "bridge.").every(entry => entry.action === "bridge.poll_failed")).toBe(true);
+    expect(database.recentAudit(3, "bridge_")).toEqual([]);
+  });
 });
+

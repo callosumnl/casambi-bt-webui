@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=69", "wheel"]
+requires = ["setuptools>=77", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -8,7 +8,8 @@ version = "0.1.0"
 description = "Raspberry Pi deployment companion for the Casambi BT WebUI lighting-control appliance."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "LicenseRef-Proprietary"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "Casambi BT WebUI contributors" }]
 keywords = ["casambi", "bluetooth", "raspberry-pi", "lighting", "webui"]
 classifiers = [
@@ -22,7 +23,7 @@ classifiers = [
   "Programming Language :: Python :: 3.12",
   "Topic :: Home Automation",
 ]
-dependencies = ["casambi-bt>=0.3.2"]
+dependencies = ["casambi-bt>=0.3.2,<0.4"]
 
 [project.optional-dependencies]
 release = ["build>=1.2", "twine>=5"]

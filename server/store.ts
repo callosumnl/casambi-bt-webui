@@ -42,6 +42,8 @@ export type CasambiConfig = {
 };
 
 const NOW = () => new Date().toISOString();
+/** Audit entries kept; older ones are pruned (roughly a few months of normal use). */
+export const AUDIT_RETENTION = 20_000;
 
 /**
  * SQLite repository for the Raspberry Pi appliance. The database contains no
@@ -139,6 +141,28 @@ export class LocalStore {
     return this.getUserById(id)!;
   }
 
+  /** Sets a new password (administrator reset). */
+  public setUserPassword(id: number, password: string): StoredUser {
+    if (!this.getUserById(id)) throw new Error("User does not exist.");
+    const passwordSalt = randomBytes(16).toString("hex");
+    this.db.prepare("UPDATE local_users SET password_hash = ?, password_salt = ? WHERE id = ?").run(this.hashPassword(password, passwordSalt), passwordSalt, id);
+    return this.getUserById(id)!;
+  }
+
+  /** Deletes an account. Its timers move to `heirId` so automations keep running; the last admin cannot be deleted. */
+  public deleteUser(id: number, heirId: number): void {
+    const current = this.getUserById(id);
+    if (!current) throw new Error("User does not exist.");
+    if (id === heirId) throw new Error("You cannot delete your own account.");
+    if (current.role === "admin" && this.adminCount() < 2) throw new Error("At least one admin account must remain.");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE schedules SET owner_user_id = ? WHERE owner_user_id = ?").run(heirId, id);
+      this.db.prepare("DELETE FROM local_users WHERE id = ?").run(id);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
+
   /** Generates a revocable API key. The plaintext is returned only from this call. */
   public createApiKey(label: string, role: Role): ApiKeyRecord & { token: string } {
     const prefix = randomBytes(4).toString("hex");
@@ -223,6 +247,23 @@ export class LocalStore {
     this.db.prepare("UPDATE rooms SET default_brightness_percent = ? WHERE id = ?").run(this.normalizePercent(defaultBrightnessPercent), id);
     return this.getRoom(id)!;
   }
+  public renameRoom(id: number, name: string): RoomRecord {
+    if (!this.getRoom(id)) throw new Error("Room does not exist.");
+    this.db.prepare("UPDATE rooms SET name = ? WHERE id = ?").run(name.trim(), id);
+    return this.getRoom(id)!;
+  }
+  /**
+   * Names of the timers, switch rules, and scenes that point at a room or saved scene. Deleting a used item
+   * would make those fail at run time, so the API refuses it while this list is not empty.
+   */
+  public usageOf(target: { type: "room" | "local_scene"; id: number }): string[] {
+    const usedBy = (command: { targetType: string; targetId?: unknown }) => command.targetType === target.type && Number(command.targetId) === target.id;
+    return [
+      ...this.listSchedules().filter(schedule => usedBy(schedule.command)).map(schedule => `timer “${schedule.name}”`),
+      ...this.listSwitchRules().filter(rule => usedBy(rule.command)).map(rule => `switch rule “${rule.name}”`),
+      ...(target.type === "room" ? this.listLightScenes().filter(scene => scene.scope.type === "room" && scene.scope.id === target.id).map(scene => `scene “${scene.name}”`) : []),
+    ];
+  }
   public deleteRoom(id: number): void { if (this.db.prepare("DELETE FROM rooms WHERE id = ?").run(id).changes === 0) throw new Error("Room does not exist."); }
   public setUnitMetadata(unitId: number, customName: string | null, roomId: number | null): void {
     this.db.prepare("INSERT INTO unit_metadata (unit_id,custom_name,room_id) VALUES (?,?,?) ON CONFLICT(unit_id) DO UPDATE SET custom_name=excluded.custom_name,room_id=excluded.room_id").run(unitId, customName?.trim() || null, roomId);
@@ -295,10 +336,16 @@ export class LocalStore {
 
   /** Appends an immutable operational event. Never pass secret material here. */
   public audit(actor: string, action: string, detail: Record<string, unknown>): void {
-    this.db.prepare("INSERT INTO audit_log (actor,action,detail_json,created_at) VALUES (?,?,?,?)").run(actor, action, JSON.stringify(detail), NOW());
+    const info = this.db.prepare("INSERT INTO audit_log (actor,action,detail_json,created_at) VALUES (?,?,?,?)").run(actor, action, JSON.stringify(detail), NOW());
+    // Keep the log bounded on the SD card: every 500 entries, drop all but the newest AUDIT_RETENTION.
+    if (Number(info.lastInsertRowid) % 500 === 0) this.db.prepare("DELETE FROM audit_log WHERE id <= ?").run(Number(info.lastInsertRowid) - AUDIT_RETENTION);
   }
-  public recentAudit(): Array<{ id: number; actor: string; action: string; detail: Record<string, unknown>; createdAt: string }> {
-    return (this.db.prepare("SELECT id,actor,action,detail_json AS detail,created_at AS createdAt FROM audit_log ORDER BY id DESC LIMIT 100").all() as Array<{ id: number; actor: string; action: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) }));
+  /** Newest first; `action` matches a prefix such as "bridge." or "switch_rule". */
+  public recentAudit(limit = 100, action?: string): Array<{ id: number; actor: string; action: string; detail: Record<string, unknown>; createdAt: string }> {
+    const rows = action
+      ? this.db.prepare("SELECT id,actor,action,detail_json AS detail,created_at AS createdAt FROM audit_log WHERE action LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?").all(`${action.replace(/[\\%_]/g, character => `\\${character}`)}%`, limit)
+      : this.db.prepare("SELECT id,actor,action,detail_json AS detail,created_at AS createdAt FROM audit_log ORDER BY id DESC LIMIT ?").all(limit);
+    return (rows as Array<{ id: number; actor: string; action: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) }));
   }
 
   public getUserById(id: number): StoredUser | null { return (this.db.prepare("SELECT id,username,role,created_at AS createdAt FROM local_users WHERE id = ?").get(id) as StoredUser | undefined) ?? null; }

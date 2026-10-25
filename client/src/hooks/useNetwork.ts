@@ -58,6 +58,7 @@ export function useNetwork() {
   const saveScene = useCallback((name: string, scope: SceneScope) => changeScenes("/local-scenes", { method: "POST", body: JSON.stringify({ name, scope }) }), [changeScenes]);
   /** Overwrites a scene with the current setting of its group. */
   const updateScene = useCallback((id: number) => changeScenes(`/local-scenes/${id}/capture`, { method: "POST" }), [changeScenes]);
+  const renameScene = useCallback((id: number, name: string) => changeScenes(`/local-scenes/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }), [changeScenes]);
   const deleteScene = useCallback((id: number) => changeScenes(`/local-scenes/${id}`, { method: "DELETE" }), [changeScenes]);
   const applyScene = useCallback((id: number) => command({ targetType: "local_scene", targetId: id, operation: "activate_scene" }), [command]);
 
@@ -98,5 +99,5 @@ export function useNetwork() {
     return () => { live.current = false; window.clearTimeout(reopen); source.close(); };
   }, [api, loadScenes, refresh]);
 
-  return { network, loading, error, connection, refresh, command, applyRoomDefault, scenes, saveScene, updateScene, deleteScene, applyScene, api };
+  return { network, loading, error, connection, refresh, command, applyRoomDefault, scenes, saveScene, updateScene, renameScene, deleteScene, applyScene, api };
 }

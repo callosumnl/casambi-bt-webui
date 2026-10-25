@@ -11,12 +11,14 @@ import { DurableScheduler } from "./scheduler";
 import { LocalStore } from "./store";
 
 const folders: string[] = [];
+const stores = new WeakMap<object, LocalStore>();
+const instanceStore = (instance: object) => stores.get(instance)!;
 function app() {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
   const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
-  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler })); return instance;
+  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler })); stores.set(instance, store); return instance;
 }
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })));
 
@@ -175,6 +177,61 @@ describe("REST API", () => {
     await request(instance).post("/api/v1/schedules").set({ "X-API-Key": adminKey.body.token }).send({ name: "Key timer", cronExpression: "0 7 * * *", timezone: "UTC", command: { targetType: "network", operation: "on" } }).expect(201);
     await request(instance).delete(`/api/v1/admin/api-keys/${userKey.body.id}`).set(auth).expect(204);
     await request(instance).get("/api/v1/schedules").set({ "X-API-Key": userKey.body.token }).expect(401);
+  });
+
+  it("manages accounts: password reset, role change, and deletion that keeps the timers", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    const user = await request(instance).post("/api/v1/admin/users").set(auth).send({ username: "guest", password: "another-strong-password", role: "user" }).expect(201);
+    const guest = await request(instance).post("/api/v1/auth/login").send({ username: "guest", password: "another-strong-password" });
+    await request(instance).post("/api/v1/schedules").set({ Authorization: `Bearer ${guest.body.token}` }).send({ name: "Guest timer", cronExpression: "0 7 * * *", timezone: "UTC", command: { targetType: "network", operation: "on" } }).expect(201);
+    await request(instance).patch(`/api/v1/admin/users/${user.body.id}`).set(auth).send({}).expect(422);
+    await request(instance).patch(`/api/v1/admin/users/${user.body.id}`).set(auth).send({ password: "a-brand-new-password" }).expect(200);
+    await request(instance).post("/api/v1/auth/login").send({ username: "guest", password: "another-strong-password" }).expect(401);
+    await request(instance).post("/api/v1/auth/login").send({ username: "guest", password: "a-brand-new-password" }).expect(200);
+    await request(instance).delete(`/api/v1/admin/users/${admin.body.user.id}`).set(auth).expect(422);
+    await request(instance).delete(`/api/v1/admin/users/${user.body.id}`).set(auth).expect(204);
+    await request(instance).get("/api/v1/auth/me").set({ Authorization: `Bearer ${guest.body.token}` }).expect(401);
+    const timers = (await request(instance).get("/api/v1/schedules").set(auth).expect(200)).body;
+    expect(timers).toMatchObject([{ name: "Guest timer", ownerUserId: admin.body.user.id }]);
+  });
+
+  it("renames rooms and refuses to delete a room or scene that something still uses", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    const room = await request(instance).post("/api/v1/admin/rooms").set(auth).send({ name: "Studio" }).expect(201);
+    expect((await request(instance).patch(`/api/v1/admin/rooms/${room.body.id}`).set(auth).send({ name: "Atelier" }).expect(200)).body.name).toBe("Atelier");
+    const timer = await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Atelier evening", cronExpression: "0 18 * * *", timezone: "UTC", command: { targetType: "room", targetId: room.body.id, operation: "on" } }).expect(201);
+    const refused = await request(instance).delete(`/api/v1/admin/rooms/${room.body.id}`).set(auth).expect(409);
+    expect(refused.body.error.message).toBe("This room is used by timer “Atelier evening”. Change or delete those first.");
+    await request(instance).delete(`/api/v1/schedules/${timer.body.id}`).set(auth).expect(204);
+    await request(instance).delete(`/api/v1/admin/rooms/${room.body.id}`).set(auth).expect(204);
+    const scene = await request(instance).post("/api/v1/local-scenes").set(auth).send({ name: "Dinner", scope: { type: "group", id: 5 } }).expect(201);
+    await request(instance).post("/api/v1/admin/switch-rules").set(auth).send({ name: "Dinner button", unitId: 2, button: 4, trigger: "tap", command: { targetType: "local_scene", targetId: scene.body.id, operation: "activate_scene" } }).expect(201);
+    expect((await request(instance).delete(`/api/v1/local-scenes/${scene.body.id}`).set(auth).expect(409)).body.error.message).toContain("switch rule “Dinner button”");
+  });
+
+  it("updates only the device metadata fields that are sent", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    const room = await request(instance).post("/api/v1/admin/rooms").set(auth).send({ name: "Kitchen" }).expect(201);
+    await request(instance).put("/api/v1/admin/devices/7/metadata").set(auth).send({ customName: "Island" }).expect(204);
+    await request(instance).put("/api/v1/admin/devices/7/metadata").set(auth).send({ roomId: room.body.id }).expect(204);
+    await request(instance).put("/api/v1/admin/devices/8/metadata").set(auth).send({ roomId: 999 }).expect(422);
+    expect(instanceStore(instance).getUnitMetadata()).toEqual([{ unitId: 7, customName: "Island", roomId: room.body.id }]);
+  });
+
+  it("filters and limits the audit log", async () => {
+    const instance = app();
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    await request(instance).post("/api/v1/admin/rooms").set(auth).send({ name: "A" });
+    const entries = (await request(instance).get("/api/v1/admin/audit?action=auth.&limit=5").set(auth).expect(200)).body as Array<{ action: string }>;
+    expect(entries.map(entry => entry.action)).toEqual(["auth.bootstrap"]);
+    await request(instance).get("/api/v1/admin/audit?limit=9999").set(auth).expect(422);
   });
 
   it("creates a reusable away-date set and attaches it to a timer", async () => {

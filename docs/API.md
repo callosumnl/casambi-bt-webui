@@ -2,7 +2,7 @@
 
 All application endpoints begin with `/api/v1`. The complete, machine-readable description is the OpenAPI 3.1 document at **`GET /api/v1/openapi.json`** (public; import it into Postman, Insomnia, or Swagger UI). Admins can browse it in the web UI under **API**, with request schemas, examples, and `curl` commands. A test keeps it in sync with the routes. Send either an `Authorization: Bearer <JWT>` header obtained from `/auth/login`, or an `X-API-Key: <key>` header. API keys are scoped to the `admin` or `user` role chosen when the key is created. Authentication failures return `401`; an authenticated principal without the `admin` role receives `403` for administrative routes.
 
-Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401` unauthenticated, `403` wrong role, `404` unknown id, `409` name already in use, `422` invalid request (including values out of range, e.g. levels outside 0-255), `429` more than 240 requests per minute from one client, `500` unexpected failure.
+Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401` unauthenticated, `403` wrong role, `404` unknown id, `409` name already in use or item still in use, `422` invalid request (including values out of range, e.g. levels outside 0-255), `429` more than 240 requests per minute from one client, `500` unexpected failure.
 
 > The service exposes only operations supplied by the connected fixture’s reported Casambi capabilities. Call `GET /devices` before sending a dimming, colour, temperature, vertical, white, slider, or CIE XY command.
 
@@ -21,7 +21,7 @@ Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401
 | `POST` | `/scenes/:id/activate` | user | Activates an upstream Casambi scene. |
 | `GET`, `POST` | `/local-scenes` | user | Lists saved scenes, or saves the current setting of a scope as a new scene: `{ name, scope: { type: "group" \| "room" \| "network", id } }` (`id` is `null` for `network`). |
 | `POST` | `/local-scenes/:id/capture` | user | Updates a saved scene to the current setting of its scope. |
-| `PATCH`, `DELETE` | `/local-scenes/:id` | user | Renames (`{ name }`) or deletes a saved scene. |
+| `PATCH`, `DELETE` | `/local-scenes/:id` | user | Renames (`{ name }`) or deletes a saved scene; deleting one that timers or switch rules use returns `409`. |
 | `POST` | `/local-scenes/:id/apply` | user | Applies a saved scene, optionally with `{ fadeDurationMs }` (0–60,000). |
 | `POST` | `/rooms/:id/apply-default` | user | Applies the room’s saved default brightness; an optional `fadeDurationMs` from 0 to 60,000 enables a smooth transition. |
 | `GET`, `POST` | `/schedules` | user | Lists permitted schedules, including `nextRunAt`, or creates a timer owned by the caller. |
@@ -30,14 +30,16 @@ Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401
 | `GET`, `PUT` | `/admin/config` | admin | Reads safe settings or saves encrypted bridge configuration, including bounded polling enablement and interval. |
 | `GET` | `/admin/discovery` | admin | Scans nearby Casambi networks. |
 | `POST` | `/admin/connect`, `/admin/disconnect` | admin | Connects or disconnects the live Bluetooth bridge. |
-| `POST`, `DELETE` | `/admin/rooms`, `/admin/rooms/:id` | admin | Creates or removes local room metadata, including a 0–100 default brightness percentage. |
+| `POST` | `/admin/rooms` | admin | Creates a local room with a default brightness. |
+| `PATCH`, `DELETE` | `/admin/rooms/:id` | admin | Renames (`{ name }`) or deletes a room. Deleting a room that timers, switch rules, or scenes use returns `409` naming them. |
 | `PUT` | `/admin/rooms/:id/default-brightness` | admin | Updates a room’s 0–100 default brightness percentage. |
-| `PUT` | `/admin/devices/:id/metadata` | admin | Sets a local custom name and room assignment. |
+| `PUT` | `/admin/devices/:id/metadata` | admin | Sets a unit's custom name and/or room; fields left out keep their value, and an empty name restores the Casambi name. |
 | `GET`, `POST` | `/admin/away-date-sets` | admin | Lists or creates shared away-date sets. |
 | `PATCH`, `DELETE` | `/admin/away-date-sets/:id` | admin | Updates a set (name, dates) or deletes it, detaching it from its timers. |
-| `GET`, `POST`, `PATCH` | `/admin/users`, `/admin/users/:id` | admin | Manages local `admin` and `user` accounts. |
+| `GET`, `POST` | `/admin/users` | admin | Lists or creates local accounts. |
+| `PATCH`, `DELETE` | `/admin/users/:id` | admin | Changes the role and/or sets a new password (`{ role?, password? }`), or deletes the account; its timers move to the deleting admin. You cannot delete your own account or the last admin. |
 | `GET`, `POST`, `DELETE` | `/admin/api-keys`, `/admin/api-keys/:id` | admin | Lists metadata, generates once-visible API keys, and revokes keys. |
-| `GET` | `/admin/audit` | admin | Reads recent non-secret audit entries. |
+| `GET` | `/admin/audit` | admin | Recent audit entries, newest first: `?limit=` (1-500, default 100) and `?action=` (prefix, e.g. `bridge.`). The log keeps the latest 20,000 entries. |
 | `GET` | `/admin/worker` | admin | Returns the Python worker's state from its supervisor: `running`, `pid`, `busy` (`command`, `forMs`), `lastAnswerAt`, and `restarts`. Never waits on the worker, so it answers even when the worker is stuck. |
 | `POST` | `/admin/worker/restart` | admin | Restarts the worker (SIGTERM, then SIGKILL after 8 s), or starts it if it is not running; returns `202` with the worker state. A connected network reconnects automatically about 15 s later. |
 | `GET` | `/admin/switch-activity` | admin | Returns the 50 most recent switch messages, newest first. |

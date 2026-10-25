@@ -170,6 +170,22 @@ describe("CasambiService connection resilience", () => {
     expect(database.recentAudit().some(entry => entry.action === "bridge.worker_restart_requested" && entry.actor === "admin")).toBe(true);
   });
 
+  it("reconnects when the address or password changes while connected, not for other settings", async () => {
+    const database = configured(); const bridge = new FakeBridge();
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    await service.connect();
+    service.saveConfiguration({ pollingEnabled: false, solarLatitude: 52 });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(bridge.configureCalls).toBe(1);
+    service.saveConfiguration({ networkPassword: "a-new-network-password" });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(bridge.configureCalls).toBe(2);
+    await service.disconnect();
+    service.saveConfiguration({ networkPassword: "yet-another-password" });
+    await new Promise(resolve => setImmediate(resolve));
+    expect(bridge.configureCalls).toBe(2);
+  });
+
   it("stops retrying when the network password is rejected", async () => {
     vi.useFakeTimers();
     const database = configured(); const bridge = new FakeBridge();

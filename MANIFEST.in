@@ -1,4 +1,6 @@
 include README.md
+include LICENSE
+include NOTICE
 include requirements.txt
 recursive-include src/casambi_bt_webui/templates *.service *.template
 prune dist

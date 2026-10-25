@@ -178,6 +178,10 @@ export class CasambiService {
     const existing = this.store.getCasambiConfig();
     this.store.saveCasambiConfig({ ...existing, ...Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) });
     this.configurePolling();
+    // A changed address, password, or adapter only takes effect on a new connection; reconnect if one is wanted.
+    const next = this.store.getCasambiConfig();
+    const changed = (["networkAddress", "networkPassword", "apiKey", "btAdapter", "forceOffline"] as const).some(key => existing[key] !== next[key]);
+    if (changed && this.wantConnected && next.networkAddress && next.networkPassword) void this.connect().catch(() => { /* connect() audits and reports the failure itself. */ });
   }
 
   /** Applies a control command to its actual Casambi target, expanding local room membership first. */

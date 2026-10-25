@@ -1,10 +1,10 @@
 import { CalendarClock, Check, Plus, Trash2 } from "lucide-react";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { HudFrame } from "@/components/HudFrame";
 import { useNetwork } from "@/hooks/useNetwork";
-import { defaultDaysForRepeat, describeCronExpression, RepeatPattern, toCronExpression, WEEKDAYS } from "@/lib/friendlySchedule";
+import { defaultDaysForRepeat, describeCronExpression, fromCronExpression, RepeatPattern, toCronExpression, WEEKDAYS } from "@/lib/friendlySchedule";
 import { AwayDateSet, LocalApi, Schedule, SolarSchedule } from "@/lib/localApi";
-import { percentToDimmer } from "@/lib/brightness";
+import { dimmerToPercent, percentToDimmer } from "@/lib/brightness";
 import { isLamp, parseSceneTarget, sceneTargetOptions } from "@/lib/scenes";
 
 type TimerCommand = Schedule["command"] & { fadeDurationMs?: number };
@@ -21,6 +21,9 @@ export default function Schedules() {
   const [message, setMessage] = useState("");
   const [form, setForm] = useState<TimerForm>(initialForm);
   const [holidayInput, setHolidayInput] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [saving, setSaving] = useState(false);
+  const editorRef = useRef<HTMLDivElement>(null);
   const isScene = form.targetType === "scene";
   // Saved (Pi) scenes can fade; scenes stored in the Casambi network switch instantly.
   const supportsFade = isScene ? form.targetId.startsWith("local_scene:") : ["set_level", "on", "off"].includes(form.operation);
@@ -46,6 +49,8 @@ export default function Schedules() {
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
+    if (saving) return;
+    setSaving(true);
     try {
       if (!form.name.trim()) throw new Error("Give this timer a name.");
       if (form.targetType !== "network" && !form.targetId) throw new Error(isScene ? "Choose the scene to activate." : "Choose the lamp, group, or room to control.");
@@ -57,15 +62,41 @@ export default function Schedules() {
       if (solar && (!Number.isInteger(solar.offsetMinutes) || solar.offsetMinutes < -180 || solar.offsetMinutes > 180)) throw new Error("Sunrise and sunset offsets must be whole minutes from 180 before to 180 after the event.");
       if (form.trigger === "time" && form.repeat === "custom" && form.days.length === 0) throw new Error("Choose at least one day, or select every day.");
       const awayDateSet = awayDateSets.find(set => set.id === Number(form.awayDateSetId)) ?? null;
-      const schedule: Schedule = { id: Date.now(), name: form.name.trim(), cronExpression: solar ? "0 0 * * *" : toCronExpression(form.time, form.repeat, form.days), timezone: form.timezone, enabled: true, command, solar, holidayDates: form.holidayDates, awayDateSetId: awayDateSet?.id ?? null, awayDateSet, lastRunAt: null, nextRunAt: null };
-      await api.request("/schedules", { method: "POST", body: JSON.stringify(schedule) });
-      setMessage("Timer saved. Your Raspberry Pi will run it at the chosen time.");
+      // awayDateSetId null detaches a shared set when editing.
+      const timer = { name: form.name.trim(), cronExpression: solar ? "0 0 * * *" : toCronExpression(form.time, form.repeat, form.days), timezone: form.timezone, command, solar, holidayDates: form.holidayDates, awayDateSetId: awayDateSet?.id ?? null };
+      if (editingId === null) await api.request("/schedules", { method: "POST", body: JSON.stringify({ ...timer, enabled: true }) });
+      else await api.request(`/schedules/${editingId}`, { method: "PATCH", body: JSON.stringify(timer) });
+      setMessage(editingId === null ? "Timer saved. Your Raspberry Pi will run it at the chosen time." : "Timer updated.");
+      setEditingId(null); setForm(initialForm);
       await refresh();
-    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to create timer."); }
+    } catch (error) { setMessage(error instanceof Error ? error.message : "Unable to save timer."); }
+    finally { setSaving(false); }
+  };
+
+  /** Loads a timer into the editor. Timers with a hand-written cron expression can only be paused or deleted here. */
+  const editTimer = (schedule: Schedule) => {
+    const when = schedule.solar ? null : fromCronExpression(schedule.cronExpression);
+    if (!schedule.solar && !when) { setMessage("This timer uses a custom cron expression, which this editor cannot show. Pause or delete it here, or change it through the API."); return; }
+    const command = schedule.command as TimerCommand;
+    const scene = command.targetType === "scene" || command.targetType === "local_scene";
+    setForm({
+      ...initialForm, name: schedule.name, trigger: schedule.solar ? schedule.solar.event : "time", time: when?.time ?? initialForm.time, repeat: when?.repeat ?? "daily", days: when?.days ?? [],
+      solarOffsetMinutes: String(schedule.solar?.offsetMinutes ?? 0), timezone: schedule.timezone,
+      targetType: scene ? "scene" : command.targetType, targetId: scene ? `${command.targetType}:${command.targetId}` : command.targetId == null ? "" : String(command.targetId),
+      operation: scene ? "on" : command.operation, value: command.operation === "set_level" ? String(dimmerToPercent(Number(command.value))) : initialForm.value,
+      fadeDurationSeconds: command.fadeDurationMs ? String(command.fadeDurationMs / 1000) : "0", holidayDates: schedule.holidayDates, awayDateSetId: schedule.awayDateSetId ? String(schedule.awayDateSetId) : "",
+    });
+    setEditingId(schedule.id); setMessage("");
+    editorRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+  };
+  const cancelEdit = () => { setEditingId(null); setForm(initialForm); setMessage(""); };
+  const setEnabled = async (schedule: Schedule, enabled: boolean) => {
+    try { await api.request(`/schedules/${schedule.id}`, { method: "PATCH", body: JSON.stringify({ enabled }) }); await refresh(); }
+    catch (error) { setMessage(error instanceof Error ? error.message : "Unable to change the timer."); }
   };
 
   const remove = async (id: number) => {
-    try { await api.request(`/schedules/${id}`, { method: "DELETE" }); await refresh(); }
+    try { await api.request(`/schedules/${id}`, { method: "DELETE" }); if (editingId === id) cancelEdit(); await refresh(); }
     catch (error) { setMessage(error instanceof Error ? error.message : "Unable to delete timer."); }
   };
 
@@ -81,7 +112,7 @@ export default function Schedules() {
   const formatNextRun = (value: string | null | undefined) => value ? new Date(value).toLocaleString(undefined, { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "Not available";
   return <div className="schedule-page">
     <div className="section-heading"><div><p className="eyebrow"><CalendarClock /> LIGHTING AUTOMATION</p><h2>SMART <em>//</em> TIMERS</h2></div></div>
-    <div className="schedule-layout"><HudFrame className="form-panel timer-editor"><h3><Plus /> NEW TIMER</h3><p className="muted-copy">Choose when your lighting should change. The Raspberry Pi handles the timing in the background.</p><form onSubmit={submit} className="admin-form">
+    <div className="schedule-layout"><div ref={editorRef} className="timer-editor-anchor" /><HudFrame className="form-panel timer-editor"><h3><Plus /> {editingId === null ? "NEW TIMER" : "EDIT TIMER"}</h3><p className="muted-copy">Choose when your lighting should change. The Raspberry Pi handles the timing in the background.</p><form onSubmit={submit} className="admin-form">
       <label>WHAT SHOULD WE CALL THIS TIMER?<input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} placeholder="e.g. Evening lights" /></label>
       <label>WHEN SHOULD IT HAPPEN?<select value={form.trigger} onChange={event => setForm({ ...form, trigger: event.target.value as TimerForm["trigger"] })}><option value="time">At a time</option><option value="sunrise">At sunrise</option><option value="sunset">At sunset</option></select></label>
       {form.trigger === "time" ? <><label>AT WHAT TIME?<input type="time" value={form.time} onChange={event => setForm({ ...form, time: event.target.value })} /></label><fieldset className="day-picker"><legend>ON WHICH DAYS?</legend><div className="repeat-choice"><button type="button" aria-pressed={form.repeat === "daily"} className={form.repeat === "daily" ? "selected" : ""} onClick={() => changeRepeat("daily")}>EVERY DAY</button><button type="button" aria-pressed={form.repeat === "weekdays"} className={form.repeat === "weekdays" ? "selected" : ""} onClick={() => changeRepeat("weekdays")}>WEEKDAYS</button><button type="button" aria-pressed={form.repeat === "weekends"} className={form.repeat === "weekends" ? "selected" : ""} onClick={() => changeRepeat("weekends")}>WEEKENDS</button><button type="button" aria-pressed={form.repeat === "custom"} className={form.repeat === "custom" ? "selected" : ""} onClick={() => changeRepeat("custom")}>PICK DAYS</button></div><div className="weekday-choice">{WEEKDAYS.map(day => <button type="button" key={day.value} aria-pressed={form.repeat === "custom" && form.days.includes(day.value)} className={form.repeat === "custom" && form.days.includes(day.value) ? "selected" : ""} onClick={() => toggleSpecificDay(day.value)}>{day.short}</button>)}</div></fieldset></> : <label>MINUTES BEFORE (−) OR AFTER (+)<input type="number" min="-180" max="180" step="1" value={form.solarOffsetMinutes} onChange={event => setForm({ ...form, solarOffsetMinutes: event.target.value })} /><small>Runs every day. Your administrator sets the local solar location.</small></label>}
@@ -92,8 +123,8 @@ export default function Schedules() {
       <fieldset className="holiday-exclusions"><legend>SKIP WHEN YOU ARE AWAY (OPTIONAL)</legend><div><input type="date" value={holidayInput} onChange={event => setHolidayInput(event.target.value)} /><button type="button" className="outline-button" onClick={addHoliday} disabled={!holidayInput}>ADD DATE</button></div>{form.holidayDates.length > 0 ? <ul>{form.holidayDates.map(date => <li key={date}>{new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" })}<button type="button" onClick={() => removeHoliday(date)} aria-label={`Remove away date ${date}`}>×</button></li>)}</ul> : <small>Add the dates when this timer should stay quiet.</small>}</fieldset>
       <label>APPLY A SAVED AWAY SET<select value={form.awayDateSetId} onChange={event => setForm({ ...form, awayDateSetId: event.target.value })}><option value="">No shared set</option>{awayDateSets.map(set => <option key={set.id} value={set.id}>{set.name} · {set.dates.length} date{set.dates.length === 1 ? "" : "s"}</option>)}</select><small>A shared set keeps multiple timers in sync when its dates change.</small></label>
       <p className="timer-preview"><Check /> {actionLabel} {form.trigger === "time" ? `at ${form.time} ${form.repeat === "daily" ? "every day" : form.repeat === "weekdays" ? "on weekdays" : form.repeat === "weekends" ? "on weekends" : form.days.length ? `on ${form.days.map(day => WEEKDAYS.find(candidate => candidate.value === day)?.short).join(", ")}` : "on selected days"}` : `${solarPhrase}${Number(form.solarOffsetMinutes) ? ` ${Number(form.solarOffsetMinutes) > 0 ? `${form.solarOffsetMinutes} min after` : `${Math.abs(Number(form.solarOffsetMinutes))} min before`}` : ""} every day` }.{form.holidayDates.length ? ` It will skip ${form.holidayDates.length} away date${form.holidayDates.length === 1 ? "" : "s"}.` : ""}</p>
-      <button className="neon-button">SAVE TIMER</button>
+      <button className="neon-button" disabled={saving}>{editingId === null ? "SAVE TIMER" : "SAVE CHANGES"}</button>{editingId !== null && <button type="button" className="outline-button" onClick={cancelEdit}>CANCEL</button>}
     </form>{message && <p className="form-notice">{message}</p>}<p className="muted-copy">Timers are saved locally on your Raspberry Pi and continue to run after a restart.</p></HudFrame>
-      <HudFrame className="schedule-list"><h3>YOUR TIMERS <span>{schedules.length}</span></h3>{schedules.length === 0 ? <p className="muted-copy">No timers yet. Create one to automate your lighting.</p> : schedules.map(schedule => { const fadeDurationMs = (schedule.command as TimerCommand).fadeDurationMs; const solarLabel = schedule.solar ? `${schedule.solar.offsetMinutes === 0 ? "At" : `${Math.abs(schedule.solar.offsetMinutes)} min ${schedule.solar.offsetMinutes > 0 ? "after" : "before"}`} ${schedule.solar.event}` : describeCronExpression(schedule.cronExpression); return <article key={schedule.id}><div><p>{schedule.name}</p><code>{solarLabel} · {schedule.timezone}</code><small>{schedule.command.operation === "activate_scene" ? "Activate scene" : schedule.command.operation === "set_level" ? "Set brightness" : schedule.command.operation === "on" ? "Turn on" : "Turn off"} · {describeTarget(schedule.command)}{fadeDurationMs ? ` · Fade ${fadeDurationMs / 1000}s` : ""}{schedule.lastRunAt ? ` · last ${new Date(schedule.lastRunAt).toLocaleString()}` : ""}</small>{schedule.awayDateSet && <small className="holiday-summary">SAVED SET · {schedule.awayDateSet.name}</small>}{schedule.holidayDates.length > 0 && <small className="holiday-summary">EXTRA DATES · {schedule.holidayDates.join(", ")}</small>}<b className="next-run">NEXT RUN · {formatNextRun(schedule.nextRunAt)}</b></div><button className="icon-button danger" onClick={() => void remove(schedule.id)} aria-label={`Delete ${schedule.name}`}><Trash2 /></button></article>; })}</HudFrame></div>
+      <HudFrame className="schedule-list"><h3>YOUR TIMERS <span>{schedules.length}</span></h3>{schedules.length === 0 ? <p className="muted-copy">No timers yet. Create one to automate your lighting.</p> : schedules.map(schedule => { const fadeDurationMs = (schedule.command as TimerCommand).fadeDurationMs; const solarLabel = schedule.solar ? `${schedule.solar.offsetMinutes === 0 ? "At" : `${Math.abs(schedule.solar.offsetMinutes)} min ${schedule.solar.offsetMinutes > 0 ? "after" : "before"}`} ${schedule.solar.event}` : describeCronExpression(schedule.cronExpression); return <article key={schedule.id} className={schedule.enabled ? "" : "paused"}><div><p>{schedule.name}{!schedule.enabled && <span className="paused-label"> · PAUSED</span>}</p><code>{solarLabel} · {schedule.timezone}</code><small>{schedule.command.operation === "activate_scene" ? "Activate scene" : schedule.command.operation === "set_level" ? "Set brightness" : schedule.command.operation === "on" ? "Turn on" : "Turn off"} · {describeTarget(schedule.command)}{fadeDurationMs ? ` · Fade ${fadeDurationMs / 1000}s` : ""}{schedule.lastRunAt ? ` · last ${new Date(schedule.lastRunAt).toLocaleString()}` : ""}</small>{schedule.awayDateSet && <small className="holiday-summary">SAVED SET · {schedule.awayDateSet.name}</small>}{schedule.holidayDates.length > 0 && <small className="holiday-summary">EXTRA DATES · {schedule.holidayDates.join(", ")}</small>}{schedule.enabled && <b className="next-run">NEXT RUN · {formatNextRun(schedule.nextRunAt)}</b>}</div><div className="timer-actions"><label className="switch-rule-enabled"><input type="checkbox" checked={schedule.enabled} onChange={event => void setEnabled(schedule, event.target.checked)} /> On</label><button className="outline-button" aria-pressed={editingId === schedule.id} onClick={() => editTimer(schedule)}>EDIT</button><button className="icon-button danger" onClick={() => void remove(schedule.id)} aria-label={`Delete ${schedule.name}`}><Trash2 /></button></div></article>; })}</HudFrame></div>
   </div>;
 }

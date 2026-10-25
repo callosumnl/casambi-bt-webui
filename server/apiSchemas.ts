@@ -22,7 +22,11 @@ export const sceneCreateSchema = z.object({ name: sceneNameSchema, scope: sceneS
 export const sceneRenameSchema = z.object({ name: sceneNameSchema });
 export const roomCreateSchema = z.object({ name: z.string().trim().min(1).max(96), defaultBrightnessPercent: z.number().int().min(0).max(100).default(100) });
 export const roomDefaultBrightnessSchema = z.object({ defaultBrightnessPercent: z.number().int().min(0).max(100) });
-export const deviceMetadataSchema = z.object({ customName: z.string().trim().max(128).nullable(), roomId: z.number().int().positive().nullable() });
+/** Either field may be left out to keep its current value; an empty or null name restores the Casambi name. */
+export const deviceMetadataSchema = z.object({ customName: z.string().trim().max(128).nullable().optional(), roomId: z.number().int().positive().nullable().optional() });
 export const userCreateSchema = credentialsSchema.extend({ role: roleSchema });
-export const userRoleSchema = z.object({ role: roleSchema });
+export const userUpdateSchema = z.object({ role: roleSchema.optional(), password: credentialsSchema.shape.password.optional() })
+  .refine(update => update.role !== undefined || update.password !== undefined, { message: "Send a new role, a new password, or both." });
+export const roomRenameSchema = z.object({ name: z.string().trim().min(1).max(96) });
+export const auditQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(500).default(100), action: z.string().trim().min(1).max(64).optional() });
 export const apiKeyCreateSchema = z.object({ label: z.string().trim().min(1).max(96), role: roleSchema });

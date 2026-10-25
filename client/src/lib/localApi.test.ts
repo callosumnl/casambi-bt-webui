@@ -51,4 +51,11 @@ describe("session handling", () => {
     expect(getSession()).not.toBeNull();
     expect(expired).not.toHaveBeenCalled();
   });
+
+  it("names the fields a validation error is about", async () => {
+    saveSession(session(3_600));
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ error: { code: "VALIDATION_ERROR", message: "Request validation failed.", fields: { formErrors: [], fieldErrors: { password: ["Too small: expected string to have >=12 characters"], username: ["Invalid string"] } } } }), { status: 422 })));
+    await expect(new LocalApi().request("/admin/users", { method: "POST" })).rejects.toThrow("Request validation failed. password: Too small: expected string to have >=12 characters; username: Invalid string");
+  });
 });
+
