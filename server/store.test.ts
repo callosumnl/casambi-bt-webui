@@ -9,13 +9,13 @@ function store(): LocalStore { const folder = mkdtempSync(join(tmpdir(), "casamb
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })));
 
 describe("LocalStore", () => {
-  it("creates a salted local admin and verifies its password", () => {
+  it("creates a salted local admin and verifies its password", async () => {
     const database = store();
     expect(database.needsBootstrap()).toBe(true);
     const admin = database.createUser("operator", "a-strong-password", "admin");
     expect(database.needsBootstrap()).toBe(false);
-    expect(database.verifyUser("operator", "a-strong-password")).toMatchObject({ id: admin.id, role: "admin" });
-    expect(database.verifyUser("operator", "incorrect-password")).toBeNull();
+    expect(await database.verifyUser("operator", "a-strong-password")).toMatchObject({ id: admin.id, role: "admin" });
+    expect(await database.verifyUser("operator", "incorrect-password")).toBeNull();
   });
 
   it("creates, verifies, and revokes API keys without retaining their plaintext", () => {

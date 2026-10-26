@@ -5,9 +5,9 @@ import { LocalStore, Role, StoredUser } from "./store";
 export type Principal = { kind: "user" | "api_key"; id: number; name: string; role: Role };
 const jwtSecret = () => new TextEncoder().encode(process.env.CASAMBI_JWT_SECRET || process.env.JWT_SECRET || "development-only-change-me");
 
-/** Signs a short-lived local JWT for the Raspberry Pi appliance. */
-export async function issueToken(user: StoredUser): Promise<string> {
-  return new SignJWT({ username: user.username, role: user.role, kind: "user" })
+/** Signs a short-lived local JWT for the Raspberry Pi appliance. `tv` ties it to the account's current token version. */
+export async function issueToken(user: StoredUser, store: LocalStore): Promise<string> {
+  return new SignJWT({ username: user.username, role: user.role, kind: "user", tv: store.tokenVersion(user.id) })
     .setProtectedHeader({ alg: "HS256" }).setSubject(String(user.id)).setIssuedAt().setExpirationTime("8h").sign(jwtSecret());
 }
 
@@ -21,11 +21,12 @@ export async function authenticate(request: Request, store: LocalStore): Promise
   const authorization = request.header("authorization");
   if (!authorization?.startsWith("Bearer ")) return null;
   try {
-    const result = await jwtVerify(authorization.slice(7), jwtSecret());
+    const result = await jwtVerify(authorization.slice(7), jwtSecret(), { algorithms: ["HS256"] });
     if (result.payload.kind !== "user" || !result.payload.sub) return null;
-    // Re-read the account: a role change or removed account takes effect immediately, not when the 8 h token expires.
+    // Re-read the account: a role change, password reset, or removed account takes effect immediately, not when the 8 h token expires.
     const user = store.getUserById(Number(result.payload.sub));
-    return user ? { kind: "user", id: user.id, name: user.username, role: user.role } : null;
+    if (!user || (result.payload.tv ?? 0) !== store.tokenVersion(user.id)) return null;
+    return { kind: "user", id: user.id, name: user.username, role: user.role };
   } catch { return null; }
 }
 

@@ -4,7 +4,7 @@
 
 > **Disclaimer:** Casambi BT WebGUI is an independent open-source project. It is not affiliated with, endorsed by, or supported by Casambi Technologies. "Casambi" is a trademark of Casambi Technologies and is used here only to describe the lighting system this software works with. The Bluetooth protocol support comes from the unofficial [`casambi-bt`](https://github.com/lkempf/casambi-bt) library; use this software at your own risk.
 
-Sign in with a local account; the first visitor creates the initial `admin` account.
+Sign in with a local account. The initial `admin` account is created in the browser with a one-time setup code that the installer prints.
 
 > Run this on a trusted local network. A lighting controller has physical-world effects. Do not expose it directly to the public internet; place it behind a VPN or a carefully configured HTTPS reverse proxy if remote access is needed.
 
@@ -47,7 +47,7 @@ That single installer sets up everything and can be run again at any time:
 - `/etc/casambi-bt-webui.env` with **freshly generated, unique secrets** on the first run; later runs keep it and only add settings introduced by newer versions;
 - the systemd service, enabled at boot and restarted on the new build, followed by a check that the web interface answers.
 
-Run the installer as your normal account, not with `sudo`; it asks for `sudo` itself where needed (started with `sudo` it still builds as the checkout's owner). It prints the address to open, for example `http://casambi.local:3000`. The first visitor creates the initial `admin` account. From the Admin Panel, save the Casambi network address and **network password** (or use Discover), then connect. The current upstream library's connection method uses the address and password; the WebUI stores UUID, adapter, and optional API-key metadata for administration and future upstream support without claiming that `casambi-bt` currently consumes each of those fields. [1]
+Run the installer as your normal account, not with `sudo`; it asks for `sudo` itself where needed (started with `sudo` it still builds as the checkout's owner). It prints the address to open, for example `http://casambi.local:3000`, and on a fresh install a one-time setup code: enter it in the browser to create the initial `admin` account (it is also in `/var/lib/casambi-bt-webui/setup-code` until the admin exists). From the Admin Panel, save the Casambi network address and **network password** (or use Discover), then connect. The current upstream library's connection method uses the address and password; the WebUI stores UUID, adapter, and optional API-key metadata for administration and future upstream support without claiming that `casambi-bt` currently consumes each of those fields. [1]
 
 Settings live in `/etc/casambi-bt-webui.env`; change them with `sudoedit /etc/casambi-bt-webui.env` and restart the service. Never change `CASAMBI_ENCRYPTION_KEY` after the first start: stored Casambi credentials would become unreadable.
 

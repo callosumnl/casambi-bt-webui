@@ -10,9 +10,11 @@ import { DurableScheduler, nextRunAt, validateCron, validateTimezone } from "./s
 import { SolarSchedule, validateSolarLocation, validateSolarSchedule } from "./solar";
 import { switchRulePatchSchema, switchRuleSchema } from "./switchRules";
 import { openApiDocument } from "./openapi";
-import { apiKeyCreateSchema, awayDateSetSchema, configSchema, credentialsSchema, deviceMetadataSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
+import { SetupCode } from "./setupCode";
+import { apiKeyCreateSchema, awayDateSetSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
 
-type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler };
+/** `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install. */
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 
 /** Wraps async routes in a stable JSON error response. */
@@ -36,8 +38,15 @@ export function classifyError(error: unknown): { status: number; code: string; m
   const message = error instanceof Error ? error.message : "Unexpected server error.";
   if (message.includes("UNIQUE constraint failed")) return { status: 409, code: "CONFLICT", message: "That name is already in use." };
   if (message.includes("FOREIGN KEY constraint failed")) return { status: 422, code: "VALIDATION_ERROR", message: "A referenced item does not exist." };
+  // Plain Errors are written for people (including the bridge's connection errors). Anything else — a TypeError, a
+  // SQLite or system error with a `code` — is an internal detail: log it here and keep it out of the response.
+  if (!(error instanceof Error) || error.constructor !== Error || "code" in error) {
+    console.error(error);
+    return { status: 500, code: "INTERNAL_ERROR", message: "Unexpected server error." };
+  }
   if (message.includes("does not exist")) return { status: 404, code: "NOT_FOUND", message };
   if (message.includes("is used by")) return { status: 409, code: "IN_USE", message };
+  if (message.includes("is busy")) return { status: 503, code: "BUSY", message };
   if (/\b(required|invalid|must|cannot|has no assigned lamps)\b/i.test(message)) return { status: 422, code: "VALIDATION_ERROR", message };
   return { status: 500, code: "INTERNAL_ERROR", message };
 }
@@ -64,23 +73,28 @@ function normalizeHolidayDates(dates: string[]): string[] { return Array.from(ne
 function assertAwayDateSet(id: number | null | undefined, store: LocalStore): AwayDateSet | null { if (id == null) return null; const set = store.getAwayDateSet(id); if (!set) throw new Error("Away-date set does not exist."); return set; }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
-export function createCasambiApi({ store, service, events, scheduler }: Dependencies): Router {
+export function createCasambiApi({ store, service, events, scheduler, setupCode }: Dependencies): Router {
   const api = Router();
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
+  // Password guessing gets its own, much tighter budget; successful sign-ins do not count against it.
+  const signInLimit = rateLimit({ windowMs: 5 * 60_000, limit: 10, skipSuccessfulRequests: true, standardHeaders: "draft-8", legacyHeaders: false,
+    message: { error: { code: "RATE_LIMITED", message: "Too many failed sign-in attempts. Try again in a few minutes." } } });
   api.use((_request, response, next) => { response.locals.requestId = crypto.randomUUID(); next(); });
 
   // Public, so API tools can load it; it describes the routes, never any data.
   api.get("/openapi.json", (_request, response) => response.json(openApiDocument()));
   api.get("/health", (_request, response) => response.json({ status: "ok", bootstrapRequired: store.needsBootstrap(), eventClients: events.clientCount }));
-  api.post("/auth/bootstrap", route(async (request, response) => {
+  api.post("/auth/bootstrap", signInLimit, route(async (request, response) => {
     if (!store.needsBootstrap()) { response.status(409).json({ error: { code: "BOOTSTRAP_COMPLETE", message: "An administrator already exists." } }); return; }
-    const input = parsed(credentialsSchema, request.body); const user = store.createUser(input.username, input.password, "admin"); store.audit(user.username, "auth.bootstrap", {});
-    response.status(201).json({ token: await issueToken(user), user });
+    const input = parsed(bootstrapSchema, request.body);
+    if (setupCode && !setupCode.matches(input.setupCode ?? "")) { response.status(403).json({ error: { code: "INVALID_SETUP_CODE", message: "The setup code is not correct. deploy/install.sh prints it at the end of the installation." } }); return; }
+    const user = store.createUser(input.username, input.password, "admin"); store.audit(user.username, "auth.bootstrap", {}); setupCode?.consume();
+    response.status(201).json({ token: await issueToken(user, store), user });
   }));
-  api.post("/auth/login", route(async (request, response) => {
-    const input = parsed(credentialsSchema, request.body); const user = store.verifyUser(input.username, input.password);
-    if (!user) { response.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Username or password is invalid." } }); return; }
-    store.audit(user.username, "auth.login", {}); response.json({ token: await issueToken(user), user });
+  api.post("/auth/login", signInLimit, route(async (request, response) => {
+    const input = parsed(credentialsSchema, request.body); const user = await store.verifyUser(input.username, input.password);
+    if (!user) { store.audit(input.username, "auth.login_failed", { ip: request.ip }); response.status(401).json({ error: { code: "INVALID_CREDENTIALS", message: "Username or password is invalid." } }); return; }
+    store.audit(user.username, "auth.login", {}); response.json({ token: await issueToken(user, store), user });
   }));
 
   api.get("/auth/me", requireAuth(store), (request, response) => response.json({ principal: principal(response) }));

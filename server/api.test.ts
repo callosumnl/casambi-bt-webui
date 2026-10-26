@@ -8,17 +8,19 @@ import { classifyError, createCasambiApi } from "./api";
 import { CasambiService } from "./casambi/service";
 import { EventHub } from "./events";
 import { DurableScheduler } from "./scheduler";
+import { SetupCode } from "./setupCode";
 import { LocalStore } from "./store";
+import { existsSync } from "fs";
 
 const folders: string[] = [];
 const stores = new WeakMap<object, LocalStore>();
 const instanceStore = (instance: object) => stores.get(instance)!;
-function app() {
+function app(options: { setupCode?: (folder: string) => SetupCode } = {}) {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
   const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
-  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler })); stores.set(instance, store); return instance;
+  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder) })); stores.set(instance, store); return instance;
 }
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })));
 
@@ -242,5 +244,44 @@ describe("REST API", () => {
     const timer = await request(instance).post("/api/v1/schedules").set(auth).send({ name: "Welcome", cronExpression: "0 18 * * *", timezone: "Europe/Amsterdam", awayDateSetId: set.body.id, enabled: true, command: { targetType: "network", operation: "on" } }).expect(201);
     expect(timer.body.awayDateSet).toMatchObject({ id: set.body.id, name: "Summer break", dates: ["2026-08-17", "2026-08-18"] });
     expect((await request(instance).get("/api/v1/away-date-sets").set(auth).expect(200)).body).toHaveLength(1);
+  });
+
+  it("requires the one-time setup code to create the first admin, then deletes it", async () => {
+    let code: SetupCode | undefined;
+    const instance = app({ setupCode: folder => (code = new SetupCode(folder, true)) });
+    expect(existsSync(code!.path)).toBe(true);
+    await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" }).expect(403);
+    await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password", setupCode: "0000-0000-0000" }).expect(403);
+    await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password", setupCode: code!.reveal().replaceAll("-", "").toLowerCase() }).expect(201);
+    expect(existsSync(code!.path)).toBe(false);
+  });
+
+  it("signs a user out everywhere when an admin resets their password", async () => {
+    const instance = app(); const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const user = await request(instance).post("/api/v1/admin/users").set("Authorization", `Bearer ${admin.body.token}`).send({ username: "operator", password: "another-strong-password", role: "user" }).expect(201);
+    const before = await request(instance).post("/api/v1/auth/login").send({ username: "operator", password: "another-strong-password" }).expect(200);
+    await request(instance).get("/api/v1/auth/me").set("Authorization", `Bearer ${before.body.token}`).expect(200);
+    await request(instance).patch(`/api/v1/admin/users/${user.body.id}`).set("Authorization", `Bearer ${admin.body.token}`).send({ password: "a-brand-new-password" }).expect(200);
+    await request(instance).get("/api/v1/auth/me").set("Authorization", `Bearer ${before.body.token}`).expect(401);
+    const after = await request(instance).post("/api/v1/auth/login").send({ username: "operator", password: "a-brand-new-password" }).expect(200);
+    await request(instance).get("/api/v1/auth/me").set("Authorization", `Bearer ${after.body.token}`).expect(200);
+  });
+
+  it("limits failed sign-ins and audits them", async () => {
+    const instance = app(); await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    for (let attempt = 0; attempt < 9; attempt += 1) await request(instance).post("/api/v1/auth/login").send({ username: "admin", password: "not-the-right-password" }).expect(401);
+    const limited = await request(instance).post("/api/v1/auth/login").send({ username: "admin", password: "this-is-a-strong-password" }).expect(200);
+    expect(limited.body.token).toEqual(expect.any(String));
+    await request(instance).post("/api/v1/auth/login").send({ username: "admin", password: "not-the-right-password" }).expect(401);
+    const blocked = await request(instance).post("/api/v1/auth/login").send({ username: "admin", password: "this-is-a-strong-password" }).expect(429);
+    expect(blocked.body.error.code).toBe("RATE_LIMITED");
+    expect(instanceStore(instance).recentAudit(50, "auth.login_failed")).toHaveLength(10);
+  });
+
+  it("keeps internal error details out of responses", () => {
+    expect(classifyError(new TypeError("Cannot read properties of undefined (reading 'id')"))).toEqual({ status: 500, code: "INTERNAL_ERROR", message: "Unexpected server error." });
+    expect(classifyError(Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR" }))).toMatchObject({ message: "Unexpected server error." });
+    expect(classifyError(new Error("Casambi bridge command 'connect' timed out."))).toMatchObject({ status: 500, message: "Casambi bridge command 'connect' timed out." });
+    expect(classifyError(new Error("The Casambi bridge is busy; try again in a moment."))).toMatchObject({ status: 503, code: "BUSY" });
   });
 });

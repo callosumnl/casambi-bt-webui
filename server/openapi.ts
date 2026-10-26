@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  apiKeyCreateSchema, awayDateSetSchema, configSchema, credentialsSchema, deviceMetadataSchema, fadeBodySchema, roomCreateSchema,
+  apiKeyCreateSchema, awayDateSetSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, fadeBodySchema, roomCreateSchema,
   roomDefaultBrightnessSchema, roomRenameSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userUpdateSchema,
 } from "./apiSchemas";
 import { controlRequestSchema, groupSchema, networkSnapshotSchema, sceneSchema, unitSchema } from "./casambi/types";
@@ -33,6 +33,7 @@ const object = (properties: Record<string, unknown>, required = Object.keys(prop
 const schemas: Record<string, JsonSchema> = {
   // Requests: generated from the schemas the API validates with.
   Credentials: fromZod(credentialsSchema),
+  Bootstrap: fromZod(bootstrapSchema),
   UserCreate: fromZod(userCreateSchema),
   UserUpdate: { ...fromZod(userUpdateSchema), examples: [{ role: "user" }, { password: "a-new-long-password" }] },
   RoomRename: fromZod(roomRenameSchema),
@@ -115,8 +116,8 @@ const operations: Operation[] = [
   // System and sign-in.
   { method: "get", path: "/health", tag: "System", summary: "Service health", access: "public", responses: { 200: { description: "The service is up.", schema: "Health" } } },
   { method: "get", path: "/openapi.json", tag: "System", summary: "This OpenAPI document", access: "public", responses: { 200: { description: "OpenAPI 3.1 document.", schema: { type: "object" } } } },
-  { method: "post", path: "/auth/bootstrap", tag: "Authentication", summary: "Create the first admin", description: "Only works while no account exists.", access: "public", body: "Credentials", responses: { 201: { description: "Admin created and signed in.", schema: "Session" }, 409: { description: "An administrator already exists.", schema: "Error" } } },
-  { method: "post", path: "/auth/login", tag: "Authentication", summary: "Sign in", access: "public", body: "Credentials", responses: { 200: { description: "Signed in.", schema: "Session" }, 401: { description: "Username or password is invalid.", schema: "Error" } } },
+  { method: "post", path: "/auth/bootstrap", tag: "Authentication", summary: "Create the first admin", description: "Only works while no account exists. `setupCode` is the one-time code that deploy/install.sh prints (also in `setup-code` next to the database).", access: "public", body: "Bootstrap", responses: { 201: { description: "Admin created and signed in.", schema: "Session" }, 403: { description: "The setup code is not correct.", schema: "Error" }, 409: { description: "An administrator already exists.", schema: "Error" } } },
+  { method: "post", path: "/auth/login", tag: "Authentication", summary: "Sign in", description: "Limited to 10 failed attempts per 5 minutes per client address.", access: "public", body: "Credentials", responses: { 200: { description: "Signed in.", schema: "Session" }, 401: { description: "Username or password is invalid.", schema: "Error" }, 429: { description: "Too many failed attempts; try again later.", schema: "Error" } } },
   { method: "get", path: "/auth/me", tag: "Authentication", summary: "Who am I", access: "user", responses: { 200: { description: "The authenticated user or API key.", schema: "Principal" } } },
   {
     method: "get", path: "/events", tag: "System", summary: "Live event stream (SSE)", access: "user",

@@ -48,6 +48,21 @@ class FakeBridge extends EventEmitter {
 }
 
 describe("CasambiService fade controls", () => {
+  it("stops a running fade when a newer command arrives, so fades cannot pile up Bluetooth writes", async () => {
+    const bridge = new FakeBridge();
+    const service = new CasambiService(store(), bridge as never, new EventHub());
+    await service.snapshot();
+
+    const fade = service.control({ targetType: "network", operation: "set_level", value: 255, fadeDurationMs: 1_000 }, "tester");
+    await new Promise(resolve => setTimeout(resolve, 50));
+    await service.control({ targetType: "network", operation: "off" }, "tester");
+    await fade;
+
+    const fadeSteps = bridge.commands.filter(command => command.operation === "set_level");
+    expect(fadeSteps.length).toBeLessThanOrEqual(bridge.network.units.length);
+    expect(bridge.commands.at(-1)).toMatchObject({ operation: "off" });
+  });
+
   it("applies a room preset through bounded level commands for each assigned fixture", async () => {
     const database = store();
     const room = database.createRoom("Gallery", 50);

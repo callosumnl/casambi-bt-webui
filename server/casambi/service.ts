@@ -38,6 +38,8 @@ export class CasambiService {
   private pollFailures = 0;
   /** True while the network should be connected: set by a connect intent, cleared by a manual disconnect. */
   private wantConnected = false;
+  /** Bumped by every control command; a fade stops once it is no longer the newest. */
+  private fadeGeneration = 0;
   private connecting = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
@@ -187,6 +189,7 @@ export class CasambiService {
   /** Applies a control command to its actual Casambi target, expanding local room membership first. */
   public async control(input: ControlRequest, actor: string): Promise<NetworkSnapshot> {
     const command = controlRequestSchema.parse(input);
+    this.fadeGeneration += 1; // A newer command takes over from a running fade.
     if (command.targetType === "local_scene") return this.applyLightScene(Number(command.targetId), actor, command.fadeDurationMs ?? 0);
     if (command.fadeDurationMs && ["on", "off", "set_level"].includes(command.operation)) {
       await this.fadeToLevel(command);
@@ -239,8 +242,11 @@ export class CasambiService {
   private async fadeUnits(targets: Map<number, number>, fadeDurationMs: number, snapshot: NetworkSnapshot): Promise<void> {
     const startLevels = new Map(snapshot.units.map(unit => [unit.id, unit.state.dimmer ?? (unit.state.on ? 255 : 0)]));
     const steps = Math.max(1, Math.min(60, Math.ceil(fadeDurationMs / 200)));
-    for (let step = 1; step <= steps; step += 1) {
+    // Only the newest fade runs: an earlier one stops at its next step, so repeated fade requests cannot pile up Bluetooth writes.
+    const generation = ++this.fadeGeneration;
+    for (let step = 1; step <= steps && generation === this.fadeGeneration; step += 1) {
       for (const [unitId, targetLevel] of Array.from(targets)) {
+        if (generation !== this.fadeGeneration) break;
         const start = startLevels.get(unitId) ?? 0;
         const level = Math.round(start + ((targetLevel - start) * step) / steps);
         await this.bridge.execute("control", { targetType: "unit", targetId: unitId, operation: "set_level", value: level });

@@ -135,7 +135,12 @@ for _ in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:$port/api/v1/health" >/dev/null 2>&1; then
     printf '\nCasambi BT WebGUI is running. Open it in a browser on your network:\n'
     for address in $(hostname -I 2>/dev/null); do [[ "$address" == *:* ]] || printf '  http://%s:%s\n' "$address" "$port"; done
-    printf '  http://%s.local:%s\n\nThe first visitor creates the admin account.\n' "$(hostname)" "$port"
+    printf '  http://%s.local:%s\n' "$(hostname)" "$port"
+    # The service writes this one-time code on a fresh install and deletes it once the admin account exists.
+    db_path="$(sudo sed -n 's/^CASAMBI_DB_PATH=//p' "$ENV_FILE" | tail -n 1)"
+    if setup_code="$(sudo cat "$(dirname "${db_path:-$DATA_DIR/casambi-bt-webui.db}")/setup-code" 2>/dev/null)"; then
+      printf '\nCreate the admin account in the browser with this one-time setup code: %s\n' "$setup_code"
+    fi
     exit 0
   fi
   sleep 1

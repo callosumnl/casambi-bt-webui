@@ -1,12 +1,16 @@
 import { createRequire } from "module";
-import { createCipheriv, createDecipheriv, createHash, randomBytes, scryptSync, timingSafeEqual } from "crypto";
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from "crypto";
 import { dirname, resolve } from "path";
 import { mkdirSync } from "fs";
+import { promisify } from "util";
 import type { ControlRequest, SwitchTrigger } from "./casambi/types";
 import type { SolarSchedule } from "./solar";
 
 const runtimeRequire = createRequire(import.meta.url);
 const { DatabaseSync } = runtimeRequire("node:sqlite") as typeof import("node:sqlite");
+const scryptAsync = promisify(scrypt) as (password: string, salt: string, length: number) => Promise<Buffer>;
+/** Hashed in place of a missing account, so a failed login takes as long whether or not the username exists. */
+const DUMMY_SALT = randomBytes(16).toString("hex");
 
 export type Role = "admin" | "user";
 export type StoredUser = { id: number; username: string; role: Role; createdAt: string };
@@ -52,9 +56,12 @@ export const AUDIT_RETENTION = 20_000;
 export class LocalStore {
   private readonly db: InstanceType<typeof DatabaseSync>;
   private readonly encryptionKey: Buffer;
+  /** The folder that holds the database; runtime files such as the first-run setup code live next to it. */
+  public readonly dataDirectory: string;
 
   public constructor(filename = process.env.CASAMBI_DB_PATH || resolve(process.cwd(), "data/casambi-bt-webui.db"), encryptionSecret = process.env.CASAMBI_ENCRYPTION_KEY || "development-only-change-me") {
-    mkdirSync(dirname(filename), { recursive: true });
+    this.dataDirectory = dirname(filename);
+    mkdirSync(this.dataDirectory, { recursive: true });
     this.db = new DatabaseSync(filename);
     this.db.exec("PRAGMA journal_mode = WAL; PRAGMA foreign_keys = ON;");
     this.encryptionKey = createHash("sha256").update(encryptionSecret).digest();
@@ -96,6 +103,8 @@ export class LocalStore {
         id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL, detail_json TEXT NOT NULL, created_at TEXT NOT NULL
       );
     `);
+    const userColumns = this.db.prepare("PRAGMA table_info(local_users)").all() as Array<{ name: string }>;
+    if (!userColumns.some(column => column.name === "token_version")) this.db.exec("ALTER TABLE local_users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
     const roomColumns = this.db.prepare("PRAGMA table_info(rooms)").all() as Array<{ name: string }>;
     if (!roomColumns.some(column => column.name === "default_brightness_percent")) this.db.exec("ALTER TABLE rooms ADD COLUMN default_brightness_percent INTEGER NOT NULL DEFAULT 100 CHECK(default_brightness_percent BETWEEN 0 AND 100)");
     const scheduleColumns = this.db.prepare("PRAGMA table_info(schedules)").all() as Array<{ name: string }>;
@@ -119,11 +128,12 @@ export class LocalStore {
     return this.getUserById(Number(info.lastInsertRowid))!;
   }
 
-  /** Checks a password without exposing its stored digest. */
-  public verifyUser(username: string, password: string): StoredUser | null {
+  /** Checks a password without exposing its stored digest. Hashes off the event loop, so login attempts cannot stall the scheduler or the bridge. */
+  public async verifyUser(username: string, password: string): Promise<StoredUser | null> {
     const row = this.db.prepare("SELECT id,username,password_hash AS passwordHash,password_salt AS passwordSalt,role,created_at AS createdAt FROM local_users WHERE username = ?")
       .get(username.trim().toLowerCase()) as UserRow | undefined;
-    if (!row || !this.safeEqual(this.hashPassword(password, row.passwordSalt), row.passwordHash)) return null;
+    const digest = (await scryptAsync(password, row?.passwordSalt ?? DUMMY_SALT, 64)).toString("hex");
+    if (!row || !this.safeEqual(digest, row.passwordHash)) return null;
     return { id: row.id, username: row.username, role: row.role, createdAt: row.createdAt };
   }
 
@@ -141,11 +151,11 @@ export class LocalStore {
     return this.getUserById(id)!;
   }
 
-  /** Sets a new password (administrator reset). */
+  /** Sets a new password (administrator reset) and signs the account out everywhere by invalidating its tokens. */
   public setUserPassword(id: number, password: string): StoredUser {
     if (!this.getUserById(id)) throw new Error("User does not exist.");
     const passwordSalt = randomBytes(16).toString("hex");
-    this.db.prepare("UPDATE local_users SET password_hash = ?, password_salt = ? WHERE id = ?").run(this.hashPassword(password, passwordSalt), passwordSalt, id);
+    this.db.prepare("UPDATE local_users SET password_hash = ?, password_salt = ?, token_version = token_version + 1 WHERE id = ?").run(this.hashPassword(password, passwordSalt), passwordSalt, id);
     return this.getUserById(id)!;
   }
 
@@ -348,6 +358,8 @@ export class LocalStore {
     return (rows as Array<{ id: number; actor: string; action: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) }));
   }
 
+  /** Tokens carry this number; raising it (on a password reset) makes every earlier token for the account invalid. */
+  public tokenVersion(id: number): number { return (this.db.prepare("SELECT token_version AS version FROM local_users WHERE id = ?").get(id) as { version: number } | undefined)?.version ?? 0; }
   public getUserById(id: number): StoredUser | null { return (this.db.prepare("SELECT id,username,role,created_at AS createdAt FROM local_users WHERE id = ?").get(id) as StoredUser | undefined) ?? null; }
   private getApiKey(id: number): ApiKeyRecord | null { return (this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt FROM api_keys WHERE id = ?").get(id) as ApiKeyRecord | undefined) ?? null; }
   private normalizePercent(value: number): number { if (!Number.isInteger(value) || value < 0 || value > 100) throw new Error("Default brightness must be an integer from 0 to 100."); return value; }

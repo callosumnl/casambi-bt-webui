@@ -15,6 +15,17 @@ type BridgeEnvelope = BridgeResponse | { event: BridgeEvent };
 const LONG_COMMAND_TIMEOUTS_MS: Record<string, number> = { configure: 90_000, connect: 90_000, discover: 30_000 };
 /** How long a worker restarted for not answering may take to disconnect and exit before it is killed. */
 const FORCE_KILL_AFTER_MS = 8_000;
+/** Commands waiting their turn beyond this are refused, so a flood of requests cannot hold up timers and switches for hours. */
+const MAX_QUEUED_COMMANDS = 100;
+
+/**
+ * The worker needs no server secrets (JWT secret, encryption key): it gets only what Python, BlueZ/D-Bus,
+ * and its cache location need, so a compromised dependency in the Python process cannot read them.
+ */
+export function workerEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const allowed = /^(PATH|HOME|USER|LANG|LC_\w+|TZ|TMPDIR|NODE_ENV|VIRTUAL_ENV|PYTHON\w*|DBUS_\w+|XDG_\w+|CASAMBI_CACHE_PATH)$/;
+  return { ...Object.fromEntries(Object.entries(source).filter(([name]) => allowed.test(name))), PYTHONUNBUFFERED: "1" };
+}
 
 /** Minimal child-process shape, kept small to enable deterministic bridge tests. */
 export type BridgeChild = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "on" | "kill" | "pid">;
@@ -51,6 +62,8 @@ export class JsonLineCasambiBridge extends EventEmitter {
   private readonly commandTimeoutMs: number;
   private readonly createChild: BridgeChildFactory;
   private queue: Promise<unknown> = Promise.resolve();
+  /** Commands queued but not yet started. */
+  private queued = 0;
   /** The most recently queued coalescible command, while it has not been sent yet. */
   private coalescibleTail: { key: string; payload: Record<string, unknown>; result: Promise<unknown> } | null = null;
 
@@ -61,7 +74,7 @@ export class JsonLineCasambiBridge extends EventEmitter {
     this.createChild = options.createChild ?? (() => {
       const worker = resolve(process.cwd(), "server/casambi/casambi_worker.py");
       return spawn(process.env.CASAMBI_PYTHON_COMMAND || "python3", [worker, ...(mockMode ? ["--mock"] : [])], {
-        env: { ...process.env, PYTHONUNBUFFERED: "1" },
+        env: workerEnvironment(process.env),
         stdio: "pipe",
       });
     });
@@ -98,7 +111,9 @@ export class JsonLineCasambiBridge extends EventEmitter {
 
   /** Serializes a command so the upstream BLE client receives ordered requests. */
   public execute<T = unknown>(command: string, payload: Record<string, unknown> = {}): Promise<T> {
-    const run = async () => this.send<T>(command, payload);
+    if (this.queued >= MAX_QUEUED_COMMANDS) return Promise.reject(new Error("The Casambi bridge is busy; try again in a moment."));
+    this.queued += 1;
+    const run = async () => { this.queued -= 1; return this.send<T>(command, payload); };
     const next = this.queue.then(run, run);
     this.queue = next.catch(() => undefined);
     this.coalescibleTail = null;
@@ -114,8 +129,10 @@ export class JsonLineCasambiBridge extends EventEmitter {
   public executeLatest<T = unknown>(key: string, command: string, payload: Record<string, unknown>): Promise<T> {
     const tail = this.coalescibleTail;
     if (tail && tail.key === key) { tail.payload = payload; return tail.result as Promise<T>; }
+    if (this.queued >= MAX_QUEUED_COMMANDS) return Promise.reject(new Error("The Casambi bridge is busy; try again in a moment."));
+    this.queued += 1;
     const entry = { key, payload, result: Promise.resolve() as Promise<unknown> };
-    const run = async () => { if (this.coalescibleTail === entry) this.coalescibleTail = null; return this.send<T>(command, entry.payload); };
+    const run = async () => { this.queued -= 1; if (this.coalescibleTail === entry) this.coalescibleTail = null; return this.send<T>(command, entry.payload); };
     const next = this.queue.then(run, run);
     entry.result = next;
     this.queue = next.catch(() => undefined);
