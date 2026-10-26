@@ -134,36 +134,101 @@ CONNECT_MARKERS = (
 )
 
 
+# bleak_retry_connector's DEBUG messages inside establish_connection(): one per connection attempt, one per
+# failed attempt with BlueZ's reason, and one when it first closes a connection BlueZ still had open.
+RETRY_FAILURE = re.compile(r"Failed to connect: (.*?)(?:, device_missing: \w+)?(?:, backing off: [\d.]+)? \(attempt: \d+\)$")
+
+
 class ConnectStepRecorder(logging.Handler):
-    """Collects the time of casambi-bt's connect milestones while attached; writes nothing anywhere."""
+    """Collects casambi-bt's connect milestones and bleak_retry_connector's attempts while attached; writes nothing anywhere."""
 
     def __init__(self) -> None:
-        super().__init__(logging.INFO)
+        super().__init__(logging.DEBUG)
         self.times: dict[str, float] = {}
         self.fixture_fetches = 0
+        self.attempts = 0
+        self.failures: list[str] = []
+        self.closed_stale = False
 
     def emit(self, record: logging.LogRecord) -> None:
         message = record.getMessage()
+        if record.name.startswith("bleak_retry_connector"):
+            if ": Connection attempt: " in message:
+                self.attempts += 1
+            elif "Timed out trying to connect" in message:
+                self.failures.append("timed out")
+            elif match := RETRY_FAILURE.search(message):
+                self.failures.append(match.group(1) or "unknown error")
+            elif "unexpectedly connected, disconnecting" in message:
+                self.closed_stale = True
+            return
+        if record.levelno < logging.INFO:
+            return
         if message.startswith("Fetching unit type for id") or message == "Using cached type.":
             self.fixture_fetches += 1 if message.startswith("Fetching") else -1
         for step, prefix in CONNECT_MARKERS:
             if step not in self.times and message.startswith(prefix):
                 self.times[step] = record.created
 
+    def bluetooth_attempts(self) -> str:
+        """E.g. " (3 attempts: timed out, le-connection-abort-by-local; closed a stale connection first)"."""
+        notes = []
+        if self.attempts > 1 or self.failures:
+            notes.append(f"{self.attempts} attempts" + (f": {', '.join(self.failures)}" if self.failures else ""))
+        if self.closed_stale:
+            notes.append("closed a connection BlueZ still had open first")
+        return f" ({'; '.join(notes)})" if notes else ""
 
-def describe_connect_steps(scan_seconds: float, started: float, finished: float, steps: dict[str, float], fixture_fetches: int) -> str:
-    """One line for the audit log, e.g. "Connected in 37.4 s: Bluetooth scan 5.1 s, Casambi cloud 3.2 s, ..."."""
+
+class CapturedConnectLogs:
+    """Attaches a ConnectStepRecorder to casambi-bt (INFO) and bleak_retry_connector (DEBUG) for one connect.
+
+    Both libraries decide per call whether to build these messages, so raising their levels only around the
+    connect costs nothing afterwards; nothing reaches a handler that prints (the root logger has none).
+    """
+
+    LEVELS = (("CasambiBt", logging.INFO), ("bleak_retry_connector", logging.DEBUG))
+
+    def __enter__(self) -> ConnectStepRecorder:
+        self.recorder = ConnectStepRecorder()
+        self.previous = []
+        for name, level in self.LEVELS:
+            logger = logging.getLogger(name)
+            self.previous.append((logger, logger.level))
+            logger.addHandler(self.recorder)
+            logger.setLevel(level)
+        return self.recorder
+
+    def __exit__(self, *_exc: Any) -> None:
+        for logger, level in self.previous:
+            logger.removeHandler(self.recorder)
+            logger.setLevel(level)
+
+
+def describe_connect_steps(scan_seconds: float, started: float, finished: float, recorder: ConnectStepRecorder, failure: str | None = None) -> str:
+    """One line for the audit log, e.g. "Connected in 37.4 s: Bluetooth scan 5.1 s, Casambi cloud 3.2 s, ...".
+
+    With `failure`, it describes how far a failed connect got: "Connect failed after 25.4 s: ... Bluetooth
+    connect 20.3 s (4 attempts: ...), stopped: <reason>."
+    """
+    steps = recorder.times
     parts = [f"Bluetooth scan {scan_seconds:.1f} s"]
-    if "ble_start" in steps and "ble_done" in steps:
-        fetched = f", fetched {fixture_fetches} fixture type(s)" if fixture_fetches > 0 else ""
+    if "ble_start" in steps:
+        fetched = f", fetched {recorder.fixture_fetches} fixture type(s)" if recorder.fixture_fetches > 0 else ""
         parts.append(f"Casambi cloud and cache {steps['ble_start'] - started:.1f} s{fetched}")
-        parts.append(f"Bluetooth connect {steps['ble_done'] - steps['ble_start']:.1f} s")
-        if "key_done" in steps:
-            parts.append(f"key exchange {steps['key_done'] - steps['ble_done']:.1f} s")
-            parts.append(f"authentication {steps.get('auth_done', finished) - steps['key_done']:.1f} s")
+        parts.append(f"Bluetooth connect {steps.get('ble_done', finished) - steps['ble_start']:.1f} s{recorder.bluetooth_attempts()}")
+        if "ble_done" in steps:
+            parts.append(f"key exchange {steps.get('key_done', finished) - steps['ble_done']:.1f} s")
+            if "key_done" in steps:
+                parts.append(f"authentication {steps.get('auth_done', finished) - steps['key_done']:.1f} s")
+    elif failure is None:
+        parts.append(f"cloud, Bluetooth connect and handshake {finished - started:.1f} s (casambi-bt reported no steps){recorder.bluetooth_attempts()}")
     else:
-        parts.append(f"cloud, Bluetooth connect and handshake {finished - started:.1f} s (casambi-bt reported no steps)")
-    return f"Connected in {scan_seconds + finished - started:.1f} s: " + ", ".join(parts) + "."
+        parts.append(f"Casambi cloud and cache {finished - started:.1f} s")
+    total = scan_seconds + finished - started
+    if failure is not None:
+        return f"Connect failed after {total:.1f} s: " + ", ".join(parts) + f"; stopped: {failure}"
+    return f"Connected in {total:.1f} s: " + ", ".join(parts) + "."
 
 
 # The characteristic casambi-bt sends every command through (its CASA_AUTH_CHAR_UUID).
@@ -379,29 +444,24 @@ class CasambiWorker:
         casa.registerUnitChangedHandler(self.handle_unit_changed)
         casa.registerSwitchEventHandler(self.handle_switch_event)
         casa.registerDisconnectCallback(lambda: self.handle_disconnect(casa))
-        recorder = ConnectStepRecorder()
-        upstream_logger = logging.getLogger("CasambiBt")
-        previous_level = upstream_logger.level
-        upstream_logger.addHandler(recorder)
-        upstream_logger.setLevel(logging.INFO)  # Only while connecting; casambi-bt logs every packet at INFO.
         connect_started = time.time()
-        try:
-            await self.casa.connect(endpoint, password, bool(payload.get("forceOffline", False)))
-        except Exception as error:
-            # casambi-bt uses a blank NetworkNotFoundError both when a cloud
-            # lookup is unavailable and when BlueZ cannot rediscover the local
-            # BLE endpoint. The cloud branch includes a message; make the
-            # otherwise opaque direct-Bluetooth branch actionable.
-            if type(error).__name__ == "NetworkNotFoundError" and not str(error):
-                raise RuntimeError(
-                    f"Casambi cloud data was resolved, but the Raspberry Pi Bluetooth adapter could not discover local BLE endpoint {address}. "
-                    "Use Discover while the Pi is near a powered Casambi unit, verify the casambi service account has Bluetooth access, and retry."
-                ) from error
-            raise
-        finally:
-            upstream_logger.removeHandler(recorder)
-            upstream_logger.setLevel(previous_level)
-        print(describe_connect_steps(scan_seconds, connect_started, time.time(), recorder.times, recorder.fixture_fetches), file=sys.stderr, flush=True)
+        with CapturedConnectLogs() as recorder:
+            try:
+                await self.casa.connect(endpoint, password, bool(payload.get("forceOffline", False)))
+            except Exception as error:
+                # casambi-bt raises a blank NetworkNotFoundError when bleak_retry_connector gives up on the
+                # Bluetooth connection; the reason (e.g. "Failed to connect after 4 attempt(s): ...") is only
+                # in its cause. Report that reason instead of a guess.
+                cause = error.__cause__
+                if type(error).__name__ == "NetworkNotFoundError" and not str(error):
+                    reason = str(cause) if cause is not None and str(cause) else "no reason given"
+                    print(describe_connect_steps(scan_seconds, connect_started, time.time(), recorder, reason), file=sys.stderr, flush=True)
+                    raise RuntimeError(
+                        f"The Raspberry Pi found Casambi BLE endpoint {address} but could not open a Bluetooth connection to it: {reason}"
+                    ) from error
+                print(describe_connect_steps(scan_seconds, connect_started, time.time(), recorder, f"{type(error).__name__}: {error}"), file=sys.stderr, flush=True)
+                raise
+        print(describe_connect_steps(scan_seconds, connect_started, time.time(), recorder), file=sys.stderr, flush=True)
         self.fast_writes = bool(payload.get("fastWrites", False))
         self.apply_fast_writes(report=True)
         for unit in self.casa.units:

@@ -369,7 +369,7 @@ class Casambi:
 
 describe("casambi_worker connect steps and fast writes", () => {
   /** Real worker against a fake casambi-bt that logs its connect steps and writes commands through a fake BleakClient. */
-  async function worker(maxUnacknowledgedBytes = 244) {
+  async function worker(maxUnacknowledgedBytes = 244, failConnect = false) {
     const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "casambi-worker-writes-"));
     temporaryDirectories.push(temporaryDirectory);
     const writes = path.join(temporaryDirectory, "writes.txt");
@@ -380,6 +380,15 @@ from types import SimpleNamespace
 
 UUID = "c9ffde48-ca5a-0001-ab83-8f519b482f77"
 client_log = logging.getLogger("CasambiBt._client")
+retry_log = logging.getLogger("bleak_retry_connector")
+FAIL = ${failConnect ? "True" : "False"}
+
+class NetworkNotFoundError(Exception): pass
+
+def retry(message):
+    # Like bleak_retry_connector: these messages are only built when DEBUG is enabled for its logger.
+    if retry_log.isEnabledFor(logging.DEBUG):
+        retry_log.debug("Casambi Network - AB:CD:EF:01:23:45: " + message)
 
 async def discover():
     return [SimpleNamespace(address="AB:CD:EF:01:23:45")]
@@ -404,7 +413,17 @@ class Casambi:
     async def connect(self, address, password, force_offline):
         await asyncio.sleep(0.05)
         client_log.info("Connection to AB:CD:EF:01:23:45")
+        retry("unexpectedly connected, disconnecting")
+        retry("Connection attempt: 1")
+        retry("Failed to connect: [org.bluez.Error.Failed] le-connection-abort-by-local, device_missing: False, backing off: 0.25 (attempt: 1)")
+        retry("Connection attempt: 2")
         await asyncio.sleep(0.2)
+        if FAIL:
+            retry("Timed out trying to connect (attempt: 2)")
+            try:
+                raise TimeoutError("Casambi Network - AB:CD:EF:01:23:45: Failed to connect after 2 attempt(s): TimeoutError")
+            except TimeoutError as cause:
+                raise NetworkNotFoundError() from cause
         client_log.info("Connected to AB:CD:EF:01:23:45")
         client_log.info("[CASAMBI_RAW_PACKET] Encrypted #1: 00ff")
         await asyncio.sleep(0.05)
@@ -447,9 +466,18 @@ class Casambi:
     const { child, send, stderr } = await worker();
     try {
       await send("connect", "configure", credentials(false));
-      expect(stderr()).toMatch(/Connected in [\d.]+ s: Bluetooth scan [\d.]+ s, Casambi cloud and cache 0\.\d s, Bluetooth connect 0\.[23] s, key exchange 0\.\d s, authentication 0\.0 s\./);
+      expect(stderr()).toMatch(/Connected in [\d.]+ s: Bluetooth scan [\d.]+ s, Casambi cloud and cache 0\.\d s, Bluetooth connect 0\.[23] s \(2 attempts: \[org\.bluez\.Error\.Failed\] le-connection-abort-by-local; closed a connection BlueZ still had open first\), key exchange 0\.\d s, authentication 0\.0 s\./);
       expect(stderr()).not.toContain("CASAMBI_RAW_PACKET");
       expect(stderr()).not.toContain("Connection to 5E");
+    } finally { child.kill(); }
+  });
+
+  it("reports why the Bluetooth connection failed instead of a generic message", async () => {
+    const { child, send, stderr } = await worker(244, true);
+    try {
+      const failed = await send("connect", "configure", credentials(false));
+      expect(failed).toMatchObject({ ok: false, error: { message: "The Raspberry Pi found Casambi BLE endpoint AB:CD:EF:01:23:45 but could not open a Bluetooth connection to it: Casambi Network - AB:CD:EF:01:23:45: Failed to connect after 2 attempt(s): TimeoutError" } });
+      expect(stderr()).toMatch(/Connect failed after [\d.]+ s: Bluetooth scan [\d.]+ s, Casambi cloud and cache 0\.\d s, Bluetooth connect 0\.[23] s \(2 attempts: \[org\.bluez\.Error\.Failed\] le-connection-abort-by-local, timed out; closed a connection BlueZ still had open first\); stopped: Casambi Network/);
     } finally { child.kill(); }
   });
 

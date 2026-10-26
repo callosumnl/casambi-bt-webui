@@ -178,7 +178,7 @@ An `admin` may set `pollingEnabled` and `pollingIntervalSeconds` in `PUT /admin/
 
 casambi-bt sends every command as a Bluetooth write *with* response: each command waits for the connected Casambi unit to acknowledge it (about 110 ms per command was measured on a Raspberry Pi). Setting `fastWrites: true` in `PUT /admin/config` sends commands as writes *without* response instead; it is applied to the open connection without reconnecting. The worker only switches when the Casambi characteristic supports unacknowledged writes and one fits a whole command; otherwise it keeps the default and says why in the audit log (`bridge.diagnostic`). The key exchange always uses acknowledged writes. Compare the two modes with `GET /admin/worker`, whose `bluetooth` summary restarts when the mode changes, and turn the setting off if lamps miss commands.
 
-Every connect also writes one `bridge.diagnostic` entry that splits its duration into the Bluetooth scan, the Casambi cloud and cache step, the Bluetooth connection, the key exchange, and authentication.
+Every connect also writes one `bridge.diagnostic` entry that splits its duration into the Bluetooth scan, the Casambi cloud and cache step, the Bluetooth connection, the key exchange, and authentication. The Bluetooth connection part lists bleak_retry_connector's attempts with BlueZ's reason for each failed one, and whether a connection BlueZ still had open was closed first. A failed connect writes the same breakdown, up to the step that failed, and its error names the reason the Bluetooth connection could not be opened.
 
 ## References
 
