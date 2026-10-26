@@ -1,6 +1,7 @@
 import { ChildProcessWithoutNullStreams, spawn } from "child_process";
 import { EventEmitter } from "events";
 import { randomUUID } from "crypto";
+import { existsSync } from "fs";
 import { resolve } from "path";
 import type { BridgeEvent, NetworkSnapshot } from "./types";
 
@@ -15,8 +16,20 @@ type BridgeEnvelope = BridgeResponse | { event: BridgeEvent };
 const LONG_COMMAND_TIMEOUTS_MS: Record<string, number> = { configure: 90_000, connect: 90_000, discover: 30_000 };
 /** How long a worker restarted for not answering may take to disconnect and exit before it is killed. */
 const FORCE_KILL_AFTER_MS = 8_000;
+/** A worker line longer than this (far beyond any snapshot) is dropped instead of growing the buffer without bound. */
+const MAX_LINE_CHARS = 4 * 1024 * 1024;
 /** Commands waiting their turn beyond this are refused, so a flood of requests cannot hold up timers and switches for hours. */
 const MAX_QUEUED_COMMANDS = 100;
+
+/**
+ * The worker script, found from this module instead of the working directory, so starting the server from
+ * another folder cannot run a different script: it sits next to this file under tsx, and in server/casambi/
+ * beside dist/ for the built app.
+ */
+export function workerScriptPath(moduleDirectory = import.meta.dirname): string {
+  const candidates = [resolve(moduleDirectory, "casambi_worker.py"), resolve(moduleDirectory, "..", "server", "casambi", "casambi_worker.py")];
+  return candidates.find(candidate => existsSync(candidate)) ?? candidates[0];
+}
 
 /**
  * The worker needs no server secrets (JWT secret, encryption key): it gets only what Python, BlueZ/D-Bus,
@@ -52,6 +65,8 @@ export type BridgeOptions = {
 export class JsonLineCasambiBridge extends EventEmitter {
   private child: BridgeChild | null = null;
   private buffer = "";
+  /** Set while the rest of an oversized line is still arriving; it is dropped up to its line break. */
+  private discardingLine = false;
   private readonly pending = new Map<string, PendingRequest>();
   private stopped = false;
   private restartAttempt = 0;
@@ -72,7 +87,7 @@ export class JsonLineCasambiBridge extends EventEmitter {
     this.commandTimeoutMs = options.commandTimeoutMs ?? 12_000;
     const mockMode = options.mockMode ?? process.env.CASAMBI_MOCK_MODE === "true";
     this.createChild = options.createChild ?? (() => {
-      const worker = resolve(process.cwd(), "server/casambi/casambi_worker.py");
+      const worker = workerScriptPath();
       return spawn(process.env.CASAMBI_PYTHON_COMMAND || "python3", [worker, ...(mockMode ? ["--mock"] : [])], {
         env: workerEnvironment(process.env),
         stdio: "pipe",
@@ -84,6 +99,8 @@ export class JsonLineCasambiBridge extends EventEmitter {
   public start(): void {
     if (this.child || this.stopped) return;
     this.emit("event", { type: "bridge", state: "starting" } satisfies BridgeEvent);
+    // A partial line from a worker that died mid-write must not be glued to the new worker's first line.
+    this.buffer = ""; this.discardingLine = false;
     const child = this.createChild();
     this.child = child;
     // Decode as a stream so a multi-byte character split across two pipe chunks stays intact.
@@ -195,8 +212,14 @@ export class JsonLineCasambiBridge extends EventEmitter {
     while (newline >= 0) {
       const line = this.buffer.slice(0, newline).trim();
       this.buffer = this.buffer.slice(newline + 1);
-      if (line) this.consumeLine(line);
+      if (this.discardingLine) this.discardingLine = false;
+      else if (line) this.consumeLine(line);
       newline = this.buffer.indexOf("\n");
+    }
+    if (this.buffer.length > MAX_LINE_CHARS) {
+      this.emit("diagnostic", `Dropped worker output: a line exceeded ${MAX_LINE_CHARS} characters.`);
+      this.buffer = "";
+      this.discardingLine = true;
     }
   }
 
@@ -209,10 +232,12 @@ export class JsonLineCasambiBridge extends EventEmitter {
       return;
     }
     if ("event" in envelope) {
+      if (!isBridgeEvent(envelope.event)) { this.emit("diagnostic", `Ignored malformed worker event: ${line.slice(0, 180)}`); return; }
       this.restartAttempt = 0;
       this.emit("event", envelope.event);
       return;
     }
+    if (typeof envelope !== "object" || envelope === null || typeof (envelope as { id?: unknown }).id !== "string") { this.emit("diagnostic", `Ignored malformed worker output: ${line.slice(0, 180)}`); return; }
     const request = this.pending.get(envelope.id);
     if (!request) return;
     clearTimeout(request.timer);
@@ -267,4 +292,18 @@ export class JsonLineCasambiBridge extends EventEmitter {
     }
     this.pending.clear();
   }
+}
+
+/**
+ * Checks the structure the service relies on, so malformed worker output is dropped instead of breaking it.
+ * Deliberately not the full unit schema: real hardware may report values that schema has never been checked against.
+ */
+export function isBridgeEvent(value: unknown): value is BridgeEvent {
+  const event = value as Record<string, unknown> | null;
+  if (typeof event !== "object" || event === null) return false;
+  const isObject = (field: unknown): field is Record<string, unknown> => typeof field === "object" && field !== null;
+  if (event.type === "bridge") return typeof event.state === "string";
+  if (event.type === "unit.state") return isObject(event.unit) && typeof event.unit.id === "number" && isObject(event.unit.state) && Array.isArray(event.unit.capabilities);
+  if (event.type === "switch") return isObject(event.press) && isObject(event.press.raw);
+  return false;
 }

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { connectedBuild, watchBuild } from "@/lib/buildWatch";
 import { ConnectionStatus, LocalApi, LocalScene, NetworkSnapshot, SceneScope } from "@/lib/localApi";
 
 /** Loads the Casambi network and saved scenes, keeps them live over SSE, and sends controls. */
@@ -74,6 +75,7 @@ export function useNetwork() {
       try { url = await api.eventUrl(); } catch { if (!closed) reopen = window.setTimeout(() => void open(), 5_000); return; }
       if (closed) return;
       source = new EventSource(url);
+      source.addEventListener("connected", event => watchBuild(connectedBuild(event)));
       source.onopen = () => {
         live.current = true;
         // Changes made while the stream was down (other users, timers, switches) were missed: fetch them.

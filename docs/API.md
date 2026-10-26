@@ -39,8 +39,8 @@ Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401
 | `PATCH`, `DELETE` | `/admin/away-date-sets/:id` | admin | Updates a set (name, dates) or deletes it, detaching it from its timers. |
 | `GET`, `POST` | `/admin/users` | admin | Lists or creates local accounts. |
 | `PATCH`, `DELETE` | `/admin/users/:id` | admin | Changes the role and/or sets a new password (`{ role?, password? }`), or deletes the account; its timers move to the deleting admin. You cannot delete your own account or the last admin. |
-| `GET`, `POST`, `DELETE` | `/admin/api-keys`, `/admin/api-keys/:id` | admin | Lists metadata, generates once-visible API keys, and revokes keys. |
-| `GET` | `/admin/audit` | admin | Recent audit entries, newest first: `?limit=` (1-500, default 100) and `?action=` (prefix, e.g. `bridge.`). The log keeps the latest 20,000 entries. |
+| `GET`, `POST`, `DELETE` | `/admin/api-keys`, `/admin/api-keys/:id` | admin | Lists metadata, generates once-visible API keys (optionally valid for `expiresInDays`), and revokes keys. |
+| `GET` | `/admin/audit` | admin | Recent audit entries, newest first: `?limit=` (1-500, default 100) and `?action=` (prefix, e.g. `bridge.`). The log keeps the latest 20,000 everyday entries (light commands, switch presses, executed timers, bridge diagnostics) and, separately, the latest 20,000 of everything else, so heavy use cannot push sign-in and administration events out. |
 | `GET` | `/admin/worker` | admin | Returns the Python worker's state from its supervisor: `running`, `pid`, `busy` (`command`, `forMs`), `lastAnswerAt`, and `restarts`. Never waits on the worker, so it answers even when the worker is stuck. |
 | `POST` | `/admin/worker/restart` | admin | Restarts the worker (SIGTERM, then SIGKILL after 8 s), or starts it if it is not running; returns `202` with the worker state. A connected network reconnects automatically about 15 s later. |
 | `GET` | `/admin/switch-activity` | admin | Returns the 50 most recent switch messages, newest first. |
@@ -165,7 +165,7 @@ A switch rule runs a lighting command when a matching button is used:
 { "name": "Eiland toggle", "unitId": 2, "button": 4, "trigger": "tap", "command": { "targetType": "unit", "targetId": 1, "operation": "toggle" }, "enabled": true }
 ```
 
-`command` is any `/control` request, or `toggle` for a `unit`, `group`, `room`, or `network`, which turns the target off when any of its lamps is on and on otherwise. Presses are handled one at a time through the same control path as the API, so consecutive toggles alternate. Each run is audited as `switch_rule.executed` or `switch_rule.failed`. Rules run in addition to whatever the button already does in the Casambi app.
+`command` is any `/control` request, or `toggle` for a `unit`, `group`, `room`, or `network`, which turns the target off when any of its lamps is on and on otherwise. Presses are handled one at a time through the same control path as the API, so consecutive toggles alternate. A press that arrives while a rule is still fading stops that fade at its next step, and at most 10 presses wait behind a running rule; further ones are ignored and audited. Each run is audited as `switch_rule.executed` or `switch_rule.failed`. Rules run in addition to whatever the button already does in the Casambi app.
 
 ## Sensor telemetry and polling
 

@@ -57,7 +57,7 @@ const schemas: Record<string, JsonSchema> = {
     error: { type: "object", properties: { code: { type: "string" }, message: { type: "string" }, fields: { description: "Per-field validation messages (validation errors only)." } }, required: ["code", "message"] },
     requestId: { type: "string" },
   }, ["error"]),
-  Health: object({ status: { type: "string", const: "ok" }, bootstrapRequired: { type: "boolean", description: "True until the first admin account exists." }, eventClients: { type: "integer" } }),
+  Health: object({ status: { type: "string", const: "ok" }, bootstrapRequired: { type: "boolean", description: "True until the first admin account exists." }, eventClients: { type: "integer" }, build: { type: ["string", "null"], description: "Identifies the web app build being served; it changes with every update. Null in development." } }),
   User: object({ id, username: { type: "string" }, role, createdAt: timestamp }),
   EventTicket: object({ ticket: { type: "string" }, expiresInSeconds: { type: "integer", const: 60 } }),
   Session: object({ token: { type: "string", description: "JWT for the Authorization: Bearer header; valid for 8 hours." }, user: ref("User") }),
@@ -105,7 +105,7 @@ const schemas: Record<string, JsonSchema> = {
     raw: { type: "object", description: "Upstream message fields for diagnosis." }, at: timestamp,
   }),
   SwitchRule: object({ id, name: { type: "string" }, unitId: { type: "integer" }, button: { type: "integer" }, trigger: { type: "string", enum: ["tap", "hold", "release_after_hold"] }, command: { type: "object" }, enabled: { type: "boolean" }, createdAt: timestamp, updatedAt: timestamp, lastTriggeredAt: nullable(timestamp) }),
-  ApiKey: object({ id, label: { type: "string" }, prefix: { type: "string" }, role, createdAt: timestamp, lastUsedAt: nullable(timestamp), revokedAt: nullable(timestamp) }),
+  ApiKey: object({ id, label: { type: "string" }, prefix: { type: "string" }, role, createdAt: timestamp, lastUsedAt: nullable(timestamp), revokedAt: nullable(timestamp), expiresAt: nullable(timestamp) }),
   ApiKeyCreated: { allOf: [ref("ApiKey"), object({ token: { type: "string", description: "The full key, shown only in this response. Send it as X-API-Key." } })] },
   AuditEntry: object({ id: { type: "integer" }, actor: { type: "string" }, action: { type: "string" }, detail: { type: "object" }, createdAt: timestamp }),
 };
@@ -123,7 +123,7 @@ const operations: Operation[] = [
   { method: "get", path: "/auth/me", tag: "Authentication", summary: "Who am I", access: "user", responses: { 200: { description: "The authenticated user or API key.", schema: "Principal" } } },
   {
     method: "get", path: "/events", tag: "System", summary: "Live event stream (SSE)", access: "user",
-    description: "Server-Sent Events. Send the Authorization or X-API-Key header, or (browsers, whose EventSource cannot set headers) a one-minute `ticket` from `POST /auth/event-ticket`. Events: `connected`, `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `switch`, `switch_rule.executed`, `switch_rule.failed`, `local_scenes.changed`, `schedule.executed`, `schedule.failed`, `schedule.skipped_holiday`. Each `data` is JSON `{ type, payload, at }`.",
+    description: "Server-Sent Events. Send the Authorization or X-API-Key header, or (browsers, whose EventSource cannot set headers) a one-minute `ticket` from `POST /auth/event-ticket`. Events: `connected`, `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `switch`, `switch_rule.executed`, `switch_rule.failed`, `local_scenes.changed`, `schedule.executed`, `schedule.failed`, `schedule.skipped_holiday`. Each `data` is JSON `{ type, payload, at }`, except `connected`, whose data is `{ id, build, at }` (`build` as in `/health`; a page can reload when it changes). `switch` and `switch_rule.*` go to admins only, `schedule.*` to admins and the timer's owner. At most 10 streams per account or API key: opening another closes the oldest.",
     query: [{ name: "ticket", description: "Event ticket from `POST /auth/event-ticket`, as an alternative to the headers.", schema: { type: "string" } }],
     responses: { 200: { description: "An open event stream.", contentType: "text/event-stream", schema: { type: "string" } } },
   },

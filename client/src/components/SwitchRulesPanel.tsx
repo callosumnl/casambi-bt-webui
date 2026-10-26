@@ -2,6 +2,7 @@ import { MousePointerClick, Plus, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { HudFrame } from "@/components/HudFrame";
 import { dimmerToPercent, percentToDimmer } from "@/lib/brightness";
+import { connectedBuild, watchBuild } from "@/lib/buildWatch";
 import { LocalApi, LocalScene, NetworkSnapshot, SwitchPress, SwitchRule, SwitchTrigger } from "@/lib/localApi";
 import { isLamp, parseSceneTarget, sceneTargetOptions } from "@/lib/scenes";
 
@@ -37,6 +38,7 @@ export function SwitchRulesPanel({ api, onNotice }: Props) {
       try { url = await api.eventUrl(); } catch { if (!closed) reopen = window.setTimeout(() => void open(), 5_000); return; }
       if (closed) return;
       source = new EventSource(url);
+      source.addEventListener("connected", event => watchBuild(connectedBuild(event)));
       source.addEventListener("switch", event => { const press = (JSON.parse(event.data) as { payload: SwitchPress }).payload; setActivity(current => [press, ...current].slice(0, ACTIVITY_LIMIT)); });
       // Refresh "last triggered" after a rule runs.
       source.addEventListener("switch_rule.executed", () => void loadRules());

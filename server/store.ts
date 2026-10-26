@@ -15,7 +15,7 @@ const DUMMY_SALT = randomBytes(16).toString("hex");
 export type Role = "admin" | "user";
 export type StoredUser = { id: number; username: string; role: Role; createdAt: string };
 type UserRow = StoredUser & { passwordHash: string; passwordSalt: string };
-export type ApiKeyRecord = { id: number; label: string; prefix: string; role: Role; createdAt: string; lastUsedAt: string | null; revokedAt: string | null };
+export type ApiKeyRecord = { id: number; label: string; prefix: string; role: Role; createdAt: string; lastUsedAt: string | null; revokedAt: string | null; expiresAt: string | null };
 export type RoomRecord = { id: number; name: string; sortOrder: number; defaultBrightnessPercent: number };
 export type UnitMetadata = { unitId: number; customName: string | null; roomId: number | null };
 /** A rule's action: any validated control, or a toggle resolved against current lamp state when it fires. */
@@ -46,8 +46,13 @@ export type CasambiConfig = {
 };
 
 const NOW = () => new Date().toISOString();
-/** Audit entries kept; older ones are pruned (roughly a few months of normal use). */
+/** Audit entries kept per class; older ones are pruned (roughly a few months of normal use). */
 export const AUDIT_RETENTION = 20_000;
+/**
+ * High-volume events from everyday use. They are pruned separately from security and administration events
+ * (sign-ins, accounts, keys, configuration), so a flood of light commands cannot push those out of the log.
+ */
+const ROUTINE_AUDIT = "(action LIKE 'lighting.%' OR action IN ('switch.pressed','switch_rule.executed','schedule.executed','schedule.skipped_holiday','bridge.diagnostic','bridge.poll_failed'))";
 
 /**
  * SQLite repository for the Raspberry Pi appliance. The database contains no
@@ -103,6 +108,8 @@ export class LocalStore {
         id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL, detail_json TEXT NOT NULL, created_at TEXT NOT NULL
       );
     `);
+    const keyColumns = this.db.prepare("PRAGMA table_info(api_keys)").all() as Array<{ name: string }>;
+    if (!keyColumns.some(column => column.name === "expires_at")) this.db.exec("ALTER TABLE api_keys ADD COLUMN expires_at TEXT");
     const userColumns = this.db.prepare("PRAGMA table_info(local_users)").all() as Array<{ name: string }>;
     if (!userColumns.some(column => column.name === "token_version")) this.db.exec("ALTER TABLE local_users ADD COLUMN token_version INTEGER NOT NULL DEFAULT 0");
     const roomColumns = this.db.prepare("PRAGMA table_info(rooms)").all() as Array<{ name: string }>;
@@ -173,13 +180,14 @@ export class LocalStore {
     } catch (error) { this.db.exec("ROLLBACK"); throw error; }
   }
 
-  /** Generates a revocable API key. The plaintext is returned only from this call. */
-  public createApiKey(label: string, role: Role): ApiKeyRecord & { token: string } {
+  /** Generates a revocable API key, optionally valid for a number of days. The plaintext is returned only from this call. */
+  public createApiKey(label: string, role: Role, expiresInDays: number | null = null): ApiKeyRecord & { token: string } {
     const prefix = randomBytes(4).toString("hex");
     const secret = randomBytes(32).toString("base64url");
     const token = `cbt_${prefix}_${secret}`;
-    const info = this.db.prepare("INSERT INTO api_keys (label,prefix,digest,role,created_at) VALUES (?,?,?,?,?)")
-      .run(label.trim(), prefix, this.digest(token), role, NOW());
+    const expiresAt = expiresInDays === null ? null : new Date(Date.now() + expiresInDays * 86_400_000).toISOString();
+    const info = this.db.prepare("INSERT INTO api_keys (label,prefix,digest,role,created_at,expires_at) VALUES (?,?,?,?,?,?)")
+      .run(label.trim(), prefix, this.digest(token), role, NOW(), expiresAt);
     const record = this.getApiKey(Number(info.lastInsertRowid))!;
     return { ...record, token };
   }
@@ -188,9 +196,9 @@ export class LocalStore {
   public authenticateApiKey(token: string): ApiKeyRecord | null {
     const match = /^cbt_([a-f0-9]{8})_[A-Za-z0-9_-]+$/.exec(token);
     if (!match) return null;
-    const row = this.db.prepare("SELECT id,label,prefix,digest,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt FROM api_keys WHERE prefix = ?")
+    const row = this.db.prepare("SELECT id,label,prefix,digest,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt,expires_at AS expiresAt FROM api_keys WHERE prefix = ?")
       .get(match[1]) as (ApiKeyRecord & { digest: string }) | undefined;
-    if (!row || row.revokedAt || !this.safeEqual(this.digest(token), row.digest)) return null;
+    if (!row || row.revokedAt || (row.expiresAt && Date.parse(row.expiresAt) <= Date.now()) || !this.safeEqual(this.digest(token), row.digest)) return null;
     this.db.prepare("UPDATE api_keys SET last_used_at = ? WHERE id = ?").run(NOW(), row.id);
     const { digest: _digest, ...record } = row;
     return { ...record, lastUsedAt: NOW() };
@@ -198,7 +206,7 @@ export class LocalStore {
 
   /** Lists API key metadata without ever returning a token or digest. */
   public listApiKeys(): ApiKeyRecord[] {
-    return this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt FROM api_keys ORDER BY id DESC").all() as ApiKeyRecord[];
+    return this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt,expires_at AS expiresAt FROM api_keys ORDER BY id DESC").all() as ApiKeyRecord[];
   }
 
   /** Makes an API key unusable while retaining its audit history. */
@@ -266,12 +274,12 @@ export class LocalStore {
    * Names of the timers, switch rules, and scenes that point at a room or saved scene. Deleting a used item
    * would make those fail at run time, so the API refuses it while this list is not empty.
    */
-  public usageOf(target: { type: "room" | "local_scene"; id: number }): string[] {
+  public usageOf(target: { type: "room" | "local_scene"; id: number }): Array<{ label: string; ownerUserId: number | null }> {
     const usedBy = (command: { targetType: string; targetId?: unknown }) => command.targetType === target.type && Number(command.targetId) === target.id;
     return [
-      ...this.listSchedules().filter(schedule => usedBy(schedule.command)).map(schedule => `timer “${schedule.name}”`),
-      ...this.listSwitchRules().filter(rule => usedBy(rule.command)).map(rule => `switch rule “${rule.name}”`),
-      ...(target.type === "room" ? this.listLightScenes().filter(scene => scene.scope.type === "room" && scene.scope.id === target.id).map(scene => `scene “${scene.name}”`) : []),
+      ...this.listSchedules().filter(schedule => usedBy(schedule.command)).map(schedule => ({ label: `timer “${schedule.name}”`, ownerUserId: schedule.ownerUserId })),
+      ...this.listSwitchRules().filter(rule => usedBy(rule.command)).map(rule => ({ label: `switch rule “${rule.name}”`, ownerUserId: null })),
+      ...(target.type === "room" ? this.listLightScenes().filter(scene => scene.scope.type === "room" && scene.scope.id === target.id).map(scene => ({ label: `scene “${scene.name}”`, ownerUserId: null })) : []),
     ];
   }
   public deleteRoom(id: number): void { if (this.db.prepare("DELETE FROM rooms WHERE id = ?").run(id).changes === 0) throw new Error("Room does not exist."); }
@@ -347,8 +355,12 @@ export class LocalStore {
   /** Appends an immutable operational event. Never pass secret material here. */
   public audit(actor: string, action: string, detail: Record<string, unknown>): void {
     const info = this.db.prepare("INSERT INTO audit_log (actor,action,detail_json,created_at) VALUES (?,?,?,?)").run(actor, action, JSON.stringify(detail), NOW());
-    // Keep the log bounded on the SD card: every 500 entries, drop all but the newest AUDIT_RETENTION.
-    if (Number(info.lastInsertRowid) % 500 === 0) this.db.prepare("DELETE FROM audit_log WHERE id <= ?").run(Number(info.lastInsertRowid) - AUDIT_RETENTION);
+    // Keep the log bounded on the SD card: every 500 entries, keep the newest AUDIT_RETENTION of each class.
+    if (Number(info.lastInsertRowid) % 500 === 0) {
+      for (const kind of [ROUTINE_AUDIT, `NOT ${ROUTINE_AUDIT}`]) {
+        this.db.prepare(`DELETE FROM audit_log WHERE ${kind} AND id < (SELECT id FROM audit_log WHERE ${kind} ORDER BY id DESC LIMIT 1 OFFSET ?)`).run(AUDIT_RETENTION - 1);
+      }
+    }
   }
   /** Newest first; `action` matches a prefix such as "bridge." or "switch_rule". */
   public recentAudit(limit = 100, action?: string): Array<{ id: number; actor: string; action: string; detail: Record<string, unknown>; createdAt: string }> {
@@ -361,7 +373,7 @@ export class LocalStore {
   /** Tokens carry this number; raising it (on a password reset) makes every earlier token for the account invalid. */
   public tokenVersion(id: number): number { return (this.db.prepare("SELECT token_version AS version FROM local_users WHERE id = ?").get(id) as { version: number } | undefined)?.version ?? 0; }
   public getUserById(id: number): StoredUser | null { return (this.db.prepare("SELECT id,username,role,created_at AS createdAt FROM local_users WHERE id = ?").get(id) as StoredUser | undefined) ?? null; }
-  private getApiKey(id: number): ApiKeyRecord | null { return (this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt FROM api_keys WHERE id = ?").get(id) as ApiKeyRecord | undefined) ?? null; }
+  private getApiKey(id: number): ApiKeyRecord | null { return (this.db.prepare("SELECT id,label,prefix,role,created_at AS createdAt,last_used_at AS lastUsedAt,revoked_at AS revokedAt,expires_at AS expiresAt FROM api_keys WHERE id = ?").get(id) as ApiKeyRecord | undefined) ?? null; }
   private normalizePercent(value: number): number { if (!Number.isInteger(value) || value < 0 || value > 100) throw new Error("Default brightness must be an integer from 0 to 100."); return value; }
   private adminCount(): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM local_users WHERE role = 'admin'").get() as { count: number }).count; }
   private mapLightScene(row: Record<string, unknown>): LightSceneRecord {

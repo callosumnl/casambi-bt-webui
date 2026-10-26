@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { classifyError, createCasambiApi } from "./api";
+import { apiErrorHandler, classifyError, createCasambiApi } from "./api";
 import { CasambiService } from "./casambi/service";
 import { EventHub } from "./events";
 import { DurableScheduler } from "./scheduler";
@@ -20,7 +20,7 @@ function app(options: { setupCode?: (folder: string) => SetupCode } = {}) {
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
   const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
-  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder) })); stores.set(instance, store); return instance;
+  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder) })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
 }
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })));
 
@@ -301,5 +301,13 @@ describe("REST API", () => {
       call.end(error => { if (error && !String(error).includes("aborted") && !String(error).includes("socket hang up")) reject(error); });
     });
     expect(stream).toBe(200);
+  });
+
+  it("answers unknown API paths and malformed bodies in JSON", async () => {
+    const instance = app();
+    const missing = await request(instance).get("/api/v1/netwerk").expect(404);
+    expect(missing.body.error.code).toBe("NOT_FOUND");
+    const malformed = await request(instance).post("/api/v1/auth/login").set("Content-Type", "application/json").send("{not json").expect(400);
+    expect(malformed.body.error.code).toBe("INVALID_JSON");
   });
 });

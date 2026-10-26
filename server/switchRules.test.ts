@@ -4,7 +4,7 @@ import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
 import { EventHub } from "./events";
 import { LocalStore } from "./store";
-import { resolveSwitchCommand, switchRuleSchema, SwitchRuleRunner } from "./switchRules";
+import { MAX_WAITING_PRESSES, resolveSwitchCommand, switchRuleSchema, SwitchRuleRunner } from "./switchRules";
 import type { ControlRequest, NetworkSnapshot } from "./casambi/types";
 import type { TimedSwitchPress } from "./casambi/service";
 
@@ -22,11 +22,16 @@ const press = (trigger: TimedSwitchPress["trigger"], unitId = 2, button = 4): Ti
 class FakeService {
   public readonly commands: ControlRequest[] = [];
   public failNext = false;
+  public interrupted = 0;
+  /** When set, control() waits for it, like a running fade. */
+  public hold: Promise<void> | null = null;
   public constructor(public state: NetworkSnapshot) {}
+  public interruptFade() { this.interrupted += 1; }
   public cachedSnapshot() { return { ...structuredClone(this.state), rooms: [], connection: { phase: "connected" as const } }; }
   public async control(command: ControlRequest): Promise<NetworkSnapshot> {
     if (this.failNext) { this.failNext = false; throw new Error("The Casambi bridge is not connected."); }
     this.commands.push(command);
+    if (this.hold) await this.hold;
     for (const item of this.state.units) if (command.targetType === "network" || item.id === Number(command.targetId)) item.state.on = command.operation === "on";
     return this.state;
   }
@@ -93,6 +98,21 @@ describe("SwitchRuleRunner", () => {
 
     expect(service.commands).toHaveLength(1);
     expect(database.recentAudit().find(entry => entry.action === "switch_rule.failed")?.detail).toEqual({ ruleId: rule.id, message: "The Casambi bridge is not connected." });
+  });
+});
+
+describe("SwitchRuleRunner while a rule is still running", () => {
+  it("interrupts the running fade for a new press and drops presses beyond the waiting limit", async () => {
+    const database = store(); const service = new FakeService(snapshot([unit(1, false)]));
+    database.createSwitchRule({ name: "Toggle", unitId: 2, button: 4, trigger: "tap", command: { targetType: "unit", targetId: 1, operation: "toggle" }, enabled: true });
+    const runner = new SwitchRuleRunner(database, service as never, new EventHub());
+    let release!: () => void; service.hold = new Promise(resolve => { release = resolve; });
+    const presses = Array.from({ length: MAX_WAITING_PRESSES + 5 }, () => runner.handle(press("tap")));
+    expect(service.interrupted).toBe(MAX_WAITING_PRESSES);
+    service.hold = null; release();
+    await Promise.all(presses);
+    expect(service.commands).toHaveLength(MAX_WAITING_PRESSES + 1);
+    expect(database.recentAudit(10, "switch_rule.failed").filter(entry => String(entry.detail.message).startsWith("Too many"))).toHaveLength(4);
   });
 });
 

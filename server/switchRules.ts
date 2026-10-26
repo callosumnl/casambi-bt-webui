@@ -36,22 +36,33 @@ export function resolveSwitchCommand(command: SwitchRuleCommand, snapshot: Netwo
   return { targetType: command.targetType, targetId: command.targetId ?? null, operation: anyOn ? "off" : "on" };
 }
 
-type RuleService = Pick<CasambiService, "control" | "cachedSnapshot">;
+type RuleService = Pick<CasambiService, "control" | "cachedSnapshot" | "interruptFade">;
+/** Presses waiting behind a running rule beyond this are dropped; nobody presses a switch faster than this on purpose. */
+export const MAX_WAITING_PRESSES = 10;
 
 /**
  * Runs enabled switch rules for each trigger press through the same control path as the API.
- * Presses are handled one at a time so a toggle sees the state left by the previous press.
+ * Presses are handled one at a time so a toggle sees the state left by the previous press. A press that
+ * arrives while a rule is still fading stops that fade, so it is handled right away instead of after it.
  */
 export class SwitchRuleRunner {
   private chain: Promise<void> = Promise.resolve();
+  /** Presses accepted but not yet finished, including the one running. */
+  private pending = 0;
 
   public constructor(private readonly store: LocalStore, private readonly service: RuleService, private readonly events: EventHub) {}
 
   public handle(press: TimedSwitchPress): Promise<void> {
     if (!press.trigger) return this.chain;
+    if (this.pending > MAX_WAITING_PRESSES) {
+      this.store.audit("switch", "switch_rule.failed", { message: "Too many switch presses waiting; this one was ignored." });
+      return this.chain;
+    }
+    if (this.pending > 0) this.service.interruptFade();
+    this.pending += 1;
     this.chain = this.chain.then(() => this.run(press)).catch(error => {
       this.store.audit("switch", "switch_rule.failed", { message: error instanceof Error ? error.message : "Unknown error." });
-    });
+    }).finally(() => { this.pending -= 1; });
     return this.chain;
   }
 
@@ -66,11 +77,11 @@ export class SwitchRuleRunner {
       await this.service.control(command, `switch-rule:${rule.id}`);
       this.store.markSwitchRuleTriggered(rule.id);
       this.store.audit("switch", "switch_rule.executed", { ruleId: rule.id, operation: command.operation });
-      this.events.publish("switch_rule.executed", { ruleId: rule.id, operation: command.operation });
+      this.events.publish("switch_rule.executed", { ruleId: rule.id, operation: command.operation }, "admins");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown error.";
       this.store.audit("switch", "switch_rule.failed", { ruleId: rule.id, message });
-      this.events.publish("switch_rule.failed", { ruleId: rule.id, message });
+      this.events.publish("switch_rule.failed", { ruleId: rule.id, message }, "admins");
     }
   }
 }

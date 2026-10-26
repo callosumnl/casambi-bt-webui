@@ -186,6 +186,9 @@ export class CasambiService {
     if (changed && this.wantConnected && next.networkAddress && next.networkPassword) void this.connect().catch(() => { /* connect() audits and reports the failure itself. */ });
   }
 
+  /** Stops a running fade at its next step (a newer command does this too), e.g. when a switch is pressed during one. */
+  public interruptFade(): void { this.fadeGeneration += 1; }
+
   /** Applies a control command to its actual Casambi target, expanding local room membership first. */
   public async control(input: ControlRequest, actor: string): Promise<NetworkSnapshot> {
     const command = controlRequestSchema.parse(input);
@@ -326,7 +329,8 @@ export class CasambiService {
       this.switchActivity.splice(SWITCH_ACTIVITY_LIMIT);
       // Only real triggers are audited; raw type 0x08 activity would double every press.
       if (press.trigger) this.store.audit("switch", "switch.pressed", { unitId: press.unitId, button: press.button, trigger: press.trigger });
-      this.events.publish("switch", press);
+      // Switch activity and rules are administration (GET /admin/switch-activity); other users only see the lights change.
+      this.events.publish("switch", press, "admins");
       for (const listener of this.switchListeners) listener(press);
     } else {
       if (event.type === "bridge" && (event.state === "disconnected" || event.state === "unavailable")) {

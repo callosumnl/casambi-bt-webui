@@ -16,7 +16,7 @@ export type Schedule = { id: number; name: string; cronExpression: string; timez
 export type Room = NetworkSnapshot["rooms"][number];
 export type LocalUser = { id: number; username: string; role: Role; createdAt: string };
 export type AuditEntry = { id: number; actor: string; action: string; detail: Record<string, unknown>; createdAt: string };
-export type ApiKey = { id: number; label: string; prefix: string; role: Role; createdAt: string; lastUsedAt: string | null; revokedAt: string | null };
+export type ApiKey = { id: number; label: string; prefix: string; role: Role; createdAt: string; lastUsedAt: string | null; revokedAt: string | null; expiresAt: string | null };
 export type SwitchTrigger = "tap" | "hold" | "release_after_hold";
 /** A reported button message; `trigger` is null for raw activity that never drives a rule. */
 export type SwitchPress = { unitId: number | null; button: number | null; trigger: SwitchTrigger | null; raw: Record<string, unknown>; at: string };

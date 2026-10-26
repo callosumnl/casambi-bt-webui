@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import express, { type Express } from "express";
 import fs from "fs";
 import { type Server } from "http";
@@ -48,11 +49,22 @@ export async function setupVite(app: Express, server: Server) {
   });
 }
 
+function staticPath(): string {
+  return process.env.NODE_ENV === "development"
+    ? path.resolve(import.meta.dirname, "../..", "dist", "public")
+    : path.resolve(import.meta.dirname, "public");
+}
+
+/**
+ * Identifies the built web app: Vite puts content hashes of every asset into index.html, so its own hash
+ * changes with every build that changes anything. Null when there is no build (development with Vite).
+ */
+export function staticBuildId(): string | null {
+  try { return createHash("sha256").update(fs.readFileSync(path.resolve(staticPath(), "index.html"))).digest("hex").slice(0, 16); } catch { return null; }
+}
+
 export function serveStatic(app: Express) {
-  const distPath =
-    process.env.NODE_ENV === "development"
-      ? path.resolve(import.meta.dirname, "../..", "dist", "public")
-      : path.resolve(import.meta.dirname, "public");
+  const distPath = staticPath();
   if (!fs.existsSync(distPath)) {
     console.error(
       `Could not find the build directory: ${distPath}, make sure to build the client first`

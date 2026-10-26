@@ -1,7 +1,7 @@
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AUDIT_RETENTION, LocalStore } from "./store";
 
 const folders: string[] = [];
@@ -87,6 +87,15 @@ describe("LocalStore", () => {
     expect(() => database.revokeApiKey(999)).toThrow("API key does not exist.");
   });
 
+  it("prunes everyday events separately, so they cannot push security events out of the audit log", () => {
+    const database = store();
+    database.audit("admin", "user.deleted", { id: 7 });
+    // 499 more than the budget, so the last entry (id 20,500) triggers the periodic prune.
+    for (let index = 1; index <= AUDIT_RETENTION + 499; index += 1) database.audit("operator", "lighting.control", { index });
+    expect(database.recentAudit(1, "user.")).toEqual([expect.objectContaining({ action: "user.deleted", detail: { id: 7 } })]);
+    expect(database.recentAudit(AUDIT_RETENTION + 10, "lighting.")).toHaveLength(AUDIT_RETENTION);
+  });
+
   it("prunes the audit log to the newest entries and matches action prefixes literally", () => {
     const database = store();
     for (let index = 1; index <= AUDIT_RETENTION + 500; index += 1) database.audit("test", index % 2 ? "bridge.poll_failed" : "lighting.control", { index });
@@ -97,5 +106,18 @@ describe("LocalStore", () => {
     expect(database.recentAudit(3, "bridge.").every(entry => entry.action === "bridge.poll_failed")).toBe(true);
     expect(database.recentAudit(3, "bridge_")).toEqual([]);
   });
-});
 
+  it("stops accepting an API key once it has expired", () => {
+    vi.useFakeTimers({ now: new Date("2026-10-26T12:00:00Z") });
+    try {
+      const database = store();
+      const key = database.createApiKey("Home Assistant", "user", 30);
+      const forever = database.createApiKey("Script", "user");
+      expect(key.expiresAt).toBe("2026-11-25T12:00:00.000Z");
+      expect(database.authenticateApiKey(key.token)).not.toBeNull();
+      vi.setSystemTime(new Date("2026-11-25T12:00:01Z"));
+      expect(database.authenticateApiKey(key.token)).toBeNull();
+      expect(database.authenticateApiKey(forever.token)).toMatchObject({ expiresAt: null });
+    } finally { vi.useRealTimers(); }
+  });
+});

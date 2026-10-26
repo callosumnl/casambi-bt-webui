@@ -1,7 +1,8 @@
 import { EventEmitter } from "events";
 import { PassThrough, Writable } from "stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { JsonLineCasambiBridge, workerEnvironment } from "./bridge";
+import { JsonLineCasambiBridge, workerEnvironment, workerScriptPath } from "./bridge";
+import { resolve } from "path";
 
 class FakeWorker extends EventEmitter {
   public readonly stdout = new PassThrough();
@@ -172,7 +173,7 @@ describe("JsonLineCasambiBridge", () => {
     const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
     bridge.start();
     const event = new Promise(resolve => bridge.on("event", payload => { if ((payload as { type?: string }).type === "unit.state") resolve(payload); }));
-    worker.stdout.write(`${JSON.stringify({ event: { type: "unit.state", unit: { id: 1, name: "Fixture", state: { on: true, online: true } } } })}\n`);
+    worker.stdout.write(`${JSON.stringify({ event: { type: "unit.state", unit: { id: 1, name: "Fixture", capabilities: [], state: { on: true, online: true } } } })}\n`);
     await expect(event).resolves.toMatchObject({ type: "unit.state", unit: { id: 1, state: { on: true } } }); bridge.stop();
   });
 
@@ -189,5 +190,27 @@ describe("JsonLineCasambiBridge", () => {
   it("starts the worker without the server's secrets", () => {
     const env = workerEnvironment({ PATH: "/usr/bin", LANG: "C.UTF-8", NODE_ENV: "production", CASAMBI_CACHE_PATH: "/var/lib/x", CASAMBI_JWT_SECRET: "jwt", CASAMBI_ENCRYPTION_KEY: "key", CASAMBI_DB_PATH: "/var/lib/x.db" });
     expect(env).toEqual({ PATH: "/usr/bin", LANG: "C.UTF-8", NODE_ENV: "production", CASAMBI_CACHE_PATH: "/var/lib/x", PYTHONUNBUFFERED: "1" });
+  });
+
+  it("drops malformed events and oversized lines instead of passing them on", async () => {
+    const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
+    const events: unknown[] = []; const diagnostics: string[] = [];
+    bridge.on("event", event => events.push(event)); bridge.on("diagnostic", message => diagnostics.push(message));
+    bridge.start(); events.length = 0;
+    worker.stdout.write(`${JSON.stringify({ event: { type: "unit.state", unit: { name: "no id" } } })}\n`);
+    worker.stdout.write(`${"x".repeat(4 * 1024 * 1024 + 1)}`);
+    worker.stdout.write(`still the same line\n${JSON.stringify({ event: { type: "bridge", state: "connected" } })}\n`);
+    await new Promise(resolve => setImmediate(resolve));
+    expect(events).toEqual([{ type: "bridge", state: "connected" }]);
+    expect(diagnostics.some(message => message.startsWith("Ignored malformed worker event"))).toBe(true);
+    expect(diagnostics.some(message => message.startsWith("Dropped worker output"))).toBe(true);
+    bridge.stop();
+  });
+
+  it("finds the worker script from the module, in the source tree and next to the built app", () => {
+    const root = resolve(import.meta.dirname, "..", "..");
+    const script = resolve(root, "server", "casambi", "casambi_worker.py");
+    expect(workerScriptPath(resolve(root, "server", "casambi"))).toBe(script);
+    expect(workerScriptPath(resolve(root, "dist"))).toBe(script);
   });
 });

@@ -97,7 +97,7 @@ export class DurableScheduler {
     const now = new Date();
     if (isHolidayExcluded(schedule, now)) {
       this.store.audit(`schedule:${schedule.id}`, "schedule.skipped_holiday", { scheduleId, holiday: localCalendarDate(now, schedule.timezone) });
-      this.events.publish("schedule.skipped_holiday", { scheduleId, name: schedule.name });
+      this.events.publish("schedule.skipped_holiday", { scheduleId, name: schedule.name }, { ownerUserId: schedule.ownerUserId });
       return;
     }
     const runKey = `${scheduleId}:${now.toISOString().slice(0, 16)}`;
@@ -105,11 +105,11 @@ export class DurableScheduler {
     try {
       await this.control(schedule.command, `schedule:${schedule.id}`);
       this.store.audit(`schedule:${schedule.id}`, "schedule.executed", { scheduleId, command: schedule.command });
-      this.events.publish("schedule.executed", { scheduleId, name: schedule.name });
+      this.events.publish("schedule.executed", { scheduleId, name: schedule.name }, { ownerUserId: schedule.ownerUserId });
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unknown schedule failure.";
       this.store.audit(`schedule:${schedule.id}`, "schedule.failed", { scheduleId, message });
-      this.events.publish("schedule.failed", { scheduleId, name: schedule.name, message });
+      this.events.publish("schedule.failed", { scheduleId, name: schedule.name, message }, { ownerUserId: schedule.ownerUserId });
     }
   }
 }

@@ -1,9 +1,8 @@
-import "dotenv/config";
 import express from "express";
 import helmet from "helmet";
 import { createServer } from "http";
 import net from "net";
-import { createCasambiApi } from "../api";
+import { apiErrorHandler, createCasambiApi } from "../api";
 import { JsonLineCasambiBridge } from "../casambi/bridge";
 import { CasambiService } from "../casambi/service";
 import { EventHub } from "../events";
@@ -11,7 +10,7 @@ import { DurableScheduler } from "../scheduler";
 import { SetupCode } from "../setupCode";
 import { LocalStore } from "../store";
 import { SwitchRuleRunner } from "../switchRules";
-import { serveStatic, setupVite } from "./vite";
+import { serveStatic, setupVite, staticBuildId } from "./vite";
 
 const production = process.env.NODE_ENV === "production";
 const development = process.env.NODE_ENV === "development";
@@ -51,6 +50,9 @@ function assertProductionSecrets(): void {
 }
 
 async function startServer() {
+  // A .env file is a development convenience. On the Pi all settings come from /etc/casambi-bt-webui.env, and a
+  // stray .env in the checkout must not quietly add or change any of them.
+  if (development) (await import("dotenv")).config();
   assertProductionSecrets();
   const app = express();
   app.disable("x-powered-by");
@@ -77,7 +79,8 @@ async function startServer() {
   app.set("trust proxy", process.env.CASAMBI_TRUST_PROXY === "true" ? 1 : false);
   const server = createServer(app);
   const store = new LocalStore();
-  const events = new EventHub();
+  // The Vite dev server reloads pages itself; only a built app needs the build ID.
+  const events = new EventHub(development ? null : staticBuildId());
   const bridge = new JsonLineCasambiBridge();
   const casambi = new CasambiService(store, bridge, events);
   const scheduler = new DurableScheduler(store, (command, actor) => casambi.control(command, actor).then(() => undefined), events);
@@ -87,6 +90,7 @@ async function startServer() {
   casambi.onSwitchPress(press => void switchRules.handle(press));
   app.use(express.json({ limit: "1mb" }));
   app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler, setupCode }));
+  app.use("/api/v1", apiErrorHandler);
   await casambi.initialize();
   scheduler.reload();
   // development mode uses Vite, production mode uses static files

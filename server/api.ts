@@ -1,4 +1,4 @@
-import { Router, Request, Response } from "express";
+import { NextFunction, Router, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { authenticate, authenticateEventTicket, issueEventTicket, issueToken, Principal, requireAuth } from "./auth";
@@ -52,9 +52,14 @@ export function classifyError(error: unknown): { status: number; code: string; m
 }
 
 /** Refuses to delete a room or saved scene that timers, switch rules, or scenes still point at. */
-function assertUnused(store: LocalStore, target: { type: "room" | "local_scene"; id: number }, label: string): void {
+/** Names only what the caller may see: admins get every item, other users their own timers and a count of the rest. */
+function assertUnused(store: LocalStore, target: { type: "room" | "local_scene"; id: number }, label: string, actor: Principal): void {
   const usage = store.usageOf(target);
-  if (usage.length) throw new Error(`This ${label} is used by ${usage.join(", ")}. Change or delete those first.`);
+  if (!usage.length) return;
+  const visible = actor.role === "admin" ? usage : usage.filter(item => actor.kind === "user" && item.ownerUserId === actor.id);
+  const hidden = usage.length - visible.length;
+  const names = [...visible.map(item => item.label), ...(hidden ? [`${hidden} ${hidden === 1 ? "item" : "items"} managed by other accounts`] : [])];
+  throw new Error(`This ${label} is used by ${names.join(", ")}. Change or delete those first.`);
 }
 
 function parsed<T>(schema: z.ZodType<T>, input: unknown): T { return schema.parse(input); }
@@ -83,7 +88,7 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode 
 
   // Public, so API tools can load it; it describes the routes, never any data.
   api.get("/openapi.json", (_request, response) => response.json(openApiDocument()));
-  api.get("/health", (_request, response) => response.json({ status: "ok", bootstrapRequired: store.needsBootstrap(), eventClients: events.clientCount }));
+  api.get("/health", (_request, response) => response.json({ status: "ok", bootstrapRequired: store.needsBootstrap(), eventClients: events.clientCount, build: events.build }));
   api.post("/auth/bootstrap", signInLimit, route(async (request, response) => {
     if (!store.needsBootstrap()) { response.status(409).json({ error: { code: "BOOTSTRAP_COMPLETE", message: "An administrator already exists." } }); return; }
     const input = parsed(bootstrapSchema, request.body);
@@ -108,7 +113,7 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode 
     const ticket = typeof request.query.ticket === "string" ? request.query.ticket : null;
     const actor = ticket ? await authenticateEventTicket(ticket, store) : await authenticate(request, store);
     if (!actor) { response.status(401).json({ error: { code: "UNAUTHORIZED", message: "A valid event token is required." } }); return; }
-    const remove = events.add(response); request.on("close", remove);
+    const remove = events.add(response, actor); request.on("close", remove);
   }));
 
   // Read routes serve the cached state so they never wait behind a slow Bluetooth connect; `/network?fresh=1` asks the bridge.
@@ -129,7 +134,7 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode 
   api.post("/local-scenes", requireAuth(store), route(async (request, response) => { const input = parsed(sceneCreateSchema, request.body); const scene = service.captureLightScene(input.name, input.scope); store.audit(principal(response).name, "scene.created", { sceneId: scene.id }); events.publish("local_scenes.changed", {}); response.status(201).json(scene); }));
   api.post("/local-scenes/:id/capture", requireAuth(store), route(async (request, response) => { const scene = service.recaptureLightScene(Number(request.params.id)); store.audit(principal(response).name, "scene.updated", { sceneId: scene.id }); events.publish("local_scenes.changed", {}); response.json(scene); }));
   api.patch("/local-scenes/:id", requireAuth(store), route(async (request, response) => { const input = parsed(sceneRenameSchema, request.body); const scene = store.updateLightScene(Number(request.params.id), { name: input.name }); events.publish("local_scenes.changed", {}); response.json(scene); }));
-  api.delete("/local-scenes/:id", requireAuth(store), route(async (request, response) => { assertUnused(store, { type: "local_scene", id: Number(request.params.id) }, "scene"); store.deleteLightScene(Number(request.params.id)); store.audit(principal(response).name, "scene.deleted", { sceneId: Number(request.params.id) }); events.publish("local_scenes.changed", {}); response.status(204).send(); }));
+  api.delete("/local-scenes/:id", requireAuth(store), route(async (request, response) => { assertUnused(store, { type: "local_scene", id: Number(request.params.id) }, "scene", principal(response)); store.deleteLightScene(Number(request.params.id)); store.audit(principal(response).name, "scene.deleted", { sceneId: Number(request.params.id) }); events.publish("local_scenes.changed", {}); response.status(204).send(); }));
   api.post("/local-scenes/:id/apply", requireAuth(store), route(async (request, response) => { const input = parsed(fadeBodySchema, request.body ?? {}); response.json(await service.control({ targetType: "local_scene", targetId: Number(request.params.id), operation: "activate_scene", ...(input.fadeDurationMs ? { fadeDurationMs: input.fadeDurationMs } : {}) }, principal(response).name)); }));
   api.post("/devices/:id/on", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "on" }, principal(response).name)); }));
   api.post("/devices/:id/off", requireAuth(store), route(async (request, response) => { response.json(await service.control({ targetType: "unit", targetId: Number(request.params.id), operation: "off" }, principal(response).name)); }));
@@ -151,7 +156,7 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode 
   api.post("/admin/rooms", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomCreateSchema, request.body); response.status(201).json(store.createRoom(input.name, input.defaultBrightnessPercent)); }));
   api.put("/admin/rooms/:id/default-brightness", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomDefaultBrightnessSchema, request.body); const room = store.setRoomDefaultBrightness(Number(request.params.id), input.defaultBrightnessPercent); store.audit(principal(response).name, "room.default_brightness.updated", { roomId: room.id, defaultBrightnessPercent: room.defaultBrightnessPercent }); response.json(room); }));
   api.patch("/admin/rooms/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomRenameSchema, request.body); const room = store.renameRoom(Number(request.params.id), input.name); store.audit(principal(response).name, "room.renamed", { roomId: room.id, name: room.name }); response.json(room); }));
-  api.delete("/admin/rooms/:id", requireAuth(store, "admin"), route(async (request, response) => { assertUnused(store, { type: "room", id: Number(request.params.id) }, "room"); store.deleteRoom(Number(request.params.id)); store.audit(principal(response).name, "room.deleted", { roomId: Number(request.params.id) }); response.status(204).send(); }));
+  api.delete("/admin/rooms/:id", requireAuth(store, "admin"), route(async (request, response) => { assertUnused(store, { type: "room", id: Number(request.params.id) }, "room", principal(response)); store.deleteRoom(Number(request.params.id)); store.audit(principal(response).name, "room.deleted", { roomId: Number(request.params.id) }); response.status(204).send(); }));
   api.get("/admin/away-date-sets", requireAuth(store, "admin"), (_request, response) => response.json(store.listAwayDateSets()));
   api.post("/admin/away-date-sets", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(awayDateSetSchema, request.body); const set = store.createAwayDateSet(input.name, normalizeHolidayDates(input.dates)); scheduler.reload(); store.audit(principal(response).name, "away_date_set.created", { setId: set.id, name: set.name }); response.status(201).json(set); }));
   api.patch("/admin/away-date-sets/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(awayDateSetSchema.partial(), request.body); const patch = { ...(input.name === undefined ? {} : { name: input.name }), ...(input.dates === undefined ? {} : { dates: normalizeHolidayDates(input.dates) }) }; const set = store.updateAwayDateSet(Number(request.params.id), patch); scheduler.reload(); store.audit(principal(response).name, "away_date_set.updated", { setId: set.id, name: set.name }); response.json(set); }));
@@ -164,6 +169,8 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode 
     if (input.role) store.setUserRole(id, input.role);
     if (input.password) store.setUserPassword(id, input.password);
     store.audit(principal(response).name, "user.updated", { userId: id, ...(input.role ? { role: input.role } : {}), passwordReset: Boolean(input.password) });
+    // Open event streams keep the role and session they were opened with; make the account reconnect.
+    events.disconnect({ kind: "user", id });
     response.json(store.getUserById(id));
   }));
   api.delete("/admin/users/:id", requireAuth(store, "admin"), route(async (request, response) => {
@@ -171,11 +178,11 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode 
     const actor = principal(response); const id = Number(request.params.id);
     const heir = actor.kind === "user" ? actor.id : store.listUsers().find(user => user.role === "admin" && user.id !== id)?.id;
     if (!heir) throw new Error("At least one admin account must remain.");
-    store.deleteUser(id, heir); store.audit(actor.name, "user.deleted", { userId: id, timersMovedTo: heir }); response.status(204).send();
+    store.deleteUser(id, heir); store.audit(actor.name, "user.deleted", { userId: id, timersMovedTo: heir }); events.disconnect({ kind: "user", id }); response.status(204).send();
   }));
   api.get("/admin/api-keys", requireAuth(store, "admin"), (_request, response) => response.json(store.listApiKeys()));
-  api.post("/admin/api-keys", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(apiKeyCreateSchema, request.body); const key = store.createApiKey(input.label, input.role); store.audit(principal(response).name, "api_key.created", { id: key.id, label: key.label, role: key.role }); response.status(201).json(key); }));
-  api.delete("/admin/api-keys/:id", requireAuth(store, "admin"), route(async (request, response) => { store.revokeApiKey(Number(request.params.id)); store.audit(principal(response).name, "api_key.revoked", { id: Number(request.params.id) }); response.status(204).send(); }));
+  api.post("/admin/api-keys", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(apiKeyCreateSchema, request.body); const key = store.createApiKey(input.label, input.role, input.expiresInDays ?? null); store.audit(principal(response).name, "api_key.created", { id: key.id, label: key.label, role: key.role, expiresAt: key.expiresAt }); response.status(201).json(key); }));
+  api.delete("/admin/api-keys/:id", requireAuth(store, "admin"), route(async (request, response) => { store.revokeApiKey(Number(request.params.id)); store.audit(principal(response).name, "api_key.revoked", { id: Number(request.params.id) }); events.disconnect({ kind: "api_key", id: Number(request.params.id) }); response.status(204).send(); }));
   api.get("/admin/audit", requireAuth(store, "admin"), route(async (request, response) => { const query = parsed(auditQuerySchema, request.query); response.json(store.recentAudit(query.limit, query.action)); }));
   api.get("/admin/switch-activity", requireAuth(store, "admin"), (_request, response) => response.json(service.recentSwitchActivity()));
   api.get("/admin/switch-rules", requireAuth(store, "admin"), (_request, response) => response.json(store.listSwitchRules()));
@@ -183,9 +190,21 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode 
   api.patch("/admin/switch-rules/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(switchRulePatchSchema, request.body); const rule = store.updateSwitchRule(Number(request.params.id), input); store.audit(principal(response).name, "switch_rule.updated", { ruleId: rule.id }); response.json(rule); }));
   api.delete("/admin/switch-rules/:id", requireAuth(store, "admin"), route(async (request, response) => { store.deleteSwitchRule(Number(request.params.id)); store.audit(principal(response).name, "switch_rule.deleted", { ruleId: Number(request.params.id) }); response.status(204).send(); }));
 
-  api.use((error: unknown, _request: Request, response: Response, _next: unknown) => {
-    if (error instanceof z.ZodError) return response.status(422).json({ error: { code: "VALIDATION_ERROR", message: "Request validation failed.", fields: error.flatten() } });
-    return response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Unexpected API error." } });
-  });
+  // Anything else under /api/v1 is not an API route: answer in JSON instead of falling through to the web app.
+  api.use((_request, response) => { response.status(404).json({ error: { code: "NOT_FOUND", message: "No such API route." } }); });
+  api.use(apiErrorHandler);
   return api;
+}
+
+/**
+ * JSON errors for failures outside `route()`. Mount it after the API as well: express.json() runs before the
+ * router, so a malformed or oversized body never reaches the router's own error handler.
+ */
+export function apiErrorHandler(error: unknown, _request: Request, response: Response, _next: NextFunction): void {
+  if (error instanceof z.ZodError) { response.status(422).json({ error: { code: "VALIDATION_ERROR", message: "Request validation failed.", fields: error.flatten() } }); return; }
+  const type = (error as { type?: string } | null)?.type;
+  if (type === "entity.parse.failed") { response.status(400).json({ error: { code: "INVALID_JSON", message: "The request body is not valid JSON." } }); return; }
+  if (type === "entity.too.large") { response.status(413).json({ error: { code: "TOO_LARGE", message: "The request body is too large." } }); return; }
+  console.error(error);
+  response.status(500).json({ error: { code: "INTERNAL_ERROR", message: "Unexpected API error." } });
 }
