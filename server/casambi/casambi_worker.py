@@ -15,6 +15,7 @@ import os
 import re
 import signal
 import sys
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -121,6 +122,33 @@ class MockUnit:
         }
 
 
+def skipped_units_report(casa: Any) -> str | None:
+    """Explain units casambi-bt silently left out of the network, or None.
+
+    When the Casambi cloud does not return a unit's fixture type (an error status, e.g. a rate limit),
+    casambi-bt skips every unit of that type and remembers the failure for 7 days, so those lamps are
+    missing until then without any error. This reads casambi-bt internals once after a connect; if they
+    are not as expected (another library version), it reports nothing rather than failing the connect.
+    """
+    try:
+        network = casa._casaNetwork
+        failed = {type_id for type_id, (unit_type, _expiry) in network._unitTypes.items() if unit_type is None}
+        if not failed:
+            return None
+        cache_dir = Path(str(network._cache._cachePath)) / network._uuid
+        units = json.loads((cache_dir / f"{network._id}.json").read_text())["network"]["units"]
+        skipped = [unit for unit in units if unit.get("type") in failed]
+        if not skipped:
+            return None
+        names = ", ".join(str(unit.get("name", unit.get("deviceID"))) for unit in skipped[:10]) + (", …" if len(skipped) > 10 else "")
+        return (
+            f"{len(skipped)} Casambi unit(s) are missing ({names}): casambi-bt could not load their fixture type "
+            f"{sorted(failed)} from the Casambi cloud and skips them for up to 7 days. To retry now, delete {cache_dir} and connect again."
+        )
+    except Exception:
+        return None
+
+
 class CasambiWorker:
     """Owns a single live Casambi connection and normalizes upstream data."""
 
@@ -129,6 +157,8 @@ class CasambiWorker:
         self.casa: Any | None = None
         self.connected = False
         self.mock_units = [MockUnit(1, "Studio light", 180, 4000), MockUnit(2, "Entry light", 110, 3000)]
+        # How long the last control command spent in casambi-bt (the Bluetooth write), reported with its reply.
+        self.last_ble_ms: float | None = None
 
     def snapshot(self) -> dict[str, Any]:
         """Return only data currently modeled by the upstream library."""
@@ -266,6 +296,9 @@ class CasambiWorker:
             raise
         for unit in self.casa.units:
             self.instrument_sensor_state(unit)
+        skipped = skipped_units_report(self.casa)
+        if skipped:
+            print(skipped, file=sys.stderr, flush=True)
         self.connected = True
         emit({"event": {"type": "bridge", "state": "connected"}})
         return self.snapshot()
@@ -323,6 +356,7 @@ class CasambiWorker:
         elif target_type == "scene": target = next((scene for scene in self.casa.scenes if scene.sceneId == int(target_id)), None)
         if target_type != "network" and target is None:
             raise ValueError("The requested Casambi target does not exist.")
+        started = time.perf_counter()
         if operation == "on": await self.casa.turnOn(target)
         elif operation == "off": await self.casa.setLevel(target, 0)
         elif operation == "set_level": await self.casa.setLevel(target, int(value))
@@ -334,6 +368,11 @@ class CasambiWorker:
         elif operation == "set_xy": await self.casa.setColorXY(target, tuple(value))
         elif operation == "activate_scene": await self.casa.switchToScene(target, int(value) if value is not None else 255)
         else: raise ValueError(f"Unsupported control operation: {operation}")
+        self.last_ble_ms = (time.perf_counter() - started) * 1000
+        # casambi-bt swallows a write that fails with "Not connected": it only marks the link as down and returns
+        # as if the command was sent. Reading that state is an attribute check, so it adds no measurable latency.
+        if not self.casa.connected:
+            raise RuntimeError("The Bluetooth connection was lost while sending this command; it may not have reached the lights.")
         return {"ok": True} if payload.get("reply") == "ack" else self.snapshot()
 
     async def shutdown(self) -> None:
@@ -413,9 +452,14 @@ async def serve_commands(worker: CasambiWorker) -> None:
             elif command in ("configure", "connect"): result = await worker.configure(payload)
             elif command == "disconnect": result = await worker.disconnect()
             elif command == "snapshot": result = worker.snapshot()
-            elif command == "control": result = await worker.control(payload)
+            elif command == "control":
+                worker.last_ble_ms = None
+                result = await worker.control(payload)
             else: raise ValueError(f"Unknown bridge command: {command}")
-            emit({"id": request["id"], "ok": True, "result": result})
+            envelope: dict[str, Any] = {"id": request["id"], "ok": True, "result": result}
+            if command == "control" and worker.last_ble_ms is not None:
+                envelope["bleMs"] = round(worker.last_ble_ms, 1)
+            emit(envelope)
         except Exception as error:  # The protocol must never crash the service for a malformed command.
             request_id = request.get("id", "unknown") if isinstance(request, dict) else "unknown"
             emit({"id": request_id, "ok": False, "error": {"code": type(error).__name__, "message": str(error)}})

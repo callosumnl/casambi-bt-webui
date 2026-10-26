@@ -5,7 +5,8 @@ import { existsSync } from "fs";
 import { resolve } from "path";
 import type { BridgeEvent, NetworkSnapshot } from "./types";
 
-type BridgeResponse = { id: string; ok: true; result: unknown } | { id: string; ok: false; error: { code: string; message: string } };
+/** `bleMs` (control commands only): how long casambi-bt took to send the command over Bluetooth. */
+type BridgeResponse = { id: string; ok: true; result: unknown; bleMs?: number } | { id: string; ok: false; error: { code: string; message: string } };
 type BridgeEnvelope = BridgeResponse | { event: BridgeEvent };
 
 /**
@@ -43,7 +44,19 @@ export function workerEnvironment(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv 
 /** Minimal child-process shape, kept small to enable deterministic bridge tests. */
 export type BridgeChild = Pick<ChildProcessWithoutNullStreams, "stdin" | "stdout" | "stderr" | "on" | "kill" | "pid">;
 /** Supervisor-side view of the worker, available even when the worker itself cannot answer. */
-export type WorkerState = { running: boolean; pid: number | null; busy: { command: string; forMs: number } | null; lastAnswerAt: string | null; restarts: number };
+/** Bluetooth send times of recent control commands, measured in the worker around the casambi-bt call. */
+export type BluetoothTiming = { commands: number; recent: number; lastMs: number; medianMs: number; p95Ms: number; maxMs: number };
+export type WorkerState = { running: boolean; pid: number | null; busy: { command: string; forMs: number } | null; lastAnswerAt: string | null; restarts: number; bluetooth: BluetoothTiming | null };
+/** Control commands kept for the timing summary. */
+const TIMING_WINDOW = 200;
+
+/** Median, 95th percentile, and maximum of the recent send times. Only runs when an admin asks for the worker state. */
+export function summarizeTimings(samples: number[], total: number): BluetoothTiming | null {
+  if (samples.length === 0) return null;
+  const sorted = [...samples].sort((left, right) => left - right);
+  const at = (fraction: number) => sorted[Math.min(sorted.length - 1, Math.floor(fraction * sorted.length))];
+  return { commands: total, recent: samples.length, lastMs: samples[samples.length - 1], medianMs: at(0.5), p95Ms: at(0.95), maxMs: sorted[sorted.length - 1] };
+}
 export type BridgeChildFactory = () => BridgeChild;
 
 type PendingRequest = {
@@ -74,6 +87,8 @@ export class JsonLineCasambiBridge extends EventEmitter {
   private inFlight: { command: string; startedAt: number } | null = null;
   private lastAnswerAt: number | null = null;
   private restarts = 0;
+  private readonly bleTimings: number[] = [];
+  private bleCommands = 0;
   private readonly commandTimeoutMs: number;
   private readonly createChild: BridgeChildFactory;
   private queue: Promise<unknown> = Promise.resolve();
@@ -165,6 +180,7 @@ export class JsonLineCasambiBridge extends EventEmitter {
       busy: this.inFlight ? { command: this.inFlight.command, forMs: now - this.inFlight.startedAt } : null,
       lastAnswerAt: this.lastAnswerAt === null ? null : new Date(this.lastAnswerAt).toISOString(),
       restarts: this.restarts,
+      bluetooth: summarizeTimings(this.bleTimings, this.bleCommands),
     };
   }
 
@@ -246,6 +262,11 @@ export class JsonLineCasambiBridge extends EventEmitter {
     this.lastAnswerAt = Date.now();
     if (envelope.ok) {
       this.restartAttempt = 0;
+      if (typeof envelope.bleMs === "number") {
+        this.bleCommands += 1;
+        this.bleTimings.push(envelope.bleMs);
+        if (this.bleTimings.length > TIMING_WINDOW) this.bleTimings.shift();
+      }
       request.resolve(envelope.result);
     } else {
       request.reject(new Error(`${envelope.error.code}: ${envelope.error.message}`));

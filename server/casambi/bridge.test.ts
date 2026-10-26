@@ -1,7 +1,7 @@
 import { EventEmitter } from "events";
 import { PassThrough, Writable } from "stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { JsonLineCasambiBridge, workerEnvironment, workerScriptPath } from "./bridge";
+import { JsonLineCasambiBridge, summarizeTimings, workerEnvironment, workerScriptPath } from "./bridge";
 import { resolve } from "path";
 
 class FakeWorker extends EventEmitter {
@@ -212,5 +212,23 @@ describe("JsonLineCasambiBridge", () => {
     const script = resolve(root, "server", "casambi", "casambi_worker.py");
     expect(workerScriptPath(resolve(root, "server", "casambi"))).toBe(script);
     expect(workerScriptPath(resolve(root, "dist"))).toBe(script);
+  });
+
+  it("keeps the Bluetooth send times the worker reports and summarizes them in the worker state", async () => {
+    const worker = new FakeWorker(); const bridge = new JsonLineCasambiBridge({ createChild: () => worker as never });
+    expect(bridge.state().bluetooth).toBeNull();
+    for (const bleMs of [40, 20, 30]) {
+      const result = bridge.execute("control", { targetType: "unit", targetId: 1, operation: "on" });
+      await new Promise(resolve => setImmediate(resolve));
+      worker.stdout.write(`${JSON.stringify({ id: worker.commands.at(-1)!.id, ok: true, result: { ok: true }, bleMs })}\n`);
+      await result;
+    }
+    expect(bridge.state().bluetooth).toEqual({ commands: 3, recent: 3, lastMs: 30, medianMs: 30, p95Ms: 40, maxMs: 40 });
+    bridge.stop();
+  });
+
+  it("summarizes at most the last 200 send times", () => {
+    const samples = Array.from({ length: 200 }, (_, index) => index + 1);
+    expect(summarizeTimings(samples, 950)).toEqual({ commands: 950, recent: 200, lastMs: 200, medianMs: 101, p95Ms: 191, maxMs: 200 });
   });
 });

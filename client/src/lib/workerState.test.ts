@@ -17,4 +17,9 @@ describe("describeWorkerState", () => {
   it("reports a stopped worker", () => {
     expect(describeWorkerState({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }, now)).toBe("Worker not running. Restarted 1 time since the service started.");
   });
+
+  it("adds the Bluetooth send times of recent light commands", () => {
+    expect(describeWorkerState({ running: true, pid: 812, busy: null, lastAnswerAt: "2026-10-02T07:59:57.000Z", restarts: 0, bluetooth: { commands: 950, recent: 200, lastMs: 31, medianMs: 34.6, p95Ms: 61.2, maxMs: 140 } }, now))
+      .toBe("Worker running (PID 812), idle. Last answer 3 s ago. Bluetooth send time over the last 200 light commands: median 35 ms, 95% within 61 ms, slowest 140 ms.");
+  });
 });

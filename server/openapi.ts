@@ -99,6 +99,10 @@ const schemas: Record<string, JsonSchema> = {
   WorkerState: object({
     running: { type: "boolean" }, pid: nullable({ type: "integer" }),
     busy: nullable(object({ command: { type: "string" }, forMs: { type: "integer" } })), lastAnswerAt: nullable(timestamp), restarts: { type: "integer" },
+    bluetooth: nullable(object({
+      commands: { type: "integer", description: "Light commands sent since the worker supervisor started." }, recent: { type: "integer", description: "Commands in the summary (the last 200)." },
+      lastMs: { type: "number" }, medianMs: { type: "number" }, p95Ms: { type: "number" }, maxMs: { type: "number" },
+    })),
   }),
   SwitchPress: object({
     unitId: nullable({ type: "integer" }), button: nullable({ type: "integer" }),

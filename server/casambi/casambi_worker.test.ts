@@ -285,3 +285,83 @@ describe("casambi_worker input handling", () => {
     expect(replies[1].result).toMatchObject({ units: expect.any(Array), groups: expect.any(Array) });
   });
 });
+
+describe("casambi_worker Bluetooth diagnostics", () => {
+  /** Real worker against a fake upstream: setLevel takes 20 ms, level 13 drops the link the way casambi-bt does, and one fixture type failed. */
+  async function worker() {
+    const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "casambi-worker-diagnostics-"));
+    temporaryDirectories.push(temporaryDirectory);
+    mkdirSync(path.join(temporaryDirectory, "CasambiBt"), { recursive: true });
+    writeFileSync(path.join(temporaryDirectory, "CasambiBt", "__init__.py"), `
+import asyncio, json
+from pathlib import Path
+from types import SimpleNamespace
+
+async def discover():
+    return [SimpleNamespace(address="AB:CD:EF:01:23:45")]
+
+class Casambi:
+    def __init__(self, cachePath):
+        self.units, self.groups, self.scenes = [], [], []
+        self.networkId, self.networkName = "test-network", "Test network"
+        self.connected = False
+        cache = SimpleNamespace(_cachePath=cachePath)
+        self._casaNetwork = SimpleNamespace(_cache=cache, _uuid="abcdef012345", _id="net-1", _unitTypes={1: (object(), None), 2: (None, None)})
+    def registerUnitChangedHandler(self, handler): pass
+    def registerSwitchEventHandler(self, handler): pass
+    def registerDisconnectCallback(self, handler): pass
+    async def connect(self, address, password, force_offline):
+        directory = Path(self._casaNetwork._cache._cachePath) / "abcdef012345"
+        directory.mkdir(parents=True, exist_ok=True)
+        units = [{"deviceID": 1, "type": 1, "name": "Desk"}, {"deviceID": 2, "type": 2, "name": "Hall spot"}]
+        (directory / "net-1.json").write_text(json.dumps({"network": {"units": units}}))
+        self.connected = True
+    async def setLevel(self, target, level):
+        await asyncio.sleep(0.02)
+        if level == 13:
+            self.connected = False  # casambi-bt marks the link down and returns without an error
+    async def disconnect(self): pass
+`);
+    const child = spawn("python3", [workerPath], {
+      cwd: projectRoot,
+      env: { ...process.env, NODE_ENV: "production", CASAMBI_CACHE_PATH: path.join(temporaryDirectory, "cache"), PYTHONPATH: `${temporaryDirectory}${path.delimiter}${process.env.PYTHONPATH || ""}` },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    const responses = new Map<string, (payload: Record<string, unknown>) => void>();
+    let pending = "";
+    child.stdout.on("data", chunk => {
+      pending += chunk.toString();
+      const lines = pending.split("\n"); pending = lines.pop() || "";
+      for (const line of lines.filter(Boolean)) { const payload = JSON.parse(line) as Record<string, unknown>; responses.get(String(payload.id))?.(payload); }
+    });
+    const send = (id: string, command: string, payload: Record<string, unknown> = {}) => new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`No answer to ${command} within 3 s.`)), 3_000);
+      responses.set(id, value => { clearTimeout(timeout); resolve(value); });
+      child.stdin.write(`${JSON.stringify({ id, command, payload })}\n`);
+    });
+    return { child, send, stderr: () => stderr, cache: path.join(temporaryDirectory, "cache", "abcdef012345") };
+  }
+
+  it("reports units that casambi-bt skipped because their fixture type failed to load", async () => {
+    const { child, send, stderr, cache } = await worker();
+    try {
+      await expect(send("connect", "configure", { networkAddress: "abcdef012345", networkPassword: "not-a-real-password" })).resolves.toMatchObject({ ok: true });
+      expect(stderr()).toContain(`1 Casambi unit(s) are missing (Hall spot): casambi-bt could not load their fixture type [2]`);
+      expect(stderr()).toContain(`delete ${cache} and connect again`);
+    } finally { child.kill(); }
+  });
+
+  it("reports the Bluetooth send time with each light command and fails a command the link dropped", async () => {
+    const { child, send } = await worker();
+    try {
+      await send("connect", "configure", { networkAddress: "abcdef012345", networkPassword: "not-a-real-password" });
+      const sent = await send("level", "control", { targetType: "network", operation: "set_level", value: 100, reply: "ack" });
+      expect(sent).toMatchObject({ ok: true, result: { ok: true } });
+      expect(sent.bleMs).toBeGreaterThanOrEqual(15);
+      const lost = await send("lost", "control", { targetType: "network", operation: "set_level", value: 13, reply: "ack" });
+      expect(lost).toMatchObject({ ok: false, error: { message: expect.stringContaining("connection was lost while sending") } });
+    } finally { child.kill(); }
+  });
+});
