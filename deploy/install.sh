@@ -15,6 +15,9 @@ DATA_DIR=/var/lib/casambi-bt-webui
 ENV_FILE=/etc/casambi-bt-webui.env
 UNIT_FILE=/etc/systemd/system/casambi-bt-webui.service
 NODE_MAJOR=22
+# NodeSource's apt signing key; the downloaded key must match it before apt trusts the repository.
+# Cross-checked against keyserver.ubuntu.com.
+NODESOURCE_KEY_FINGERPRINT=6F71F525282841EEDAF851B42F59B5F99B1BE0B4
 # Never stop for a question: corepack would ask before downloading pnpm, apt before changing config.
 export DEBIAN_FRONTEND=noninteractive COREPACK_ENABLE_DOWNLOAD_PROMPT=0
 
@@ -26,14 +29,31 @@ die() { printf '\nError: %s\n' "$*" >&2; exit 1; }
 
 step "Installing system packages"
 sudo apt-get update -qq
-sudo apt-get install -y -qq git curl ca-certificates python3 python3-venv python3-dev build-essential bluez rfkill >/dev/null
+sudo apt-get install -y -qq git curl ca-certificates gnupg python3 python3-venv python3-dev build-essential bluez rfkill >/dev/null
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || die "Python 3.11 or newer is required; found $(python3 --version)."
 
 node_major() { command -v node >/dev/null 2>&1 && node -p 'process.versions.node.split(".")[0]' || echo 0; }
 if [[ "$(node_major)" -lt "$NODE_MAJOR" ]]; then
   # Raspberry Pi OS ships an older Node.js; NodeSource provides current arm64 builds.
   step "Installing Node.js $NODE_MAJOR"
-  curl -fsSL "https://deb.nodesource.com/setup_${NODE_MAJOR}.x" | sudo -E bash - >/dev/null
+  # Set up the apt repository the way NodeSource's setup script does, without piping that script into a root
+  # shell: only a signing key with the expected fingerprint is installed.
+  key="$(mktemp)"
+  curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key -o "$key"
+  fingerprint="$(gpg --show-keys --with-colons "$key" 2>/dev/null | awk -F: '$1 == "fpr" { print $10; exit }')"
+  if [[ "$fingerprint" != "$NODESOURCE_KEY_FINGERPRINT" ]]; then
+    rm -f "$key"
+    die "The NodeSource signing key has fingerprint '${fingerprint:-none}', expected $NODESOURCE_KEY_FINGERPRINT. Not installing Node.js from it."
+  fi
+  sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/nodesource.gpg "$key"
+  rm -f "$key"
+  sudo chmod 0644 /usr/share/keyrings/nodesource.gpg
+  sudo rm -f /etc/apt/sources.list.d/nodesource.list
+  printf 'Types: deb\nURIs: https://deb.nodesource.com/node_%s.x\nSuites: nodistro\nComponents: main\nArchitectures: %s\nSigned-By: /usr/share/keyrings/nodesource.gpg\n' \
+    "$NODE_MAJOR" "$(dpkg --print-architecture)" | sudo tee /etc/apt/sources.list.d/nodesource.sources >/dev/null
+  # Prefer NodeSource's nodejs over the older one in Raspberry Pi OS.
+  printf 'Package: nodejs\nPin: origin deb.nodesource.com\nPin-Priority: 600\n' | sudo tee /etc/apt/preferences.d/nodejs >/dev/null
+  sudo apt-get update -qq
   sudo apt-get install -y -qq nodejs >/dev/null
 fi
 [[ "$(node_major)" -ge "$NODE_MAJOR" ]] || die "Node.js $NODE_MAJOR or newer is required; found $(node --version 2>/dev/null || echo none)."

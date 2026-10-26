@@ -39,7 +39,7 @@ sudo git clone https://github.com/callosumnl/casambi-bt-webui.git /opt/casambi-b
 
 That single installer sets up everything and can be run again at any time:
 
-- system packages (Python 3 with venv, build tools, BlueZ, rfkill) and **Node.js 22** from NodeSource when the installed Node.js is older;
+- system packages (Python 3 with venv, build tools, BlueZ, rfkill) and **Node.js 22** from the NodeSource apt repository when the installed Node.js is older (the repository's signing key is checked against a pinned fingerprint first);
 - the checkout handed to your account (also after `sudo git clone`), so later updates never hit root-owned files;
 - a least-privilege `casambi` service account in the `bluetooth` group, and its data directory `/var/lib/casambi-bt-webui/` (database and the upstream `casambi-bt-store` cache);
 - Bluetooth unblocked and the `bluetooth` service enabled;
