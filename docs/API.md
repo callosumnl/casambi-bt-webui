@@ -13,6 +13,7 @@ Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401
 | `POST` | `/auth/bootstrap` | Public, first run only | Creates the first `admin` and returns a JWT. Requires `setupCode`, the one-time code printed by `deploy/install.sh`. |
 | `POST` | `/auth/login` | Public | Returns an eight-hour JWT for a local `admin` or `user`. At most 10 failed attempts per 5 minutes per address (then 429). |
 | `GET` | `/auth/me` | user | Returns the resolved principal. |
+| `POST` | `/auth/event-ticket` | user (signed in) | Returns a 60-second ticket that only opens `/events?ticket=…`. |
 | `GET` | `/events` | user | Streams `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `switch`, `switch_rule.executed`, `switch_rule.failed`, `local_scenes.changed`, `schedule.executed`, `schedule.failed`, and `schedule.skipped_holiday` SSE events. |
 | `GET` | `/network` | user | Returns the last known connection status, units, groups, scenes, rooms, and local metadata immediately; `?fresh=1` waits for a new bridge snapshot instead. `/devices`, `/groups`, `/scenes`, and `/sensors` also serve the last known state. The `connection` field is `{ phase }`, where `phase` is `idle`, `connecting` (with `attempt`), `connected`, `retrying` (with `attempt`, `nextRetryAt`, and `lastError`), or `failed` (with `lastError`); `connection.status` events carry the same object whenever it changes. |
 | `GET` | `/devices`, `/groups`, `/scenes`, `/sensors`, `/rooms` | user | Returns the named entity collection. |
@@ -146,10 +147,11 @@ curl -sS -X POST http://raspberrypi.local:3000/api/v1/rooms/4/apply-default \
 
 ## Live events
 
-Browser clients can use `EventSource` with the login token in a same-origin query parameter. Non-browser integrations should prefer polling `/network` or use a reverse proxy that supports passing authorization headers to an SSE endpoint.
+`EventSource` cannot send headers, so browser clients first get a one-minute ticket with `POST /auth/event-ticket` and pass it as `?ticket=`; the ticket only opens the stream, so it is harmless in logs once it expires. Fetch a new one whenever the stream has to be reopened. Other clients send the `Authorization: Bearer` or `X-API-Key` header to `/events` directly.
 
 ```javascript
-const source = new EventSource(`/api/v1/events?access_token=${encodeURIComponent(jwt)}`);
+const { ticket } = await (await fetch("/api/v1/auth/event-ticket", { method: "POST", headers: { Authorization: `Bearer ${jwt}` } })).json();
+const source = new EventSource(`/api/v1/events?ticket=${encodeURIComponent(ticket)}`);
 source.addEventListener("unit.state", event => console.log(JSON.parse(event.data)));
 ```
 

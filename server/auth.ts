@@ -11,6 +11,26 @@ export async function issueToken(user: StoredUser, store: LocalStore): Promise<s
     .setProtectedHeader({ alg: "HS256" }).setSubject(String(user.id)).setIssuedAt().setExpirationTime("8h").sign(jwtSecret());
 }
 
+/**
+ * Signs a one-minute ticket that only opens the event stream. Browsers must put it in the URL (EventSource cannot
+ * set headers), where it can end up in proxy logs or history; unlike the session token it is useless there.
+ */
+export async function issueEventTicket(user: Principal, store: LocalStore): Promise<string> {
+  return new SignJWT({ kind: "events", tv: store.tokenVersion(user.id) })
+    .setProtectedHeader({ alg: "HS256" }).setSubject(String(user.id)).setIssuedAt().setExpirationTime("60s").sign(jwtSecret());
+}
+
+/** Resolves an event-stream ticket to its user; session tokens and API keys are not accepted in the URL. */
+export async function authenticateEventTicket(ticket: string, store: LocalStore): Promise<Principal | null> {
+  try {
+    const result = await jwtVerify(ticket, jwtSecret(), { algorithms: ["HS256"] });
+    if (result.payload.kind !== "events" || !result.payload.sub) return null;
+    const user = store.getUserById(Number(result.payload.sub));
+    if (!user || (result.payload.tv ?? 0) !== store.tokenVersion(user.id)) return null;
+    return { kind: "user", id: user.id, name: user.username, role: user.role };
+  } catch { return null; }
+}
+
 /** Resolves either a signed browser JWT or a revocable API key to a principal. */
 export async function authenticate(request: Request, store: LocalStore): Promise<Principal | null> {
   const apiKey = request.header("x-api-key");

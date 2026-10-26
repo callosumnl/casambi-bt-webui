@@ -64,11 +64,16 @@ export function useNetwork() {
 
   useEffect(() => { void refresh(); void loadScenes(); }, [refresh, loadScenes]);
   useEffect(() => {
-    let source: EventSource;
+    let source: EventSource | undefined;
     let reopen: number | undefined;
     let lost = false;
-    const open = () => {
-      source = new EventSource(api.eventUrl());
+    let closed = false;
+    const open = async () => {
+      let url: string;
+      // A failed ticket request with an expired session ends it (LocalApi); otherwise try again shortly.
+      try { url = await api.eventUrl(); } catch { if (!closed) reopen = window.setTimeout(() => void open(), 5_000); return; }
+      if (closed) return;
+      source = new EventSource(url);
       source.onopen = () => {
         live.current = true;
         // Changes made while the stream was down (other users, timers, switches) were missed: fetch them.
@@ -87,16 +92,13 @@ export function useNetwork() {
       source.onerror = () => {
         live.current = false; lost = true;
         setError(current => current || LIVE_LOST);
-        // The browser retries by itself, except after a non-200 answer (e.g. an expired session or a rate limit).
-        // Then check the session (a 401 ends it via LocalApi) and open a new stream a little later.
-        if (source.readyState === EventSource.CLOSED) {
-          void api.request("/auth/me").catch(() => undefined);
-          reopen = window.setTimeout(open, 5_000);
-        }
+        // The browser retries by itself, except after a non-200 answer (e.g. an expired ticket or a rate limit).
+        // Then open a new stream with a new ticket a little later; fetching it also checks the session.
+        if (source?.readyState === EventSource.CLOSED) reopen = window.setTimeout(() => void open(), 5_000);
       };
     };
-    open();
-    return () => { live.current = false; window.clearTimeout(reopen); source.close(); };
+    void open();
+    return () => { closed = true; live.current = false; window.clearTimeout(reopen); source?.close(); };
   }, [api, loadScenes, refresh]);
 
   return { network, loading, error, connection, refresh, command, applyRoomDefault, scenes, saveScene, updateScene, renameScene, deleteScene, applyScene, api };

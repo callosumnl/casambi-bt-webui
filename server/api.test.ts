@@ -3,7 +3,7 @@ import request from "supertest";
 import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { classifyError, createCasambiApi } from "./api";
 import { CasambiService } from "./casambi/service";
 import { EventHub } from "./events";
@@ -279,9 +279,27 @@ describe("REST API", () => {
   });
 
   it("keeps internal error details out of responses", () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
     expect(classifyError(new TypeError("Cannot read properties of undefined (reading 'id')"))).toEqual({ status: 500, code: "INTERNAL_ERROR", message: "Unexpected server error." });
     expect(classifyError(Object.assign(new Error("database is locked"), { code: "ERR_SQLITE_ERROR" }))).toMatchObject({ message: "Unexpected server error." });
     expect(classifyError(new Error("Casambi bridge command 'connect' timed out."))).toMatchObject({ status: 500, message: "Casambi bridge command 'connect' timed out." });
     expect(classifyError(new Error("The Casambi bridge is busy; try again in a moment."))).toMatchObject({ status: 503, code: "BUSY" });
+    expect(logged).toHaveBeenCalledTimes(2); logged.mockRestore();
+  });
+
+  it("opens the event stream with a one-minute ticket, never with the session token in the URL", async () => {
+    const instance = app(); const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    await request(instance).get(`/api/v1/events?ticket=${admin.body.token}`).expect(401);
+    await request(instance).get(`/api/v1/events?access_token=${admin.body.token}`).expect(401);
+    const ticket = await request(instance).post("/api/v1/auth/event-ticket").set("Authorization", `Bearer ${admin.body.token}`).expect(200);
+    expect(ticket.body.expiresInSeconds).toBe(60);
+    // A ticket is not a session token.
+    await request(instance).get("/api/v1/network").set("Authorization", `Bearer ${ticket.body.ticket}`).expect(401);
+    const stream = await new Promise<number>((resolve, reject) => {
+      const call = request(instance).get(`/api/v1/events?ticket=${encodeURIComponent(ticket.body.ticket)}`).buffer(false)
+        .parse((response, callback) => { resolve(response.statusCode ?? 0); (response as unknown as { destroy(): void }).destroy(); callback(null, null); });
+      call.end(error => { if (error && !String(error).includes("aborted") && !String(error).includes("socket hang up")) reject(error); });
+    });
+    expect(stream).toBe(200);
   });
 });

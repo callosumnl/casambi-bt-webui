@@ -49,7 +49,11 @@ export class LocalApi {
     return data;
   }
 
-  public eventUrl(): string { return `/api/v1/events?access_token=${encodeURIComponent(this.token || "")}`; }
+  /** A URL for the live event stream, with a fresh one-minute ticket: it must be fetched again for every new stream. */
+  public async eventUrl(): Promise<string> {
+    const { ticket } = await this.request<{ ticket: string }>("/auth/event-ticket", { method: "POST" });
+    return `/api/v1/events?ticket=${encodeURIComponent(ticket)}`;
+  }
 }
 
 type ValidationFields = { formErrors?: string[]; fieldErrors?: Record<string, string[] | undefined> };

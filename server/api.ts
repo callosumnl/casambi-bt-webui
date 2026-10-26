@@ -1,7 +1,7 @@
 import { Router, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
-import { authenticate, issueToken, Principal, requireAuth } from "./auth";
+import { authenticate, authenticateEventTicket, issueEventTicket, issueToken, Principal, requireAuth } from "./auth";
 import { CasambiService } from "./casambi/service";
 import { controlRequestSchema } from "./casambi/types";
 import { EventHub } from "./events";
@@ -98,10 +98,15 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode 
   }));
 
   api.get("/auth/me", requireAuth(store), (request, response) => response.json({ principal: principal(response) }));
+  api.post("/auth/event-ticket", requireAuth(store), route(async (_request, response) => {
+    const actor = principal(response);
+    if (actor.kind !== "user") throw new Error("An API key cannot get an event ticket; send it in the X-API-Key header to /events instead.");
+    response.json({ ticket: await issueEventTicket(actor, store), expiresInSeconds: 60 });
+  }));
   api.get("/events", route(async (request, response) => {
-    const token = typeof request.query.access_token === "string" ? request.query.access_token : null;
-    if (token) request.headers.authorization = `Bearer ${token}`;
-    const actor = await authenticate(request, store);
+    // Browsers pass a one-minute ticket in the URL; other clients use the Authorization or X-API-Key header.
+    const ticket = typeof request.query.ticket === "string" ? request.query.ticket : null;
+    const actor = ticket ? await authenticateEventTicket(ticket, store) : await authenticate(request, store);
     if (!actor) { response.status(401).json({ error: { code: "UNAUTHORIZED", message: "A valid event token is required." } }); return; }
     const remove = events.add(response); request.on("close", remove);
   }));

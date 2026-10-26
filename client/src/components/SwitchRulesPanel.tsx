@@ -31,11 +31,20 @@ export function SwitchRulesPanel({ api, onNotice }: Props) {
         setRules(nextRules); setActivity(nextActivity); setNetwork(nextNetwork); setScenes(nextScenes);
       } catch (error) { onNotice(error instanceof Error ? error.message : "Unable to load switch activity."); }
     })();
-    const source = new EventSource(api.eventUrl());
-    source.addEventListener("switch", event => { const press = (JSON.parse(event.data) as { payload: SwitchPress }).payload; setActivity(current => [press, ...current].slice(0, ACTIVITY_LIMIT)); });
-    // Refresh "last triggered" after a rule runs.
-    source.addEventListener("switch_rule.executed", () => void loadRules());
-    return () => source.close();
+    let source: EventSource | undefined; let reopen: number | undefined; let closed = false;
+    const open = async () => {
+      let url: string;
+      try { url = await api.eventUrl(); } catch { if (!closed) reopen = window.setTimeout(() => void open(), 5_000); return; }
+      if (closed) return;
+      source = new EventSource(url);
+      source.addEventListener("switch", event => { const press = (JSON.parse(event.data) as { payload: SwitchPress }).payload; setActivity(current => [press, ...current].slice(0, ACTIVITY_LIMIT)); });
+      // Refresh "last triggered" after a rule runs.
+      source.addEventListener("switch_rule.executed", () => void loadRules());
+      // After a non-200 answer (e.g. an expired ticket) the browser stops retrying: reopen with a new ticket.
+      source.onerror = () => { if (source?.readyState === EventSource.CLOSED) reopen = window.setTimeout(() => void open(), 5_000); };
+    };
+    void open();
+    return () => { closed = true; window.clearTimeout(reopen); source?.close(); };
   }, []);
 
   const targets = [

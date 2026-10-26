@@ -57,6 +57,10 @@ describe("CasambiService fade controls", () => {
     await new Promise(resolve => setTimeout(resolve, 50));
     await service.control({ targetType: "network", operation: "off" }, "tester");
     await fade;
+    // Also when the newer command arrives while the fade is still reading the current levels.
+    const early = service.control({ targetType: "network", operation: "set_level", value: 255, fadeDurationMs: 1_000 }, "tester");
+    await service.control({ targetType: "network", operation: "off" }, "tester");
+    await early;
 
     const fadeSteps = bridge.commands.filter(command => command.operation === "set_level");
     expect(fadeSteps.length).toBeLessThanOrEqual(bridge.network.units.length);

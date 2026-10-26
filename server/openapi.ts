@@ -59,6 +59,7 @@ const schemas: Record<string, JsonSchema> = {
   }, ["error"]),
   Health: object({ status: { type: "string", const: "ok" }, bootstrapRequired: { type: "boolean", description: "True until the first admin account exists." }, eventClients: { type: "integer" } }),
   User: object({ id, username: { type: "string" }, role, createdAt: timestamp }),
+  EventTicket: object({ ticket: { type: "string" }, expiresInSeconds: { type: "integer", const: 60 } }),
   Session: object({ token: { type: "string", description: "JWT for the Authorization: Bearer header; valid for 8 hours." }, user: ref("User") }),
   Principal: object({ principal: object({ kind: { type: "string", enum: ["user", "api_key"] }, id, name: { type: "string" }, role }) }),
   Unit: fromZod(unitSchema, "output"),
@@ -118,11 +119,12 @@ const operations: Operation[] = [
   { method: "get", path: "/openapi.json", tag: "System", summary: "This OpenAPI document", access: "public", responses: { 200: { description: "OpenAPI 3.1 document.", schema: { type: "object" } } } },
   { method: "post", path: "/auth/bootstrap", tag: "Authentication", summary: "Create the first admin", description: "Only works while no account exists. `setupCode` is the one-time code that deploy/install.sh prints (also in `setup-code` next to the database).", access: "public", body: "Bootstrap", responses: { 201: { description: "Admin created and signed in.", schema: "Session" }, 403: { description: "The setup code is not correct.", schema: "Error" }, 409: { description: "An administrator already exists.", schema: "Error" } } },
   { method: "post", path: "/auth/login", tag: "Authentication", summary: "Sign in", description: "Limited to 10 failed attempts per 5 minutes per client address.", access: "public", body: "Credentials", responses: { 200: { description: "Signed in.", schema: "Session" }, 401: { description: "Username or password is invalid.", schema: "Error" }, 429: { description: "Too many failed attempts; try again later.", schema: "Error" } } },
+  { method: "post", path: "/auth/event-ticket", tag: "Authentication", summary: "Get an event-stream ticket", description: "A token that is valid for 60 seconds and only opens `GET /events?ticket=…`. For signed-in users; API keys use the X-API-Key header on /events instead.", access: "user", responses: { 200: { description: "The ticket.", schema: "EventTicket" }, 422: { description: "Called with an API key.", schema: "Error" } } },
   { method: "get", path: "/auth/me", tag: "Authentication", summary: "Who am I", access: "user", responses: { 200: { description: "The authenticated user or API key.", schema: "Principal" } } },
   {
     method: "get", path: "/events", tag: "System", summary: "Live event stream (SSE)", access: "user",
-    description: "Server-Sent Events. Browsers pass the JWT as `access_token` because EventSource cannot set headers. Events: `connected`, `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `switch`, `switch_rule.executed`, `switch_rule.failed`, `local_scenes.changed`, `schedule.executed`, `schedule.failed`, `schedule.skipped_holiday`. Each `data` is JSON `{ type, payload, at }`.",
-    query: [{ name: "access_token", description: "JWT, as an alternative to the Authorization header.", schema: { type: "string" } }],
+    description: "Server-Sent Events. Send the Authorization or X-API-Key header, or (browsers, whose EventSource cannot set headers) a one-minute `ticket` from `POST /auth/event-ticket`. Events: `connected`, `bridge`, `connection.status`, `unit.state`, `network.snapshot`, `switch`, `switch_rule.executed`, `switch_rule.failed`, `local_scenes.changed`, `schedule.executed`, `schedule.failed`, `schedule.skipped_holiday`. Each `data` is JSON `{ type, payload, at }`.",
+    query: [{ name: "ticket", description: "Event ticket from `POST /auth/event-ticket`, as an alternative to the headers.", schema: { type: "string" } }],
     responses: { 200: { description: "An open event stream.", contentType: "text/event-stream", schema: { type: "string" } } },
   },
   // Network and control.

@@ -189,10 +189,12 @@ export class CasambiService {
   /** Applies a control command to its actual Casambi target, expanding local room membership first. */
   public async control(input: ControlRequest, actor: string): Promise<NetworkSnapshot> {
     const command = controlRequestSchema.parse(input);
-    this.fadeGeneration += 1; // A newer command takes over from a running fade.
-    if (command.targetType === "local_scene") return this.applyLightScene(Number(command.targetId), actor, command.fadeDurationMs ?? 0);
+    // A newer command takes over from a running fade. Taken before any await, so a fade that is still reading
+    // the current levels cannot override a command that arrived after it.
+    const generation = ++this.fadeGeneration;
+    if (command.targetType === "local_scene") return this.applyLightScene(Number(command.targetId), actor, command.fadeDurationMs ?? 0, generation);
     if (command.fadeDurationMs && ["on", "off", "set_level"].includes(command.operation)) {
-      await this.fadeToLevel(command);
+      await this.fadeToLevel(command, generation);
       this.store.audit(actor, "lighting.control", { targetType: command.targetType, targetId: command.targetId ?? null, operation: command.operation, fadeDurationMs: command.fadeDurationMs });
       const faded = this.withMetadata(this.lastSnapshot);
       this.events.publish("network.snapshot", faded);
@@ -227,7 +229,7 @@ export class CasambiService {
   }
 
   /** Uses bounded 200 ms software steps because upstream `setLevel(target, level)` has no duration argument. */
-  private async fadeToLevel(command: ControlRequest): Promise<void> {
+  private async fadeToLevel(command: ControlRequest, generation: number): Promise<void> {
     if (command.targetType === "scene") throw new Error("Scenes cannot be faded by this bridge.");
     const snapshot = await this.snapshot();
     const targetLevel = command.operation === "off" ? 0 : command.operation === "on" ? 255 : Number(command.value);
@@ -235,15 +237,14 @@ export class CasambiService {
     const lamps = new Set(snapshot.units.filter(isLampUnit).map(unit => unit.id));
     const unitIds = this.targetUnitIds(command, snapshot).filter(unitId => lamps.has(unitId));
     if (unitIds.length === 0) throw new Error("The control target has no assigned lamps.");
-    await this.fadeUnits(new Map(unitIds.map(unitId => [unitId, targetLevel])), command.fadeDurationMs || 0, snapshot);
+    await this.fadeUnits(new Map(unitIds.map(unitId => [unitId, targetLevel])), command.fadeDurationMs || 0, snapshot, generation);
   }
 
   /** Steps each unit from its current level to its own target level in bounded 200 ms increments. */
-  private async fadeUnits(targets: Map<number, number>, fadeDurationMs: number, snapshot: NetworkSnapshot): Promise<void> {
+  private async fadeUnits(targets: Map<number, number>, fadeDurationMs: number, snapshot: NetworkSnapshot, generation: number): Promise<void> {
     const startLevels = new Map(snapshot.units.map(unit => [unit.id, unit.state.dimmer ?? (unit.state.on ? 255 : 0)]));
     const steps = Math.max(1, Math.min(60, Math.ceil(fadeDurationMs / 200)));
-    // Only the newest fade runs: an earlier one stops at its next step, so repeated fade requests cannot pile up Bluetooth writes.
-    const generation = ++this.fadeGeneration;
+    // Only the newest command runs: a fade stops at its next step once another arrives, so repeated fade requests cannot pile up Bluetooth writes.
     for (let step = 1; step <= steps && generation === this.fadeGeneration; step += 1) {
       for (const [unitId, targetLevel] of Array.from(targets)) {
         if (generation !== this.fadeGeneration) break;
@@ -269,13 +270,13 @@ export class CasambiService {
   }
 
   /** Restores every lamp of a scene: colour temperature first, then brightness, optionally as one smooth fade. */
-  public async applyLightScene(id: number, actor: string, fadeDurationMs = 0): Promise<NetworkSnapshot> {
+  public async applyLightScene(id: number, actor: string, fadeDurationMs = 0, generation = ++this.fadeGeneration): Promise<NetworkSnapshot> {
     const scene = this.store.getLightScene(id);
     if (!scene) throw new Error("Scene does not exist.");
     for (const lamp of scene.lamps) {
       if (lamp.temperature !== null && lamp.level > 0) await this.runControl({ targetType: "unit", targetId: lamp.unitId, operation: "set_temperature", value: lamp.temperature });
     }
-    if (fadeDurationMs > 0) await this.fadeUnits(new Map(scene.lamps.map(lamp => [lamp.unitId, lamp.level])), fadeDurationMs, this.cachedSnapshot());
+    if (fadeDurationMs > 0) await this.fadeUnits(new Map(scene.lamps.map(lamp => [lamp.unitId, lamp.level])), fadeDurationMs, this.cachedSnapshot(), generation);
     else {
       for (const lamp of scene.lamps) await this.runControl({ targetType: "unit", targetId: lamp.unitId, operation: "set_level", value: lamp.level });
       this.lastSnapshot = await this.bridge.snapshot();

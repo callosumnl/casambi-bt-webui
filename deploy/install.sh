@@ -75,7 +75,8 @@ sudo systemctl enable --now bluetooth.service >/dev/null 2>&1 || echo "Warning: 
 step "Installing the Python Bluetooth bridge"
 as_build_user python3 -m venv "$APP_DIR/.venv"
 as_build_user "$APP_DIR/.venv/bin/pip" install --quiet --upgrade pip
-as_build_user "$APP_DIR/.venv/bin/pip" install --quiet -r "$APP_DIR/requirements.txt"
+# The lock pins every package with its hashes, so an update cannot pull in an unreviewed or tampered release.
+as_build_user "$APP_DIR/.venv/bin/pip" install --quiet --require-hashes -r "$APP_DIR/requirements.lock"
 
 step "Building the web application"
 cd "$APP_DIR"

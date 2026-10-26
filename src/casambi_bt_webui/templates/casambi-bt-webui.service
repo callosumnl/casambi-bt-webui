@@ -14,10 +14,29 @@ ExecStart=/usr/bin/node /opt/casambi-bt-webui/dist/index.js
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20
+# Sandboxing. Bluetooth goes through BlueZ over D-Bus (a Unix socket), so the service needs no
+# capabilities, device nodes, or Bluetooth sockets of its own. The code may live under /home, so
+# home directories stay readable. Verify with: systemd-analyze security casambi-bt-webui
 NoNewPrivileges=true
 PrivateTmp=true
-ProtectSystem=full
+ProtectSystem=strict
 ReadWritePaths=/var/lib/casambi-bt-webui
+ProtectHome=read-only
+CapabilityBoundingSet=
+AmbientCapabilities=
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+RestrictNamespaces=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+SystemCallArchitectures=native
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
