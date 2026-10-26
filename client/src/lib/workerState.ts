@@ -1,5 +1,5 @@
 /** Mirrors the server's `WorkerState`: the supervisor's view of the Python Bluetooth worker. */
-export type WorkerState = { running: boolean; pid: number | null; busy: { command: string; forMs: number } | null; lastAnswerAt: string | null; restarts: number; bluetooth?: { commands: number; recent: number; lastMs: number; medianMs: number; p95Ms: number; maxMs: number } | null };
+export type WorkerState = { running: boolean; pid: number | null; busy: { command: string; forMs: number } | null; lastAnswerAt: string | null; restarts: number; bluetooth?: { commands: number; recent: number; lastMs: number; medianMs: number; p95Ms: number; maxMs: number; fastWrites?: boolean } | null };
 
 function duration(ms: number): string {
   const seconds = Math.max(0, Math.round(ms / 1_000));
@@ -15,6 +15,6 @@ export function describeWorkerState(state: WorkerState, now = Date.now()): strin
   const process = `Worker running${state.pid === null ? "" : ` (PID ${state.pid})`}`;
   const activity = state.busy ? `busy with '${state.busy.command}' for ${duration(state.busy.forMs)}` : "idle";
   const lastAnswer = state.lastAnswerAt ? ` Last answer ${duration(now - Date.parse(state.lastAnswerAt))} ago.` : " No answer yet.";
-  const timing = state.bluetooth ? ` Bluetooth send time over the last ${state.bluetooth.recent} light commands: median ${Math.round(state.bluetooth.medianMs)} ms, 95% within ${Math.round(state.bluetooth.p95Ms)} ms, slowest ${Math.round(state.bluetooth.maxMs)} ms.` : "";
+  const timing = state.bluetooth ? ` Bluetooth send time over the last ${state.bluetooth.recent} light commands${state.bluetooth.fastWrites ? " (fast writes)" : ""}: median ${Math.round(state.bluetooth.medianMs)} ms, 95% within ${Math.round(state.bluetooth.p95Ms)} ms, slowest ${Math.round(state.bluetooth.maxMs)} ms.` : "";
   return `${process}, ${activity}.${lastAnswer}${timing}${restarts}`;
 }

@@ -223,12 +223,18 @@ describe("JsonLineCasambiBridge", () => {
       worker.stdout.write(`${JSON.stringify({ id: worker.commands.at(-1)!.id, ok: true, result: { ok: true }, bleMs })}\n`);
       await result;
     }
-    expect(bridge.state().bluetooth).toEqual({ commands: 3, recent: 3, lastMs: 30, medianMs: 30, p95Ms: 40, maxMs: 40 });
+    expect(bridge.state().bluetooth).toEqual({ commands: 3, recent: 3, lastMs: 30, medianMs: 30, p95Ms: 40, maxMs: 40, fastWrites: false });
+    // Switching to fast writes starts a new summary, so the two modes are compared separately.
+    const fast = bridge.execute("control", { targetType: "unit", targetId: 1, operation: "on" });
+    await new Promise(resolve => setImmediate(resolve));
+    worker.stdout.write(`${JSON.stringify({ id: worker.commands.at(-1)!.id, ok: true, result: { ok: true }, bleMs: 8, bleFast: true })}\n`);
+    await fast;
+    expect(bridge.state().bluetooth).toEqual({ commands: 4, recent: 1, lastMs: 8, medianMs: 8, p95Ms: 8, maxMs: 8, fastWrites: true });
     bridge.stop();
   });
 
   it("summarizes at most the last 200 send times", () => {
     const samples = Array.from({ length: 200 }, (_, index) => index + 1);
-    expect(summarizeTimings(samples, 950)).toEqual({ commands: 950, recent: 200, lastMs: 200, medianMs: 101, p95Ms: 191, maxMs: 200 });
+    expect(summarizeTimings(samples, 950)).toEqual({ commands: 950, recent: 200, lastMs: 200, medianMs: 101, p95Ms: 191, maxMs: 200, fastWrites: false });
   });
 });

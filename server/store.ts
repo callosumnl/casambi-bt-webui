@@ -39,6 +39,8 @@ export type CasambiConfig = {
   networkPassword: string | null;
   btAdapter: string | null;
   forceOffline: boolean;
+  /** Experimental: send commands as Bluetooth writes without response (see set_fast_writes in the worker). */
+  fastWrites: boolean;
   pollingEnabled: boolean;
   pollingIntervalSeconds: number;
   solarLatitude: number | null;
@@ -216,7 +218,7 @@ export class LocalStore {
   public saveCasambiConfig(input: CasambiConfig): void {
     const values: Array<[string, string | number | boolean | null, boolean]> = [
       ["networkAddress", input.networkAddress, false], ["networkUuid", input.networkUuid, false], ["btAdapter", input.btAdapter, false],
-      ["forceOffline", input.forceOffline, false], ["apiKey", input.apiKey, true], ["networkPassword", input.networkPassword, true],
+      ["forceOffline", input.forceOffline, false], ["fastWrites", input.fastWrites, false], ["apiKey", input.apiKey, true], ["networkPassword", input.networkPassword, true],
       ["pollingEnabled", input.pollingEnabled, false], ["pollingIntervalSeconds", input.pollingIntervalSeconds, false],
       ["solarLatitude", input.solarLatitude, false], ["solarLongitude", input.solarLongitude, false],
     ];
@@ -239,7 +241,7 @@ export class LocalStore {
     return {
       networkAddress: values.get("networkAddress") || null, networkUuid: values.get("networkUuid") || null,
       apiKey: values.get("apiKey") || null, networkPassword: values.get("networkPassword") || null,
-      btAdapter: values.get("btAdapter") || null, forceOffline: values.get("forceOffline") === "true",
+      btAdapter: values.get("btAdapter") || null, forceOffline: values.get("forceOffline") === "true", fastWrites: values.get("fastWrites") === "true",
       pollingEnabled: values.get("pollingEnabled") === "true", pollingIntervalSeconds: Math.max(5, Math.min(3600, Number(values.get("pollingIntervalSeconds") || 30))),
       solarLatitude: values.has("solarLatitude") && values.get("solarLatitude") !== "" ? Number(values.get("solarLatitude")) : null,
       solarLongitude: values.has("solarLongitude") && values.get("solarLongitude") !== "" ? Number(values.get("solarLongitude")) : null,
@@ -249,7 +251,7 @@ export class LocalStore {
   /** Returns non-sensitive connection fields suitable for the Admin Panel. */
   public getSafeCasambiConfig(): Omit<CasambiConfig, "apiKey" | "networkPassword"> & { hasApiKey: boolean; hasNetworkPassword: boolean } {
     const config = this.getCasambiConfig();
-    return { networkAddress: config.networkAddress, networkUuid: config.networkUuid, btAdapter: config.btAdapter, forceOffline: config.forceOffline, pollingEnabled: config.pollingEnabled, pollingIntervalSeconds: config.pollingIntervalSeconds, solarLatitude: config.solarLatitude, solarLongitude: config.solarLongitude, hasApiKey: Boolean(config.apiKey), hasNetworkPassword: Boolean(config.networkPassword) };
+    return { networkAddress: config.networkAddress, networkUuid: config.networkUuid, btAdapter: config.btAdapter, forceOffline: config.forceOffline, fastWrites: config.fastWrites, pollingEnabled: config.pollingEnabled, pollingIntervalSeconds: config.pollingIntervalSeconds, solarLatitude: config.solarLatitude, solarLongitude: config.solarLongitude, hasApiKey: Boolean(config.apiKey), hasNetworkPassword: Boolean(config.networkPassword) };
   }
 
   /** Creates a named room for local organization because rooms are not modeled upstream. */

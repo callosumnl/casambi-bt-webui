@@ -183,6 +183,25 @@ describe("CasambiService on large targets", () => {
   });
 });
 
+describe("CasambiService Bluetooth write mode", () => {
+  it("switches fast writes on the open connection without reconnecting", async () => {
+    const database = store();
+    database.saveCasambiConfig({ ...database.getCasambiConfig(), networkAddress: "AB:CD:EF:01:23:45", networkPassword: "network-secret" });
+    const bridge = new FakeBridge();
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    await service.connect();
+    const configures = bridge.configureCalls;
+
+    service.saveConfiguration({ fastWrites: true });
+    await new Promise(resolve => setImmediate(resolve));
+
+    expect(bridge.configureCalls).toBe(configures);
+    expect(bridge.commands.at(-1)).toEqual({ fastWrites: true });
+    expect(database.getCasambiConfig().fastWrites).toBe(true);
+    expect(database.getSafeCasambiConfig().fastWrites).toBe(true);
+  });
+});
+
 describe("CasambiService connection resilience", () => {
   afterEach(() => { vi.useRealTimers(); });
 

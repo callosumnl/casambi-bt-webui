@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import logging
 import os
 import re
 import signal
@@ -122,6 +123,99 @@ class MockUnit:
         }
 
 
+# casambi-bt INFO messages that mark the steps of Casambi.connect(), in order. Their timestamps split a slow
+# connect into its parts; casambi-bt offers no other hook inside connect().
+CONNECT_MARKERS = (
+    ("ble_start", "Connection to "),
+    ("ble_done", "Connected to "),
+    ("key_done", "Key exchange sucessful"),
+    ("auth_done", "Authentication successful"),
+    ("auth_done", "No key in keystore"),
+)
+
+
+class ConnectStepRecorder(logging.Handler):
+    """Collects the time of casambi-bt's connect milestones while attached; writes nothing anywhere."""
+
+    def __init__(self) -> None:
+        super().__init__(logging.INFO)
+        self.times: dict[str, float] = {}
+        self.fixture_fetches = 0
+
+    def emit(self, record: logging.LogRecord) -> None:
+        message = record.getMessage()
+        if message.startswith("Fetching unit type for id") or message == "Using cached type.":
+            self.fixture_fetches += 1 if message.startswith("Fetching") else -1
+        for step, prefix in CONNECT_MARKERS:
+            if step not in self.times and message.startswith(prefix):
+                self.times[step] = record.created
+
+
+def describe_connect_steps(scan_seconds: float, started: float, finished: float, steps: dict[str, float], fixture_fetches: int) -> str:
+    """One line for the audit log, e.g. "Connected in 37.4 s: Bluetooth scan 5.1 s, Casambi cloud 3.2 s, ..."."""
+    parts = [f"Bluetooth scan {scan_seconds:.1f} s"]
+    if "ble_start" in steps and "ble_done" in steps:
+        fetched = f", fetched {fixture_fetches} fixture type(s)" if fixture_fetches > 0 else ""
+        parts.append(f"Casambi cloud and cache {steps['ble_start'] - started:.1f} s{fetched}")
+        parts.append(f"Bluetooth connect {steps['ble_done'] - steps['ble_start']:.1f} s")
+        if "key_done" in steps:
+            parts.append(f"key exchange {steps['key_done'] - steps['ble_done']:.1f} s")
+            parts.append(f"authentication {steps.get('auth_done', finished) - steps['key_done']:.1f} s")
+    else:
+        parts.append(f"cloud, Bluetooth connect and handshake {finished - started:.1f} s (casambi-bt reported no steps)")
+    return f"Connected in {scan_seconds + finished - started:.1f} s: " + ", ".join(parts) + "."
+
+
+# The characteristic casambi-bt sends every command through (its CASA_AUTH_CHAR_UUID).
+CASAMBI_CHARACTERISTIC = "c9ffde48-ca5a-0001-ab83-8f519b482f77"
+# An encrypted command is about 33 bytes (4 header + 13 encrypted + 16 MAC); a write without response must fit in one packet.
+FAST_WRITE_MIN_BYTES = 40
+
+
+def set_fast_writes(casa: Any, enabled: bool) -> str | None:
+    """Switches casambi-bt's command writes between write-with-response (its default) and write-without-response.
+
+    With response, every command waits for the connected lamp to acknowledge it (about 110 ms measured on a
+    Pi); without, it is handed to BlueZ and sent in the next connection event. This replaces write_gatt_char
+    on casambi-bt's current BleakClient only after the handshake; a reconnect inside casambi-bt creates a new
+    client, which keeps the safe default until this is applied again (the worker does that before each command).
+    Returns a message when the mode changed or cannot be used, otherwise None.
+    """
+    try:
+        gatt = casa._casaClient._gattClient
+    except AttributeError:
+        return "Fast Bluetooth writes are not available with this casambi-bt version." if enabled else None
+    if gatt is None:
+        return None
+    original = getattr(gatt, "_webui_original_write", None)
+    if not enabled:
+        if original is None:
+            return None
+        gatt.write_gatt_char = original
+        del gatt._webui_original_write
+        return "Fast Bluetooth writes turned off: commands wait for the lamp's acknowledgement again."
+    if original is not None:
+        return None
+    try:
+        characteristic = gatt.services.get_characteristic(CASAMBI_CHARACTERISTIC)
+        properties = set(characteristic.properties)
+        size = int(characteristic.max_write_without_response_size)
+    except Exception as error:  # A missing characteristic or an older bleak: keep the safe default.
+        return f"Fast Bluetooth writes are not available: {error!r}."
+    if "write-without-response" not in properties:
+        return "Fast Bluetooth writes are not available: this Casambi unit does not accept writes without response."
+    if size < FAST_WRITE_MIN_BYTES:
+        return f"Fast Bluetooth writes are not available: the Bluetooth link fits only {size} bytes per unacknowledged write, a command needs about 33."
+    plain = gatt.write_gatt_char
+
+    async def write_without_response(char_specifier: Any, data: Any, response: bool | None = None) -> None:
+        await plain(char_specifier, data, response=False)
+
+    gatt._webui_original_write = plain
+    gatt.write_gatt_char = write_without_response
+    return f"Fast Bluetooth writes turned on (write without response, up to {size} bytes)."
+
+
 def skipped_units_report(casa: Any) -> str | None:
     """Explain units casambi-bt silently left out of the network, or None.
 
@@ -159,6 +253,8 @@ class CasambiWorker:
         self.mock_units = [MockUnit(1, "Studio light", 180, 4000), MockUnit(2, "Entry light", 110, 3000)]
         # How long the last control command spent in casambi-bt (the Bluetooth write), reported with its reply.
         self.last_ble_ms: float | None = None
+        # The experimental write-without-response mode; see set_fast_writes.
+        self.fast_writes = False
 
     def snapshot(self) -> dict[str, Any]:
         """Return only data currently modeled by the upstream library."""
@@ -261,7 +357,9 @@ class CasambiWorker:
         # address makes casambi-bt perform a second BlueZ cache lookup after its
         # network update work; BlueZ can expire that cached object meanwhile,
         # leading to an empty NetworkNotFoundError despite a successful scan.
+        scan_started = time.perf_counter()
         endpoints = await discover_with_timeout(discover)
+        scan_seconds = time.perf_counter() - scan_started
         endpoint = next((device for device in endpoints if device.address.upper() == address), None)
         if endpoint is None:
             raise RuntimeError(
@@ -281,6 +379,12 @@ class CasambiWorker:
         casa.registerUnitChangedHandler(self.handle_unit_changed)
         casa.registerSwitchEventHandler(self.handle_switch_event)
         casa.registerDisconnectCallback(lambda: self.handle_disconnect(casa))
+        recorder = ConnectStepRecorder()
+        upstream_logger = logging.getLogger("CasambiBt")
+        previous_level = upstream_logger.level
+        upstream_logger.addHandler(recorder)
+        upstream_logger.setLevel(logging.INFO)  # Only while connecting; casambi-bt logs every packet at INFO.
+        connect_started = time.time()
         try:
             await self.casa.connect(endpoint, password, bool(payload.get("forceOffline", False)))
         except Exception as error:
@@ -294,6 +398,12 @@ class CasambiWorker:
                     "Use Discover while the Pi is near a powered Casambi unit, verify the casambi service account has Bluetooth access, and retry."
                 ) from error
             raise
+        finally:
+            upstream_logger.removeHandler(recorder)
+            upstream_logger.setLevel(previous_level)
+        print(describe_connect_steps(scan_seconds, connect_started, time.time(), recorder.times, recorder.fixture_fetches), file=sys.stderr, flush=True)
+        self.fast_writes = bool(payload.get("fastWrites", False))
+        self.apply_fast_writes(report=True)
         for unit in self.casa.units:
             self.instrument_sensor_state(unit)
         skipped = skipped_units_report(self.casa)
@@ -319,6 +429,28 @@ class CasambiWorker:
             return
         self.connected = False
         emit({"event": {"type": "bridge", "state": "disconnected"}})
+
+    def apply_fast_writes(self, report: bool = False) -> None:
+        """Keeps the write mode in line with the setting, also on a client casambi-bt recreated while reconnecting."""
+        if self.mock or not self.casa:
+            return
+        message = set_fast_writes(self.casa, self.fast_writes)
+        if message and (report or "turned" in message):
+            print(message, file=sys.stderr, flush=True)
+
+    def fast_writes_active(self) -> bool:
+        """Whether commands currently go out without response (the setting can be on while the link does not allow it)."""
+        try:
+            return getattr(self.casa._casaClient._gattClient, "_webui_original_write", None) is not None
+        except AttributeError:
+            return False
+
+    def set_options(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """Changes settings that need no reconnect."""
+        if "fastWrites" in payload:
+            self.fast_writes = bool(payload["fastWrites"])
+            self.apply_fast_writes(report=True)
+        return {"ok": True, "fastWrites": self.fast_writes, "active": self.fast_writes_active()}
 
     async def discover(self) -> list[dict[str, str]]:
         """Discover nearby Casambi networks through the upstream filtering logic."""
@@ -356,6 +488,8 @@ class CasambiWorker:
         elif target_type == "scene": target = next((scene for scene in self.casa.scenes if scene.sceneId == int(target_id)), None)
         if target_type != "network" and target is None:
             raise ValueError("The requested Casambi target does not exist.")
+        if self.fast_writes:
+            self.apply_fast_writes()  # Identity check per command; it only does work after casambi-bt reconnected.
         started = time.perf_counter()
         if operation == "on": await self.casa.turnOn(target)
         elif operation == "off": await self.casa.setLevel(target, 0)
@@ -452,6 +586,7 @@ async def serve_commands(worker: CasambiWorker) -> None:
             elif command in ("configure", "connect"): result = await worker.configure(payload)
             elif command == "disconnect": result = await worker.disconnect()
             elif command == "snapshot": result = worker.snapshot()
+            elif command == "options": result = worker.set_options(payload)
             elif command == "control":
                 worker.last_ble_ms = None
                 result = await worker.control(payload)
@@ -459,6 +594,7 @@ async def serve_commands(worker: CasambiWorker) -> None:
             envelope: dict[str, Any] = {"id": request["id"], "ok": True, "result": result}
             if command == "control" and worker.last_ble_ms is not None:
                 envelope["bleMs"] = round(worker.last_ble_ms, 1)
+                envelope["bleFast"] = worker.fast_writes_active()
             emit(envelope)
         except Exception as error:  # The protocol must never crash the service for a malformed command.
             request_id = request.get("id", "unknown") if isinstance(request, dict) else "unknown"

@@ -92,7 +92,7 @@ const schemas: Record<string, JsonSchema> = {
     lastRunKey: nullable({ type: "string" }), lastRunAt: nullable(timestamp), nextRunAt: nullable(timestamp),
   }),
   CasambiConfig: object({
-    networkAddress: nullable({ type: "string" }), networkUuid: nullable({ type: "string" }), btAdapter: nullable({ type: "string" }), forceOffline: { type: "boolean" },
+    networkAddress: nullable({ type: "string" }), networkUuid: nullable({ type: "string" }), btAdapter: nullable({ type: "string" }), forceOffline: { type: "boolean" }, fastWrites: { type: "boolean", description: "Experimental write-without-response mode." },
     pollingEnabled: { type: "boolean" }, pollingIntervalSeconds: { type: "integer" }, solarLatitude: nullable({ type: "number" }), solarLongitude: nullable({ type: "number" }),
     hasApiKey: { type: "boolean", description: "Secrets are never returned, only whether one is stored." }, hasNetworkPassword: { type: "boolean" },
   }),
@@ -102,6 +102,7 @@ const schemas: Record<string, JsonSchema> = {
     bluetooth: nullable(object({
       commands: { type: "integer", description: "Light commands sent since the worker supervisor started." }, recent: { type: "integer", description: "Commands in the summary (the last 200)." },
       lastMs: { type: "number" }, medianMs: { type: "number" }, p95Ms: { type: "number" }, maxMs: { type: "number" },
+      fastWrites: { type: "boolean", description: "Whether these commands went out without response. The summary restarts when the mode changes." },
     })),
   }),
   SwitchPress: object({

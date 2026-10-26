@@ -29,7 +29,8 @@ function waitForResponse(child: ReturnType<typeof spawn>, id: string): Promise<R
       }
     });
     child.once("error", error => { clearTimeout(timeout); reject(error); });
-    child.stderr.on("data", chunk => { clearTimeout(timeout); reject(new Error(chunk.toString())); });
+    // Every connect reports its duration on stderr ("Connected in …"); anything else there is a failure.
+    child.stderr.on("data", chunk => { const text = chunk.toString(); if (text.split("\n").every(line => !line || line.startsWith("Connected in "))) return; clearTimeout(timeout); reject(new Error(text)); });
   });
 }
 
@@ -365,3 +366,117 @@ class Casambi:
     } finally { child.kill(); }
   });
 });
+
+describe("casambi_worker connect steps and fast writes", () => {
+  /** Real worker against a fake casambi-bt that logs its connect steps and writes commands through a fake BleakClient. */
+  async function worker(maxUnacknowledgedBytes = 244) {
+    const temporaryDirectory = mkdtempSync(path.join(os.tmpdir(), "casambi-worker-writes-"));
+    temporaryDirectories.push(temporaryDirectory);
+    const writes = path.join(temporaryDirectory, "writes.txt");
+    mkdirSync(path.join(temporaryDirectory, "CasambiBt"), { recursive: true });
+    writeFileSync(path.join(temporaryDirectory, "CasambiBt", "__init__.py"), `
+import asyncio, logging
+from types import SimpleNamespace
+
+UUID = "c9ffde48-ca5a-0001-ab83-8f519b482f77"
+client_log = logging.getLogger("CasambiBt._client")
+
+async def discover():
+    return [SimpleNamespace(address="AB:CD:EF:01:23:45")]
+
+class Gatt:
+    def __init__(self, label):
+        self.label = label
+        characteristic = SimpleNamespace(properties=["read", "write", "write-without-response", "notify"], max_write_without_response_size=${maxUnacknowledgedBytes})
+        self.services = SimpleNamespace(get_characteristic=lambda uuid: characteristic if uuid == UUID else None)
+    async def write_gatt_char(self, char, data, response=None):
+        with open(${JSON.stringify(writes)}, "a") as handle: handle.write(f"{self.label}:{response}\\n")
+
+class Casambi:
+    def __init__(self, cachePath):
+        self.units, self.groups, self.scenes = [], [], []
+        self.networkId, self.networkName = "test-network", "Test network"
+        self.connected = False
+        self._casaClient = SimpleNamespace(_gattClient=None)
+    def registerUnitChangedHandler(self, handler): pass
+    def registerSwitchEventHandler(self, handler): pass
+    def registerDisconnectCallback(self, handler): pass
+    async def connect(self, address, password, force_offline):
+        await asyncio.sleep(0.05)
+        client_log.info("Connection to AB:CD:EF:01:23:45")
+        await asyncio.sleep(0.2)
+        client_log.info("Connected to AB:CD:EF:01:23:45")
+        client_log.info("[CASAMBI_RAW_PACKET] Encrypted #1: 00ff")
+        await asyncio.sleep(0.05)
+        client_log.info("Key exchange sucessful")
+        client_log.info("Authentication successful")
+        self._casaClient._gattClient = Gatt("first")
+        self.connected = True
+    async def setLevel(self, target, level):
+        if level == 99:  # casambi-bt reconnected on its own: a new BleakClient
+            self._casaClient._gattClient = Gatt("second")
+        await self._casaClient._gattClient.write_gatt_char(UUID, b"command")
+    async def disconnect(self): pass
+`);
+    const child = spawn("python3", [workerPath], {
+      cwd: projectRoot,
+      env: { ...process.env, NODE_ENV: "production", CASAMBI_CACHE_PATH: path.join(temporaryDirectory, "cache"), PYTHONPATH: `${temporaryDirectory}${path.delimiter}${process.env.PYTHONPATH || ""}` },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stderr = "";
+    child.stderr.on("data", chunk => { stderr += chunk.toString(); });
+    const responses = new Map<string, (payload: Record<string, unknown>) => void>();
+    let pending = "";
+    child.stdout.on("data", chunk => {
+      pending += chunk.toString();
+      const lines = pending.split("\n"); pending = lines.pop() || "";
+      for (const line of lines.filter(Boolean)) { const payload = JSON.parse(line) as Record<string, unknown>; responses.get(String(payload.id))?.(payload); }
+    });
+    const send = (id: string, command: string, payload: Record<string, unknown> = {}) => new Promise<Record<string, unknown>>((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error(`No answer to ${command} within 3 s.`)), 3_000);
+      responses.set(id, value => { clearTimeout(timeout); resolve(value); });
+      child.stdin.write(`${JSON.stringify({ id, command, payload })}\n`);
+    });
+    const level = (id: string, value: number) => send(id, "control", { targetType: "network", operation: "set_level", value, reply: "ack" });
+    const written = () => existsSync(writes) ? readFileSync(writes, "utf8").trim().split("\n") : [];
+    return { child, send, level, written, stderr: () => stderr };
+  }
+  const credentials = (fastWrites: boolean) => ({ networkAddress: "abcdef012345", networkPassword: "not-a-real-password", fastWrites });
+
+  it("splits a connect into its steps without printing casambi-bt's own log lines", async () => {
+    const { child, send, stderr } = await worker();
+    try {
+      await send("connect", "configure", credentials(false));
+      expect(stderr()).toMatch(/Connected in [\d.]+ s: Bluetooth scan [\d.]+ s, Casambi cloud and cache 0\.\d s, Bluetooth connect 0\.[23] s, key exchange 0\.\d s, authentication 0\.0 s\./);
+      expect(stderr()).not.toContain("CASAMBI_RAW_PACKET");
+      expect(stderr()).not.toContain("Connection to 5E");
+    } finally { child.kill(); }
+  });
+
+  it("sends without response only while fast writes are on, also after casambi-bt reconnects", async () => {
+    const { child, send, level, written, stderr } = await worker();
+    try {
+      await send("connect", "configure", credentials(false));
+      expect(await level("default", 10)).toMatchObject({ ok: true, bleFast: false });
+      await expect(send("on", "options", { fastWrites: true })).resolves.toMatchObject({ ok: true, result: { fastWrites: true, active: true } });
+      expect(stderr()).toContain("Fast Bluetooth writes turned on (write without response, up to 244 bytes).");
+      expect(await level("fast", 20)).toMatchObject({ ok: true, bleFast: true });
+      await level("reconnected", 99); // the new client is still on the safe default for this command
+      expect(await level("fast-again", 30)).toMatchObject({ bleFast: true });
+      await send("off", "options", { fastWrites: false });
+      expect(await level("default-again", 40)).toMatchObject({ bleFast: false });
+      expect(written()).toEqual(["first:None", "first:False", "second:None", "second:False", "second:None"]);
+    } finally { child.kill(); }
+  });
+
+  it("keeps the acknowledged default when the link cannot carry a whole command unacknowledged", async () => {
+    const { child, send, level, written, stderr } = await worker(20);
+    try {
+      await send("connect", "configure", credentials(true));
+      expect(stderr()).toContain("fits only 20 bytes per unacknowledged write");
+      expect(await level("default", 10)).toMatchObject({ ok: true, bleFast: false });
+      expect(written()).toEqual(["first:None"]);
+    } finally { child.kill(); }
+  });
+});
+

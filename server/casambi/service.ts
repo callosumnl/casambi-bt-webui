@@ -185,6 +185,10 @@ export class CasambiService {
     const next = this.store.getCasambiConfig();
     const changed = (["networkAddress", "networkPassword", "apiKey", "btAdapter", "forceOffline"] as const).some(key => existing[key] !== next[key]);
     if (changed && this.wantConnected && next.networkAddress && next.networkPassword) void this.connect().catch(() => { /* connect() audits and reports the failure itself. */ });
+    // The write mode switches on the open connection; a later connect passes it with the rest of the settings.
+    else if (existing.fastWrites !== next.fastWrites && this.lastSnapshot.connected) {
+      void this.bridge.execute("options", { fastWrites: next.fastWrites }).catch(error => this.store.audit("bridge", "bridge.diagnostic", { detail: `Changing the Bluetooth write mode failed: ${this.message(error)}` }));
+    }
   }
 
   /** Stops a running fade at its next step (a newer command does this too), e.g. when a switch is pressed during one. */
