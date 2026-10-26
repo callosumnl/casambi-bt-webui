@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  apiKeyCreateSchema, awayDateSetSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, fadeBodySchema, roomCreateSchema,
+  apiKeyCreateSchema, awayDateSetSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
   roomDefaultBrightnessSchema, roomRenameSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userUpdateSchema,
 } from "./apiSchemas";
 import { controlRequestSchema, groupSchema, networkSnapshotSchema, sceneSchema, unitSchema } from "./casambi/types";
@@ -50,6 +50,7 @@ const schemas: Record<string, JsonSchema> = {
   RoomCreate: fromZod(roomCreateSchema),
   RoomDefaultBrightness: fromZod(roomDefaultBrightnessSchema),
   DeviceMetadata: fromZod(deviceMetadataSchema),
+  DeviceRooms: fromZod(deviceRoomsSchema),
   SwitchRuleCreate: { ...fromZod(switchRuleSchema), examples: [{ name: "Kitchen toggle", unitId: 2, button: 4, trigger: "tap", command: { targetType: "room", targetId: 1, operation: "toggle" } }] },
   SwitchRuleUpdate: fromZod(switchRulePatchSchema),
   // Responses.
@@ -165,6 +166,7 @@ const operations: Operation[] = [
   { method: "put", path: "/admin/rooms/{id}/default-brightness", tag: "Admin: rooms and devices", summary: "Set a room's default brightness", access: "admin", body: "RoomDefaultBrightness", bodyRequired: true, responses: { 200: { description: "Updated.", schema: "Room" } } },
   { method: "patch", path: "/admin/rooms/{id}", tag: "Admin: rooms and devices", summary: "Rename a room", access: "admin", body: "RoomRename", bodyRequired: true, responses: { 200: { description: "Renamed.", schema: "Room" }, 409: { description: "The name is already in use.", schema: "Error" } } },
   { method: "delete", path: "/admin/rooms/{id}", tag: "Admin: rooms and devices", summary: "Delete a room", description: "Refused while timers, switch rules, or scenes use it.", access: "admin", responses: { 204: noContent, 409: { description: "Still in use; the message names the users.", schema: "Error" } } },
+  { method: "put", path: "/admin/devices/room", tag: "Admin: rooms and devices", summary: "Assign many units to a room", description: "Moves up to 1,000 units into one room, or out of every room with `roomId: null`, in one request. Custom names are kept.", access: "admin", body: "DeviceRooms", bodyRequired: true, responses: { 204: noContent, 422: { description: "Invalid input, or the room does not exist.", schema: "Error" } } },
   { method: "put", path: "/admin/devices/{id}/metadata", tag: "Admin: rooms and devices", summary: "Name a unit and assign its room", description: "Fields left out keep their value; an empty or null name restores the name from Casambi.", access: "admin", body: "DeviceMetadata", bodyRequired: true, responses: { 204: noContent } },
   { method: "get", path: "/admin/away-date-sets", tag: "Admin: rooms and devices", summary: "Away-date sets", access: "admin", responses: { 200: { description: "Sets.", schema: list("AwayDateSet") } } },
   { method: "post", path: "/admin/away-date-sets", tag: "Admin: rooms and devices", summary: "Create an away-date set", access: "admin", body: "AwayDateSetCreate", bodyRequired: true, responses: { 201: { description: "Created.", schema: "AwayDateSet" } } },

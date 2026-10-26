@@ -276,5 +276,12 @@ describe("casambi_worker input handling", () => {
     expect(lines.filter(line => line.ok === false).map(line => line.id)).toEqual(["unknown", "unknown"]);
     expect(lines.at(-1)).toEqual({ id: "p", ok: true, result: { ok: true } });
   });
-});
 
+  it("answers a control command with only an ack when asked, so a series of commands skips the snapshots", () => {
+    const control = (id: string, reply?: string) => JSON.stringify({ id, command: "control", payload: { targetType: "unit", targetId: 1, operation: "set_level", value: 40, ...(reply ? { reply } : {}) } });
+    const result = spawnSync("python3", [workerPath, "--mock"], { input: `${control("ack", "ack")}\n${control("full")}\n`, encoding: "utf8" });
+    const replies = result.stdout.trim().split("\n").map(line => JSON.parse(line) as { id?: string; result?: Record<string, unknown> }).filter(line => line.id);
+    expect(replies[0]).toEqual({ id: "ack", ok: true, result: { ok: true } });
+    expect(replies[1].result).toMatchObject({ units: expect.any(Array), groups: expect.any(Array) });
+  });
+});

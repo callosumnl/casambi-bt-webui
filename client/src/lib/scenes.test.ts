@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Device, NetworkSnapshot } from "./localApi";
-import { averageBrightnessPercent, isLamp, parseSceneTarget, sameScope, sceneTargetOptions, scopeLamps } from "./scenes";
+import { averageBrightnessPercent, isLamp, parseSceneTarget, sameScope, sceneTargetOptions, lampsByScope } from "./scenes";
 
 const dimmable = [{ type: "dimmer", readOnly: false }];
 function unit(id: number, roomId: number | undefined, on: boolean, dimmer: number, capabilities = dimmable): Device {
@@ -21,15 +21,15 @@ describe("lamps and scene scopes", () => {
   });
 
   it("finds the lamps of a group, room, or the whole network, never the switch", () => {
-    expect(scopeLamps(network, { type: "group", id: 5 }).map(lamp => lamp.id)).toEqual([1, 2]);
-    expect(scopeLamps(network, { type: "room", id: 10 }).map(lamp => lamp.id)).toEqual([1, 2]);
-    expect(scopeLamps(network, { type: "network", id: null }).map(lamp => lamp.id)).toEqual([1, 2, 3]);
+    expect(lampsByScope(network)({ type: "group", id: 5 }).map(lamp => lamp.id)).toEqual([1, 2]);
+    expect(lampsByScope(network)({ type: "room", id: 10 }).map(lamp => lamp.id)).toEqual([1, 2]);
+    expect(lampsByScope(network)({ type: "network", id: null }).map(lamp => lamp.id)).toEqual([1, 2, 3]);
     expect(sameScope({ type: "room", id: 10 }, { type: "room", id: 10 })).toBe(true);
     expect(sameScope({ type: "room", id: 10 }, { type: "group", id: 10 })).toBe(false);
   });
 
   it("averages the brightness of the lamps that are on", () => {
-    expect(averageBrightnessPercent(scopeLamps(network, { type: "network", id: null }))).toBe(60);
+    expect(averageBrightnessPercent(lampsByScope(network)({ type: "network", id: null }))).toBe(60);
     expect(averageBrightnessPercent([unit(2, 10, false, 0)])).toBe(0);
   });
 });

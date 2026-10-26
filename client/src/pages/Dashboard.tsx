@@ -1,4 +1,4 @@
-import { AlertTriangle, Pencil, Plus, RefreshCw, X } from "lucide-react";
+import { AlertTriangle, ChevronRight, Pencil, Plus, RefreshCw, Search, X } from "lucide-react";
 import { FormEvent, useState } from "react";
 import "./Dashboard.css";
 import { ConnectionStatusBar } from "@/components/ConnectionStatusBar";
@@ -8,17 +8,24 @@ import { useNetwork } from "@/hooks/useNetwork";
 import { useSliderCommit } from "@/hooks/useSliderCommit";
 import { percentToDimmer } from "@/lib/brightness";
 import type { LocalScene, SceneScope } from "@/lib/localApi";
-import { averageBrightnessPercent, isLamp, sameScope, scopeLamps } from "@/lib/scenes";
+import { averageBrightnessPercent, isLamp, lampsByScope, sameScope } from "@/lib/scenes";
 
 type Chip = { key: string; label: string; kind?: "casambi" | "default"; scene?: LocalScene; apply: () => void };
+/** Above this many lamps, or more than eight group and room rows, the dashboard adds a search and groups lamps by room. */
+const LARGE_NETWORK_LAMPS = 12;
+/** Room sections start open up to this many lamps; beyond it they start closed and render nothing until opened. */
+const OPEN_SECTIONS_UP_TO = 24;
 
 /** Lighting controls first: groups and rooms (with their scenes), then individual lamps. Switches are not shown here. */
 export default function Dashboard() {
   const { network, loading, error, connection, command, applyRoomDefault, refresh, scenes, saveScene, updateScene, renameScene, deleteScene, applyScene } = useNetwork();
+  const [query, setQuery] = useState("");
+  const [toggledSections, setToggledSections] = useState<Set<string>>(new Set());
   if (loading) return <div className="loading-grid">CONNECTING TO LIGHTING GRID…</div>;
   if (!network) return <HudFrame className="empty-state"><AlertTriangle /><h2>NETWORK OFFLINE</h2><p>{error || "No Casambi snapshot is available yet."}</p><button className="neon-button" onClick={() => void refresh(true)}>RETRY LINK</button></HudFrame>;
 
   const lamps = network.units.filter(isLamp);
+  const rowLamps = lampsByScope(network);
   const sensors = network.units.flatMap(unit => unit.state.sensors.map(sensor => ({ unit, sensor })));
   const sceneChips = (scope: SceneScope): Chip[] => scenes.filter(scene => sameScope(scene.scope, scope)).map(scene => ({ key: `scene-${scene.id}`, label: scene.name, scene, apply: () => void applyScene(scene.id) }));
   const rows = [
@@ -26,6 +33,16 @@ export default function Dashboard() {
     ...network.groups.map(group => ({ key: `group-${group.id}`, tag: "GROUP", name: group.name, scope: { type: "group", id: group.id } as SceneScope, extra: [] as Chip[] })),
     ...network.rooms.map(room => ({ key: `room-${room.id}`, tag: "ROOM", name: room.name, scope: { type: "room", id: room.id } as SceneScope, extra: [{ key: `default-${room.id}`, label: `Default ${room.defaultBrightnessPercent}%`, kind: "default" as const, apply: () => void applyRoomDefault(room.id) }] })),
   ];
+
+  const large = lamps.length > LARGE_NETWORK_LAMPS || rows.length > 9;
+  const search = query.trim().toLowerCase();
+  const matches = (text: string) => !search || text.toLowerCase().includes(search);
+  const visibleRows = rows.filter(row => row.key === "network" || matches(row.name));
+  const sections = [...network.rooms.map(room => ({ key: `room-${room.id}`, name: room.name, lamps: rowLamps({ type: "room", id: room.id }) })), { key: "unassigned", name: "Not in a room", lamps: lamps.filter(lamp => lamp.roomId == null) }]
+    .map(section => ({ ...section, shown: matches(section.name) ? section.lamps : section.lamps.filter(lamp => matches(lamp.name)) }))
+    .filter(section => section.shown.length > 0);
+  const sectionOpen = (key: string) => Boolean(search) || (lamps.length <= OPEN_SECTIONS_UP_TO) !== toggledSections.has(key);
+  const toggleSection = (key: string) => setToggledSections(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next; });
 
   return <div className="dashboard-page">
     <div className="status-strip">
@@ -37,10 +54,11 @@ export default function Dashboard() {
     </div>
     <ConnectionStatusBar status={connection} />
     {error && <p className="live-warning"><AlertTriangle /> {error}</p>}
+    {large && <label className="dashboard-search"><Search aria-hidden="true" /><input type="search" value={query} onChange={event => setQuery(event.target.value)} placeholder="Find a room, group, or lamp" aria-label="Find a room, group, or lamp" /></label>}
 
     <section aria-labelledby="collective-heading">
       <h2 id="collective-heading" className="section-label">GROUPS & ROOMS</h2>
-      <div className="collective-list">{rows.map(row => <CollectiveRow key={row.key} tag={row.tag} name={row.name} level={averageBrightnessPercent(scopeLamps(network, row.scope))}
+      <div className="collective-list">{visibleRows.map(row => <CollectiveRow key={row.key} tag={row.tag} name={row.name} level={averageBrightnessPercent(rowLamps(row.scope))}
         send={(operation, value) => command({ targetType: row.scope.type, targetId: row.scope.id, operation, ...(value === undefined ? {} : { value }) })}
         chips={[...row.extra, ...sceneChips(row.scope)]} onSave={name => saveScene(name, row.scope)} onUpdate={id => void updateScene(id)} onRename={(id, name) => renameScene(id, name)} onDelete={id => void deleteScene(id)} />)}</div>
     </section>
@@ -48,7 +66,12 @@ export default function Dashboard() {
     <section aria-labelledby="lamps-heading">
       <h2 id="lamps-heading" className="section-label">LAMPS</h2>
       {lamps.length === 0 ? <p className="muted-copy">No lamps yet. Ask an admin to connect the Casambi Bluetooth bridge.</p>
-        : <div className="lamp-grid">{lamps.map(device => <DeviceControlCard key={device.id} device={device} onCommand={command} />)}</div>}
+        : !large ? <div className="lamp-grid">{lamps.map(device => <DeviceControlCard key={device.id} device={device} onCommand={command} />)}</div>
+          : sections.length === 0 ? <p className="muted-copy">Nothing matches “{query}”.</p>
+            : sections.map(section => { const open = sectionOpen(section.key); return <div key={section.key} className="room-section">
+              <button className="room-section-head" aria-expanded={open} disabled={Boolean(search)} onClick={() => toggleSection(section.key)}><ChevronRight aria-hidden="true" /><strong>{section.name}</strong><span>{section.lamps.filter(lamp => lamp.state.on).length}/{section.lamps.length} on</span></button>
+              {open && <div className="lamp-grid">{section.shown.map(device => <DeviceControlCard key={device.id} device={device} onCommand={command} />)}</div>}
+            </div>; })}
     </section>
 
     {sensors.length > 0 && <section aria-labelledby="sensors-heading">

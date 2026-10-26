@@ -2,6 +2,7 @@ import { EventHub } from "../events";
 import { CasambiConfig, LightSceneRecord, LocalStore, SceneLamp, SceneScope } from "../store";
 import { controlRequestSchema, isLampUnit, type BridgeEvent, type ControlRequest, type NetworkSnapshot, type SwitchPress } from "./types";
 import { JsonLineCasambiBridge, type WorkerState } from "./bridge";
+import { bucketBy, planTargets, type PlannedTarget } from "./commandPlan";
 
 /** Operations that set an absolute value, so a newer queued value can safely replace an unsent older one. */
 const COALESCIBLE_OPERATIONS = new Set(["set_level", "set_temperature", "set_color", "set_white", "set_vertical", "set_slider", "set_xy"]);
@@ -206,13 +207,15 @@ export class CasambiService {
     if (command.targetType === "room") {
       const roomId = Number(command.targetId);
       const unitIds = this.store.getUnitMetadata().filter(metadata => metadata.roomId === roomId).map(metadata => metadata.unitId);
-      if (unitIds.length === 0) throw new Error("The room has no assigned lamps.");
-      // A Casambi group with exactly the room's lamps takes one BLE command instead of one per lamp.
-      const roomUnits = new Set(unitIds);
-      const group = this.lastSnapshot.groups.find(candidate => candidate.unitIds.length === roomUnits.size && candidate.unitIds.every(unitId => roomUnits.has(unitId)));
-      if (group) this.lastSnapshot = await this.runControl({ ...command, targetType: "group", targetId: group.id });
+      // Switches and sensors assigned to the room cannot take light commands; units the snapshot does not know yet are kept.
+      const known = new Map(this.lastSnapshot.units.map(unit => [unit.id, unit]));
+      const lampIds = unitIds.filter(unitId => { const unit = known.get(unitId); return !unit || isLampUnit(unit); });
+      if (lampIds.length === 0) throw new Error("The room has no assigned lamps.");
+      // The whole network, or Casambi groups inside the room, take one Bluetooth command instead of one per lamp.
+      const plan = planTargets(lampIds, this.lastSnapshot);
+      if (plan.length === 1) this.lastSnapshot = await this.runControl({ ...command, ...plan[0] });
       else {
-        for (const unitId of unitIds) await this.runControl({ ...command, targetType: "unit", targetId: unitId });
+        for (const target of plan) await this.runControl({ ...command, ...target }, "ack");
         this.lastSnapshot = await this.bridge.snapshot();
       }
     } else {
@@ -243,19 +246,34 @@ export class CasambiService {
     await this.fadeUnits(new Map(unitIds.map(unitId => [unitId, targetLevel])), command.fadeDurationMs || 0, snapshot, generation);
   }
 
-  /** Steps each unit from its current level to its own target level in bounded 200 ms increments. */
+  /**
+   * Moves each unit from its current level to its own target level over `fadeDurationMs`. Lamps that share a start
+   * and target level move together as planned network or group commands. Each pass sets the level for the time that
+   * has passed, at most 60 passes and at least 200 ms apart, so a large target takes fewer, coarser passes instead of
+   * stretching the fade far beyond its duration.
+   */
   private async fadeUnits(targets: Map<number, number>, fadeDurationMs: number, snapshot: NetworkSnapshot, generation: number): Promise<void> {
     const startLevels = new Map(snapshot.units.map(unit => [unit.id, unit.state.dimmer ?? (unit.state.on ? 255 : 0)]));
-    const steps = Math.max(1, Math.min(60, Math.ceil(fadeDurationMs / 200)));
-    // Only the newest command runs: a fade stops at its next step once another arrives, so repeated fade requests cannot pile up Bluetooth writes.
-    for (let step = 1; step <= steps && generation === this.fadeGeneration; step += 1) {
-      for (const [unitId, targetLevel] of Array.from(targets)) {
-        if (generation !== this.fadeGeneration) break;
-        const start = startLevels.get(unitId) ?? 0;
-        const level = Math.round(start + ((targetLevel - start) * step) / steps);
-        await this.bridge.execute("control", { targetType: "unit", targetId: unitId, operation: "set_level", value: level });
+    const paths = bucketBy(Array.from(targets, ([unitId, target]) => [unitId, { start: startLevels.get(unitId) ?? 0, target }] as [number, { start: number; target: number }]), path => `${path.start}:${path.target}`)
+      .map(path => ({ ...path.value, plan: planTargets(path.unitIds, snapshot), sent: path.value.start }));
+    const passMs = Math.max(200, fadeDurationMs / 60);
+    const startedAt = Date.now();
+    // Only the newest command runs: a fade stops at its next pass once another arrives, so repeated fade requests cannot pile up Bluetooth writes.
+    while (generation === this.fadeGeneration) {
+      const passStartedAt = Date.now();
+      const fraction = Math.min(1, (passStartedAt - startedAt + passMs) / Math.max(1, fadeDurationMs));
+      for (const path of paths) {
+        const level = Math.round(path.start + (path.target - path.start) * fraction);
+        if (level === path.sent && fraction < 1) continue;
+        for (const target of path.plan) {
+          if (generation !== this.fadeGeneration) break;
+          await this.bridge.execute("control", { ...target, operation: "set_level", value: level, reply: "ack" });
+        }
+        path.sent = level;
       }
-      if (step < steps) await new Promise(resolve => setTimeout(resolve, 200));
+      if (fraction >= 1) break;
+      const wait = passMs - (Date.now() - passStartedAt);
+      if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
     }
     this.lastSnapshot = await this.bridge.snapshot();
   }
@@ -276,12 +294,12 @@ export class CasambiService {
   public async applyLightScene(id: number, actor: string, fadeDurationMs = 0, generation = ++this.fadeGeneration): Promise<NetworkSnapshot> {
     const scene = this.store.getLightScene(id);
     if (!scene) throw new Error("Scene does not exist.");
-    for (const lamp of scene.lamps) {
-      if (lamp.temperature !== null && lamp.level > 0) await this.runControl({ targetType: "unit", targetId: lamp.unitId, operation: "set_temperature", value: lamp.temperature });
-    }
+    // Lamps that share a colour temperature or level get shared network or group commands where possible.
+    const warmWhite = bucketBy(scene.lamps.filter(lamp => lamp.temperature !== null && lamp.level > 0).map(lamp => [lamp.unitId, lamp.temperature!] as [number, number]), String);
+    for (const bucket of warmWhite) await this.sendPlanned(planTargets(bucket.unitIds, this.lastSnapshot), { operation: "set_temperature", value: bucket.value });
     if (fadeDurationMs > 0) await this.fadeUnits(new Map(scene.lamps.map(lamp => [lamp.unitId, lamp.level])), fadeDurationMs, this.cachedSnapshot(), generation);
     else {
-      for (const lamp of scene.lamps) await this.runControl({ targetType: "unit", targetId: lamp.unitId, operation: "set_level", value: lamp.level });
+      for (const bucket of bucketBy(scene.lamps.map(lamp => [lamp.unitId, lamp.level] as [number, number]), String)) await this.sendPlanned(planTargets(bucket.unitIds, this.lastSnapshot), { operation: "set_level", value: bucket.value });
       this.lastSnapshot = await this.bridge.snapshot();
     }
     this.store.audit(actor, "lighting.scene_applied", { sceneId: id, fadeDurationMs });
@@ -302,8 +320,14 @@ export class CasambiService {
   }
 
   /** Sends one control command, letting a newer absolute value replace an unsent older one for the same target. */
-  private runControl(command: ControlRequest): Promise<NetworkSnapshot> {
-    const payload = command as unknown as Record<string, unknown>;
+  /** Sends one setting to every planned target, acknowledged only; the caller reads one snapshot afterwards. */
+  private async sendPlanned(plan: PlannedTarget[], setting: { operation: ControlRequest["operation"]; value: number }): Promise<void> {
+    for (const target of plan) await this.runControl({ ...target, ...setting } as ControlRequest, "ack");
+  }
+
+  /** `reply: "ack"` skips the worker's full snapshot, for commands that are part of a series. */
+  private runControl(command: ControlRequest, reply: "snapshot" | "ack" = "snapshot"): Promise<NetworkSnapshot> {
+    const payload = { ...command, ...(reply === "ack" ? { reply } : {}) } as unknown as Record<string, unknown>;
     if (!COALESCIBLE_OPERATIONS.has(command.operation)) return this.bridge.execute<NetworkSnapshot>("control", payload);
     return this.bridge.executeLatest<NetworkSnapshot>(`${command.targetType}:${command.targetId ?? ""}:${command.operation}`, "control", payload);
   }

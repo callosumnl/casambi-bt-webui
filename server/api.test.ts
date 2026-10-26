@@ -310,4 +310,18 @@ describe("REST API", () => {
     const malformed = await request(instance).post("/api/v1/auth/login").set("Content-Type", "application/json").send("{not json").expect(400);
     expect(malformed.body.error.code).toBe("INVALID_JSON");
   });
+
+  it("assigns many units to a room in one request and keeps their custom names", async () => {
+    const instance = app(); const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    const room = await request(instance).post("/api/v1/admin/rooms").set(auth).send({ name: "Hall" }).expect(201);
+    await request(instance).put("/api/v1/admin/devices/2/metadata").set(auth).send({ customName: "Desk" }).expect(204);
+    await request(instance).put("/api/v1/admin/devices/room").set(auth).send({ unitIds: [1, 2, 3], roomId: room.body.id }).expect(204);
+    expect(instanceStore(instance).getUnitMetadata().sort((a, b) => a.unitId - b.unitId)).toEqual([
+      { unitId: 1, customName: null, roomId: room.body.id }, { unitId: 2, customName: "Desk", roomId: room.body.id }, { unitId: 3, customName: null, roomId: room.body.id },
+    ]);
+    const missing = await request(instance).put("/api/v1/admin/devices/room").set(auth).send({ unitIds: [4], roomId: 999 }).expect(422);
+    expect(missing.body.error.message).toBe("A referenced item does not exist.");
+    expect(instanceStore(instance).getUnitMetadata().some(metadata => metadata.unitId === 4)).toBe(false);
+  });
 });

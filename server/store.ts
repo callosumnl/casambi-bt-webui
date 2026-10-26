@@ -286,6 +286,15 @@ export class LocalStore {
   public setUnitMetadata(unitId: number, customName: string | null, roomId: number | null): void {
     this.db.prepare("INSERT INTO unit_metadata (unit_id,custom_name,room_id) VALUES (?,?,?) ON CONFLICT(unit_id) DO UPDATE SET custom_name=excluded.custom_name,room_id=excluded.room_id").run(unitId, customName?.trim() || null, roomId);
   }
+  /** Moves many units into one room (or none) at once, keeping their custom names; all or nothing. */
+  public setUnitRooms(unitIds: number[], roomId: number | null): void {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const upsert = this.db.prepare("INSERT INTO unit_metadata (unit_id,room_id) VALUES (?,?) ON CONFLICT(unit_id) DO UPDATE SET room_id=excluded.room_id");
+      for (const unitId of unitIds) upsert.run(unitId, roomId);
+      this.db.exec("COMMIT");
+    } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+  }
   public getUnitMetadata(): UnitMetadata[] { return this.db.prepare("SELECT unit_id AS unitId,custom_name AS customName,room_id AS roomId FROM unit_metadata").all() as UnitMetadata[]; }
 
   /** Creates a durable automation rule. Cron syntax is validated by the scheduler before this call. */

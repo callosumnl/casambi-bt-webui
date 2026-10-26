@@ -296,7 +296,12 @@ class CasambiWorker:
         return [{"address": device.address} for device in await discover_with_timeout(discover)]
 
     async def control(self, payload: dict[str, Any]) -> dict[str, Any]:
-        """Run one validated control request against a unit, group, scene, or network."""
+        """Run one validated control request against a unit, group, scene, or network.
+
+        Returns the network snapshot, or only {"ok": true} when the payload has "reply": "ack". A series of
+        commands (fade steps, a room or scene lamp by lamp) asks for acks and one snapshot at the end:
+        serializing every unit after every command makes a series cost grow with the square of the lamps.
+        """
         target_type = payload["targetType"]
         target_id = payload.get("targetId")
         operation = payload["operation"]
@@ -309,7 +314,7 @@ class CasambiWorker:
                     elif operation == "set_level": unit.dimmer = int(value); unit.on = unit.dimmer > 0
                     elif operation == "set_temperature": unit.temperature = int(value)
                     emit({"event": {"type": "unit.state", "unit": unit.serialize()}})
-            return self.snapshot()
+            return {"ok": True} if payload.get("reply") == "ack" else self.snapshot()
         if not self.casa or not self.connected:
             raise RuntimeError("The Casambi bridge is not connected.")
         target: Any = None
@@ -329,7 +334,7 @@ class CasambiWorker:
         elif operation == "set_xy": await self.casa.setColorXY(target, tuple(value))
         elif operation == "activate_scene": await self.casa.switchToScene(target, int(value) if value is not None else 255)
         else: raise ValueError(f"Unsupported control operation: {operation}")
-        return self.snapshot()
+        return {"ok": True} if payload.get("reply") == "ack" else self.snapshot()
 
     async def shutdown(self) -> None:
         """Release the BLE link before the worker exits.

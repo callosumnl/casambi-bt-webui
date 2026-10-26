@@ -26,10 +26,15 @@ class FakeBridge extends EventEmitter {
   public readonly network: NetworkSnapshot = { connected: true, network: { id: "test", name: "Test" }, groups: [], scenes: [], updatedAt: new Date().toISOString(), units: [
     { id: 1, uuid: "one", address: "one", name: "One", capabilities: [{ type: "dimmer", min: 0, max: 255, readOnly: false }], state: { dimmer: 0, sensors: [], on: false, online: true } },
     { id: 2, uuid: "two", address: "two", name: "Two", capabilities: [{ type: "dimmer", min: 0, max: 255, readOnly: false }], state: { dimmer: 0, sensors: [], on: false, online: true } },
+    // Outside the rooms the tests build, so those rooms are never the whole network.
+    { id: 3, uuid: "three", address: "three", name: "Three", capabilities: [{ type: "dimmer", min: 0, max: 255, readOnly: false }], state: { dimmer: 0, sensors: [], on: false, online: true } },
   ] };
 
   async snapshot(): Promise<NetworkSnapshot> { this.snapshotCalls += 1; return structuredClone(this.network); }
+  /** Simulated Bluetooth time per control command. */
+  public delayMs = 0;
   async execute<T>(command: string, payload: Record<string, unknown>): Promise<T> {
+    if (this.delayMs && command === "control") await new Promise(resolve => setTimeout(resolve, this.delayMs));
     if (command === "configure") {
       this.configureCalls += 1;
       const failure = this.configureFailures.shift();
@@ -39,8 +44,9 @@ class FakeBridge extends EventEmitter {
     if (command === "disconnect") return structuredClone({ ...this.network, connected: false }) as T;
     this.commands.push(payload);
     if (payload.operation === "set_level") {
-      const unit = this.network.units.find(item => item.id === Number(payload.targetId));
-      if (unit) { unit.state.dimmer = Number(payload.value); unit.state.on = Number(payload.value) > 0; }
+      const ids = payload.targetType === "network" ? this.network.units.map(item => item.id)
+        : payload.targetType === "group" ? this.network.groups.find(group => group.id === Number(payload.targetId))?.unitIds ?? [] : [Number(payload.targetId)];
+      for (const unit of this.network.units.filter(item => ids.includes(item.id))) { unit.state.dimmer = Number(payload.value); unit.state.on = Number(payload.value) > 0; }
     }
     return structuredClone(this.network) as T;
   }
@@ -82,7 +88,7 @@ describe("CasambiService fade controls", () => {
       expect.objectContaining({ targetId: 1, operation: "set_level", value: 128 }),
       expect.objectContaining({ targetId: 2, operation: "set_level", value: 128 }),
     ]));
-    expect(snapshot.units.every(unit => unit.state.dimmer === 128)).toBe(true);
+    expect(snapshot.units.filter(unit => unit.id !== 3).every(unit => unit.state.dimmer === 128)).toBe(true);
   });
 
   it("sends a room as one group command when a Casambi group has exactly the room's lamps", async () => {
@@ -115,6 +121,65 @@ describe("CasambiService fade controls", () => {
 
     expect(bridge.commands).toEqual([expect.objectContaining({ targetType: "unit", targetId: 1 }), expect.objectContaining({ targetType: "unit", targetId: 2 })]);
     expect(bridge.latestKeys).toEqual([]); // "on" is not an absolute value, so it is never merged.
+  });
+});
+
+describe("CasambiService on large targets", () => {
+  it("fades lamps that share a start and target level with one network command per pass", async () => {
+    const bridge = new FakeBridge();
+    const service = new CasambiService(store(), bridge as never, new EventHub());
+    await service.snapshot();
+
+    await service.control({ targetType: "network", operation: "set_level", value: 255, fadeDurationMs: 600 }, "tester");
+
+    expect(bridge.commands.length).toBeGreaterThan(1);
+    expect(bridge.commands.every(command => command.targetType === "network" && command.reply === "ack")).toBe(true);
+    expect(bridge.commands.at(-1)).toMatchObject({ value: 255 });
+    expect(bridge.network.units.every(unit => unit.state.dimmer === 255)).toBe(true);
+  });
+
+  it("keeps a fade close to its duration when every pass is slow, by taking fewer passes", async () => {
+    const bridge = new FakeBridge();
+    bridge.network.units.forEach((unit, index) => { unit.state.dimmer = index * 40; });
+    bridge.delayMs = 60; // three lamps with different start levels: about 180 ms per pass
+    const service = new CasambiService(store(), bridge as never, new EventHub());
+    await service.snapshot();
+
+    const startedAt = Date.now();
+    await service.control({ targetType: "network", operation: "set_level", value: 200, fadeDurationMs: 600 }, "tester");
+
+    expect(Date.now() - startedAt).toBeLessThan(600 + 3 * 60 + 300);
+    expect(bridge.network.units.every(unit => unit.state.dimmer === 200)).toBe(true);
+  });
+
+  it("applies a scene whose lamps share a level as one command", async () => {
+    const database = store(); const bridge = new FakeBridge();
+    bridge.network.units.forEach(unit => { unit.state = { ...unit.state, dimmer: 90, on: true }; });
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    await service.snapshot();
+    const scene = service.captureLightScene("Evening", { type: "network", id: null });
+    bridge.commands = [];
+
+    await service.applyLightScene(scene.id, "tester");
+
+    expect(bridge.commands).toEqual([{ targetType: "network", targetId: null, operation: "set_level", value: 90, reply: "ack" }]);
+  });
+
+  it("sends a room as its Casambi groups plus single lamps for the rest", async () => {
+    const database = store(); const room = database.createRoom("Hall", 100);
+    for (const unitId of [1, 2, 3]) database.setUnitMetadata(unitId, null, room.id);
+    const bridge = new FakeBridge();
+    bridge.network.units.push({ ...structuredClone(bridge.network.units[0]), id: 4, uuid: "four", name: "Four" });
+    bridge.network.groups = [{ id: 9, name: "Pair", unitIds: [1, 2] }];
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    await service.snapshot();
+
+    await service.control({ targetType: "room", targetId: room.id, operation: "off" }, "tester");
+
+    expect(bridge.commands).toEqual([
+      { targetType: "group", targetId: 9, operation: "off", reply: "ack" },
+      { targetType: "unit", targetId: 3, operation: "off", reply: "ack" },
+    ]);
   });
 });
 
@@ -221,7 +286,7 @@ describe("CasambiService connection resilience", () => {
     await service.connect();
     const cached = service.cachedSnapshot();
     expect(cached.connected).toBe(true);
-    expect(cached.units.map(unit => unit.id)).toEqual([1, 2]);
+    expect(cached.units.map(unit => unit.id)).toEqual([1, 2, 3]);
     expect(bridge.snapshotCalls).toBe(0);
   });
 });
@@ -293,9 +358,9 @@ describe("CasambiService light scenes", () => {
     const scene = service.captureLightScene("Dinner", { type: "group", id: 5 });
     await service.applyLightScene(scene.id, "tester");
     expect(bridge.commands).toEqual([
-      { targetType: "unit", targetId: 1, operation: "set_temperature", value: 3000 },
-      { targetType: "unit", targetId: 1, operation: "set_level", value: 200 },
-      { targetType: "unit", targetId: 2, operation: "set_level", value: 0 },
+      { targetType: "unit", targetId: 1, operation: "set_temperature", value: 3000, reply: "ack" },
+      { targetType: "unit", targetId: 1, operation: "set_level", value: 200, reply: "ack" },
+      { targetType: "unit", targetId: 2, operation: "set_level", value: 0, reply: "ack" },
     ]);
   });
 

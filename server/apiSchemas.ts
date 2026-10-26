@@ -25,6 +25,7 @@ export const roomCreateSchema = z.object({ name: z.string().trim().min(1).max(96
 export const roomDefaultBrightnessSchema = z.object({ defaultBrightnessPercent: z.number().int().min(0).max(100) });
 /** Either field may be left out to keep its current value; an empty or null name restores the Casambi name. */
 export const deviceMetadataSchema = z.object({ customName: z.string().trim().max(128).nullable().optional(), roomId: z.number().int().positive().nullable().optional() });
+export const deviceRoomsSchema = z.object({ unitIds: z.array(z.number().int().positive()).min(1).max(1000), roomId: z.number().int().positive().nullable() });
 export const userCreateSchema = credentialsSchema.extend({ role: roleSchema });
 export const userUpdateSchema = z.object({ role: roleSchema.optional(), password: credentialsSchema.shape.password.optional() })
   .refine(update => update.role !== undefined || update.password !== undefined, { message: "Send a new role, a new password, or both." });

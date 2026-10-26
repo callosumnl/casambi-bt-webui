@@ -4,10 +4,18 @@ import type { Device, LocalScene, NetworkSnapshot, SceneScope } from "./localApi
 const LAMP_CAPABILITIES = new Set(["dimmer", "onoff", "white", "rgb", "temperature", "vertical", "colorsource", "xy", "slider"]);
 export function isLamp(device: Pick<Device, "capabilities">): boolean { return device.capabilities.some(capability => LAMP_CAPABILITIES.has(capability.type)); }
 
-/** The lamps a group, room, or the whole network covers. */
-export function scopeLamps(network: NetworkSnapshot, scope: SceneScope): Device[] {
-  const ids = scope.type === "group" ? new Set(network.groups.find(group => group.id === scope.id)?.unitIds ?? []) : null;
-  return network.units.filter(unit => isLamp(unit) && (scope.type === "network" || (scope.type === "room" ? unit.roomId === scope.id : ids!.has(unit.id))));
+/**
+ * Looks up the lamps a group, room, or the whole network covers. The index is built once per snapshot, so a
+ * dashboard with hundreds of rows does not scan every unit for every row on each live update.
+ */
+export function lampsByScope(network: NetworkSnapshot): (scope: SceneScope) => Device[] {
+  const lamps = network.units.filter(isLamp);
+  const byId = new Map(lamps.map(lamp => [lamp.id, lamp]));
+  const byRoom = new Map<number, Device[]>();
+  for (const lamp of lamps) if (lamp.roomId != null) byRoom.set(lamp.roomId, [...(byRoom.get(lamp.roomId) ?? []), lamp]);
+  return scope => scope.type === "network" ? lamps
+    : scope.type === "room" ? byRoom.get(scope.id ?? -1) ?? []
+      : (network.groups.find(group => group.id === scope.id)?.unitIds ?? []).flatMap(id => byId.get(id) ?? []);
 }
 
 export function sameScope(a: SceneScope, b: SceneScope): boolean { return a.type === b.type && a.id === b.id; }
