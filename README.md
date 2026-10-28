@@ -59,8 +59,8 @@ Settings live in `/etc/casambi-bt-webui.env`; change them with `sudoedit /etc/ca
 | Restart after a settings change | `sudo systemctl restart casambi-bt-webui` |
 | Inspect service logs | `sudo journalctl -u casambi-bt-webui.service -n 200 --no-pager` |
 | Update | Admin → **UPDATES**: **CHECK FOR UPDATES**, then **UPDATE NOW**. The Pi also checks once a day by itself. A failed update restores the previous version automatically. By hand: `cd /opt/casambi-bt-webui && git pull && ./deploy/install.sh` (also needed once on installs from before updates from the app existed). |
-| Back up state | Stop the service and securely copy all of `/var/lib/casambi-bt-webui/`, including the SQLite database and upstream Casambi cache. |
-| Restore state | Stop the service, restore `/var/lib/casambi-bt-webui/` with owner `casambi:casambi`, then start the service. |
+| Back up | Admin → **BACKUP AND RESTORE** → **DOWNLOAD BACKUP**: one file with all accounts, settings (including the Casambi network password), rooms, names, timers, scenes, switch rules, and the audit log, encrypted with a passphrase you choose. Keep the passphrase; it cannot be recovered. |
+| Restore (also on a new Pi) | On the new Pi, create a temporary admin in the setup screen, then Admin → **BACKUP AND RESTORE** → **RESTORE BACKUP** with the file and its passphrase. Everyone signs in again with an account from the backup. |
 | Development without hardware | Set `CASAMBI_MOCK_MODE=true`, then run `pnpm dev`; mock fixtures are clearly marked development-only. |
 
 ### Troubleshooting `EACCES` during `pnpm build`

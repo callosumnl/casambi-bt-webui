@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  apiKeyCreateSchema, awayDateSetSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
+  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
   roomDefaultBrightnessSchema, roomRenameSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userUpdateSchema,
 } from "./apiSchemas";
 import { controlRequestSchema, groupSchema, networkSnapshotSchema, sceneSchema, unitSchema } from "./casambi/types";
@@ -13,6 +13,8 @@ type Response = { description: string; schema?: string | JsonSchema; contentType
 type Operation = {
   method: "get" | "post" | "put" | "patch" | "delete"; path: string; tag: string; summary: string; description?: string;
   access: Access; body?: string; bodyRequired?: boolean; query?: Array<{ name: string; description: string; schema: JsonSchema }>;
+  /** A request body that is not JSON, e.g. an uploaded file; `body` then names its schema. */
+  bodyContentType?: string; headers?: Array<{ name: string; description: string; required: boolean }>;
   responses: Record<string, Response>;
 };
 
@@ -87,6 +89,8 @@ const schemas: Record<string, JsonSchema> = {
     pending: object({ check: { type: "boolean" }, apply: { type: "boolean" } }),
     status: { type: "object", description: "As written by deploy/update.sh; empty before the first check.", properties: { state: { type: "string" }, message: nullable({ type: "string" }), current: nullable({ type: "string" }), latest: nullable({ type: "string" }), behind: nullable({ type: "integer" }), changes: { type: "array", items: { type: "string" } }, checkedAt: nullable({ type: "string" }), logTail: nullable({ type: "string" }) } },
   }),
+  BackupCreate: fromZod(backupCreateSchema),
+  BackupFile: { type: "string", contentMediaType: "application/octet-stream", description: "A backup file as downloaded from POST /admin/backup." },
   DiscoveredNetwork: object({ address: { type: "string", description: "BLE address of a Casambi network endpoint in range." }, rssi: nullable({ type: "integer", description: "Signal strength in dBm (closer to 0 is stronger); null when the scan could not measure it." }) }),
   LightScene: object({
     id, name: { type: "string" },
@@ -174,6 +178,8 @@ const operations: Operation[] = [
   { method: "put", path: "/admin/config", tag: "Admin: bridge", summary: "Change bridge settings", description: "Omitted fields keep their value; an empty secret clears it.", access: "admin", body: "CasambiConfigUpdate", bodyRequired: true, responses: { 200: { description: "Saved.", schema: "CasambiConfig" } } },
   { method: "get", path: "/admin/diagnostics", tag: "Admin: bridge", summary: "System check", description: "Checks Bluetooth, Wi-Fi interference, the Casambi connection, the clock, storage, temperature, and power, each with advice. Reads the system without privileges; checks that cannot be read report `info`.", access: "admin", responses: { 200: { description: "The checks and versions.", schema: "SystemCheck" } } },
   { method: "get", path: "/admin/diagnostics/bundle", tag: "Admin: bridge", summary: "Download a diagnostics file", description: "A JSON file with the checks, the facts behind them, versions, the worker state, the safe configuration, and the last 300 audit entries, for whoever helps troubleshoot. Contains no passwords or keys.", access: "admin", responses: { 200: { description: "The diagnostics file (attachment).", schema: { type: "object" } } } },
+  { method: "post", path: "/admin/backup", tag: "Admin: bridge", summary: "Download a backup", description: "Everything on the Pi (accounts, API keys, Casambi settings including the network password, rooms, names, timers, scenes, switch rules, away dates, audit log) in one file, encrypted with the passphrase. It can be restored on another Pi; keep the passphrase, it cannot be recovered.", access: "admin", body: "BackupCreate", bodyRequired: true, responses: { 200: { description: "The backup file (attachment).", schema: { type: "object" } } } },
+  { method: "post", path: "/admin/restore", tag: "Admin: bridge", summary: "Restore a backup", description: "Replaces all data with the backup. Send the file as `application/octet-stream` with its passphrase in `X-Backup-Passphrase`. Every session ends (sign in with an account from the backup); timers reload and the bridge reconnects with the restored settings.", access: "admin", body: "BackupFile", bodyContentType: "application/octet-stream", bodyRequired: true, headers: [{ name: "X-Backup-Passphrase", description: "The passphrase the backup was made with.", required: true }], responses: { 200: { description: "Restored.", schema: object({ restored: object({ createdAt: timestamp, users: { type: "integer" }, rooms: { type: "integer" }, timers: { type: "integer" } }), signInAgain: { type: "boolean" } }) }, 422: { description: "Not a backup, a wrong passphrase, or a damaged file.", schema: "Error" } } },
   { method: "get", path: "/admin/update", tag: "Admin: bridge", summary: "Update status", description: "Whether updates from the app are set up (`supported`), the running version, open requests, and what deploy/update.sh last reported: `state` (checking, available, up_to_date, updating, updated, rolling_back, rolled_back, failed), the current and latest commit, the new changes, and for an update the tail of its log.", access: "admin", responses: { 200: { description: "The update status.", schema: "UpdateStatus" } } },
   { method: "post", path: "/admin/update/check", tag: "Admin: bridge", summary: "Check for an update", description: "Asks the Pi to fetch from the checkout's upstream branch and report how far it is behind. Runs in the background; poll `GET /admin/update`.", access: "admin", responses: { 202: { description: "Requested.", schema: object({ requested: { type: "string" } }) }, 422: { description: "Updates from the app are not set up.", schema: "Error" } } },
   { method: "post", path: "/admin/update/apply", tag: "Admin: bridge", summary: "Update now", description: "Asks the Pi to fast-forward to its upstream branch and run deploy/install.sh, which restarts the service. If the update fails, the previous version is installed again. Runs in the background; poll `GET /admin/update`.", access: "admin", responses: { 202: { description: "Requested.", schema: object({ requested: { type: "string" } }) }, 422: { description: "Not set up, or an update is already running.", schema: "Error" } } },
@@ -236,8 +242,9 @@ function buildOperation(operation: Operation): JsonSchema {
     parameters: [
       ...(hasId ? [{ name: "id", in: "path", required: true, schema: { type: "integer", minimum: 1 } }] : []),
       ...(operation.query ?? []).map(parameter => ({ ...parameter, in: "query", required: false })),
+      ...(operation.headers ?? []).map(header => ({ ...header, in: "header", schema: { type: "string" } })),
     ],
-    ...(operation.body ? { requestBody: { required: operation.bodyRequired ?? false, content: { "application/json": { schema: ref(operation.body) } } } } : {}),
+    ...(operation.body ? { requestBody: { required: operation.bodyRequired ?? false, content: { [operation.bodyContentType ?? "application/json"]: { schema: ref(operation.body) } } } } : {}),
     responses,
   };
 }

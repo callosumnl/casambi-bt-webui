@@ -32,3 +32,4 @@ export const userUpdateSchema = z.object({ role: roleSchema.optional(), password
 export const roomRenameSchema = z.object({ name: z.string().trim().min(1).max(96) });
 export const auditQuerySchema = z.object({ limit: z.coerce.number().int().min(1).max(500).default(100), action: z.string().trim().min(1).max(64).optional() });
 export const apiKeyCreateSchema = z.object({ label: z.string().trim().min(1).max(96), role: roleSchema, expiresInDays: z.number().int().min(1).max(3650).optional().describe("Days until the key stops working; omit for a key that never expires.") });
+export const backupCreateSchema = z.object({ passphrase: z.string().min(10).max(256).describe("Protects the backup; needed to restore it. At least 10 characters.") });

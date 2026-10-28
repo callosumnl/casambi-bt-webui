@@ -44,4 +44,11 @@ describe("API documentation helpers", () => {
     expect(curlExample(control.operations[1], document, "/api/v1")).toContain('"/api/v1/devices/1/on"');
     expect(curlExample(system.operations[0], document, "/api/v1")).not.toContain("X-API-Key");
   });
+
+  it("sends a file and its header parameters for a non-JSON request body", () => {
+    const document = { info: { title: "t", version: "1" }, components: { schemas: {} }, paths: { "/admin/restore": { post: { "x-required-role": "admin", parameters: [{ name: "X-Backup-Passphrase", in: "header", required: true }], requestBody: { required: true, content: { "application/octet-stream": { schema: { type: "string" } } } }, responses: {} } } } } as OpenApiDocument;
+    const [operation] = groupOperations(document)[0].operations;
+    expect(operation.bodyContentType).toBe("application/octet-stream");
+    expect(curlExample(operation, document, "http://pi:3000/api/v1")).toBe('curl -sS -X POST "http://pi:3000/api/v1/admin/restore" \\\n  -H "X-API-Key: $CASAMBI_API_KEY" \\\n  -H "X-Backup-Passphrase: …" \\\n  -H "Content-Type: application/octet-stream" \\\n  --data-binary @file');
+  });
 });

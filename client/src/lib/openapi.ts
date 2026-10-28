@@ -15,6 +15,8 @@ type RawOperation = {
 export type DocOperation = {
   key: string; method: string; path: string; tag: string; summary: string; description: string; role: string;
   parameters: NonNullable<RawOperation["parameters"]>; body: Schema | null; bodyRequired: boolean;
+  /** Set when the request body is not JSON (e.g. an uploaded file). */
+  bodyContentType: string | null;
   responses: Array<{ status: string; description: string; schema: string | null }>;
 };
 
@@ -26,6 +28,7 @@ export function groupOperations(document: OpenApiDocument): Array<{ tag: string;
   const operations: DocOperation[] = Object.entries(document.paths).flatMap(([path, methods]) => Object.entries(methods).map(([method, raw]) => ({
     key: `${method} ${path}`, method, path, tag: raw.tags?.[0] ?? "Other", summary: raw.summary ?? "", description: raw.description ?? "", role: raw["x-required-role"] ?? "user",
     parameters: raw.parameters ?? [], body: raw.requestBody?.content["application/json"]?.schema ?? null, bodyRequired: raw.requestBody?.required ?? false,
+    bodyContentType: Object.keys(raw.requestBody?.content ?? {}).find(type => type !== "application/json") ?? null,
     responses: Object.entries(raw.responses).map(([status, response]) => {
       const schema = Object.values(response.content ?? {})[0]?.schema;
       const items = schema?.type === "array" ? refName(schema.items as Schema) : null;
@@ -77,6 +80,8 @@ export function curlExample(operation: DocOperation, document: OpenApiDocument, 
   const path = operation.path.replace("{id}", "1");
   const lines = [`curl -sS -X ${operation.method.toUpperCase()} "${baseUrl}${path}"`];
   if (operation.role !== "public") lines.push(`  -H "X-API-Key: $CASAMBI_API_KEY"`);
+  for (const header of operation.parameters.filter(parameter => parameter.in === "header")) lines.push(`  -H "${header.name}: …"`);
   if (operation.body) lines.push(`  -H "Content-Type: application/json"`, `  -d '${JSON.stringify(exampleFromSchema(operation.body, document))}'`);
+  else if (operation.bodyContentType) lines.push(`  -H "Content-Type: ${operation.bodyContentType}"`, `  --data-binary @file`);
   return lines.join(" \\\n");
 }

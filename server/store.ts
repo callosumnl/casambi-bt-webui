@@ -1,7 +1,7 @@
 import { createRequire } from "module";
 import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt, scryptSync, timingSafeEqual } from "crypto";
-import { dirname, resolve } from "path";
-import { mkdirSync } from "fs";
+import { dirname, join, resolve } from "path";
+import { mkdirSync, readFileSync, rmSync } from "fs";
 import { promisify } from "util";
 import type { ControlRequest, SwitchTrigger } from "./casambi/types";
 import type { SolarSchedule } from "./solar";
@@ -380,6 +380,55 @@ export class LocalStore {
       : this.db.prepare("SELECT id,actor,action,detail_json AS detail,created_at AS createdAt FROM audit_log ORDER BY id DESC LIMIT ?").all(limit);
     return (rows as Array<{ id: number; actor: string; action: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) }));
   }
+
+  /** Tables a backup carries, in an order that satisfies their foreign keys. */
+  private static readonly BACKUP_TABLES = ["local_users", "api_keys", "settings", "rooms", "unit_metadata", "away_date_sets", "schedules", "switch_rules", "light_scenes", "audit_log"];
+
+  /** A consistent copy of the whole database while the app keeps running (VACUUM INTO). */
+  public exportDatabase(): Buffer {
+    const file = join(this.dataDirectory, `export-${randomBytes(6).toString("hex")}.db`);
+    try {
+      this.db.prepare("VACUUM INTO ?").run(file);
+      return readFileSync(file);
+    } finally { rmSync(file, { force: true }); }
+  }
+
+  /**
+   * Replaces all data with the database in `file`, in one transaction. The file is first opened as a store of its
+   * own, so a backup from an older version gets the current schema. Casambi secrets were encrypted with the other
+   * Pi's key, so they are written again from `secrets` with this Pi's key. Every earlier session becomes invalid.
+   */
+  public restoreDatabase(file: string, secrets: { networkPassword: string | null; apiKey: string | null }): void {
+    new LocalStore(file, "upgrade-only").close();
+    this.db.exec("PRAGMA foreign_keys = OFF");
+    this.db.prepare("ATTACH DATABASE ? AS backup").run(file);
+    try {
+      this.db.exec("BEGIN IMMEDIATE");
+      try {
+        for (const table of LocalStore.BACKUP_TABLES) {
+          const columns = (name: string) => (this.db.prepare(`PRAGMA ${name}.table_info(${table})`).all() as Array<{ name: string }>).map(column => column.name);
+          const restored = new Set(columns("backup"));
+          const shared = columns("main").filter(column => restored.has(column)).map(column => `"${column}"`).join(",");
+          this.db.exec(`DELETE FROM main.${table}`);
+          this.db.exec(`INSERT INTO main.${table} (${shared}) SELECT ${shared} FROM backup.${table}`);
+        }
+        const write = this.db.prepare("INSERT INTO settings (key,value,encrypted) VALUES (?,?,1) ON CONFLICT(key) DO UPDATE SET value=excluded.value, encrypted=1");
+        write.run("networkPassword", secrets.networkPassword ? this.encrypt(secrets.networkPassword) : "");
+        write.run("apiKey", secrets.apiKey ? this.encrypt(secrets.apiKey) : "");
+        this.db.prepare("INSERT INTO settings (key,value,encrypted) VALUES ('sessionEpoch',?,0) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(randomBytes(8).toString("hex"));
+        if ((this.db.prepare("PRAGMA main.foreign_key_check").all() as unknown[]).length) throw new Error("The backup cannot be restored: its data is inconsistent.");
+        this.db.exec("COMMIT");
+      } catch (error) { this.db.exec("ROLLBACK"); throw error; }
+    } finally {
+      this.db.exec("DETACH DATABASE backup");
+      this.db.exec("PRAGMA foreign_keys = ON");
+    }
+  }
+
+  /** Tokens carry this value too; a restore changes it, so no session from before the restore stays valid. */
+  public sessionEpoch(): string { return (this.db.prepare("SELECT value FROM settings WHERE key = 'sessionEpoch'").get() as { value: string } | undefined)?.value ?? ""; }
+
+  public close(): void { this.db.close(); }
 
   /** Tokens carry this number; raising it (on a password reset) makes every earlier token for the account invalid. */
   public tokenVersion(id: number): number { return (this.db.prepare("SELECT token_version AS version FROM local_users WHERE id = ?").get(id) as { version: number } | undefined)?.version ?? 0; }

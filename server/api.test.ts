@@ -388,4 +388,25 @@ describe("REST API", () => {
     writeFileSync(join(state, "status.json"), JSON.stringify({ state: "updating" }));
     expect((await request(instance).post("/api/v1/admin/update/apply").set(auth).expect(422)).body.error.message).toBe("An update is already running; it must finish first.");
   });
+
+  it("downloads an encrypted backup and restores it, ending every session", async () => {
+    const instance = app(); const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    await request(instance).post("/api/v1/admin/rooms").set(auth).send({ name: "Kitchen" }).expect(201);
+    await request(instance).post("/api/v1/admin/backup").set(auth).send({ passphrase: "short" }).expect(422);
+    const backup = await request(instance).post("/api/v1/admin/backup").set(auth).send({ passphrase: "keep this passphrase safe" }).buffer(true).parse((response, done) => { const chunks: Buffer[] = []; response.on("data", (chunk: Buffer) => chunks.push(chunk)); response.on("end", () => done(null, Buffer.concat(chunks))); }).expect(200);
+    expect(backup.headers["content-disposition"]).toMatch(/^attachment; filename="casambi-backup-\d{4}-\d{2}-\d{2}\.json"$/);
+    await request(instance).post("/api/v1/admin/rooms").set(auth).send({ name: "Made after the backup" }).expect(201);
+
+    const upload = (passphrase: string) => request(instance).post("/api/v1/admin/restore").set(auth).set("Content-Type", "application/octet-stream").set("X-Backup-Passphrase", passphrase).send(backup.body as Buffer);
+    expect((await upload("not the passphrase").expect(422)).body.error.message).toBe("The backup passphrase is invalid, or the file is damaged.");
+    const restored = await upload("keep this passphrase safe").expect(200);
+    expect(restored.body).toMatchObject({ restored: { users: 1, rooms: 1 }, signInAgain: true });
+
+    await request(instance).get("/api/v1/auth/me").set(auth).expect(401);
+    const again = await request(instance).post("/api/v1/auth/login").send({ username: "admin", password: "this-is-a-strong-password" }).expect(200);
+    const rooms = await request(instance).get("/api/v1/rooms").set("Authorization", `Bearer ${again.body.token}`).expect(200);
+    expect(rooms.body.map((room: { name: string }) => room.name)).toEqual(["Kitchen"]);
+    expect(instanceStore(instance).recentAudit(1)[0].action).toBe("auth.login");
+  });
 });

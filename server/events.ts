@@ -50,6 +50,11 @@ export class EventHub {
     }
   }
 
+  /** Ends every stream, e.g. after a restore replaced all accounts. */
+  public disconnectAll(): void {
+    for (const [id, client] of Array.from(this.clients.entries())) { this.clients.delete(id); client.response.end(); }
+  }
+
   /** Ends every stream of an account or API key, e.g. after it was deleted or its password was reset. */
   public disconnect(principal: Pick<Principal, "kind" | "id">): void {
     for (const [id, client] of Array.from(this.clients.entries())) {

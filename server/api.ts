@@ -1,4 +1,8 @@
-import { NextFunction, Router, Request, Response } from "express";
+import express, { NextFunction, Router, Request, Response } from "express";
+import { writeFileSync, rmSync } from "fs";
+import { join } from "path";
+import { randomBytes } from "crypto";
+import { openBackup, sealBackup } from "./backup";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { authenticate, authenticateEventTicket, issueEventTicket, issueToken, Principal, requireAuth } from "./auth";
@@ -13,7 +17,7 @@ import { openApiDocument } from "./openapi";
 import { SetupCode } from "./setupCode";
 import { Updater, UpdateMode } from "./updates";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
-import { apiKeyCreateSchema, awayDateSetSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
@@ -196,6 +200,33 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
       response.status(202).json({ requested: mode });
     }));
   }
+  api.post("/admin/backup", requireAuth(store, "admin"), route(async (request, response) => {
+    const { passphrase } = parsed(backupCreateSchema, request.body);
+    const config = store.getCasambiConfig();
+    const file = await sealBackup({ database: store.exportDatabase(), secrets: { networkPassword: config.networkPassword, apiKey: config.apiKey }, appVersion: (await appVersion(probes)).version }, passphrase);
+    store.audit(principal(response).name, "backup.created", { bytes: file.length });
+    response.setHeader("Content-Type", "application/json");
+    response.setHeader("Content-Disposition", `attachment; filename="casambi-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+    response.send(file);
+  }));
+  // The file comes as raw bytes (application/octet-stream), past the 1 MB JSON limit; the passphrase in a header.
+  api.post("/admin/restore", requireAuth(store, "admin"), express.raw({ type: "application/octet-stream", limit: "64mb" }), route(async (request, response) => {
+    const passphrase = request.header("x-backup-passphrase") ?? "";
+    if (!Buffer.isBuffer(request.body) || request.body.length === 0) throw new Error("A backup file is required (Content-Type: application/octet-stream).");
+    const backup = await openBackup(request.body, passphrase);
+    const file = join(store.dataDirectory, `restore-${randomBytes(6).toString("hex")}.db`);
+    try {
+      writeFileSync(file, backup.database, { mode: 0o600 });
+      store.restoreDatabase(file, backup.secrets);
+    } finally { for (const suffix of ["", "-wal", "-shm"]) rmSync(`${file}${suffix}`, { force: true }); }
+    store.audit(principal(response).name, "backup.restored", { createdAt: backup.createdAt, appVersion: backup.appVersion });
+    // Accounts, timers, and settings changed underneath everything that was running.
+    events.disconnectAll();
+    scheduler.reload();
+    const config = store.getCasambiConfig();
+    if (config.networkAddress && config.networkPassword) void service.connect().catch(() => { /* connect() reports its own failure. */ });
+    response.json({ restored: { createdAt: backup.createdAt, users: store.listUsers().length, rooms: store.listRooms().length, timers: store.listSchedules().length }, signInAgain: true });
+  }));
   api.get("/admin/worker", requireAuth(store, "admin"), (_request, response) => response.json(service.workerState()));
   api.post("/admin/worker/restart", requireAuth(store, "admin"), route(async (_request, response) => { response.status(202).json(service.restartWorker(principal(response).name)); }));
   api.post("/admin/connect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.connect()); }));

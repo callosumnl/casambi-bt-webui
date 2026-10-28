@@ -7,7 +7,7 @@ const jwtSecret = () => new TextEncoder().encode(process.env.CASAMBI_JWT_SECRET 
 
 /** Signs a short-lived local JWT for the Raspberry Pi appliance. `tv` ties it to the account's current token version. */
 export async function issueToken(user: StoredUser, store: LocalStore): Promise<string> {
-  return new SignJWT({ username: user.username, role: user.role, kind: "user", tv: store.tokenVersion(user.id) })
+  return new SignJWT({ username: user.username, role: user.role, kind: "user", tv: store.tokenVersion(user.id), ep: store.sessionEpoch() })
     .setProtectedHeader({ alg: "HS256" }).setSubject(String(user.id)).setIssuedAt().setExpirationTime("8h").sign(jwtSecret());
 }
 
@@ -16,7 +16,7 @@ export async function issueToken(user: StoredUser, store: LocalStore): Promise<s
  * set headers), where it can end up in proxy logs or history; unlike the session token it is useless there.
  */
 export async function issueEventTicket(user: Principal, store: LocalStore): Promise<string> {
-  return new SignJWT({ kind: "events", tv: store.tokenVersion(user.id) })
+  return new SignJWT({ kind: "events", tv: store.tokenVersion(user.id), ep: store.sessionEpoch() })
     .setProtectedHeader({ alg: "HS256" }).setSubject(String(user.id)).setIssuedAt().setExpirationTime("60s").sign(jwtSecret());
 }
 
@@ -26,7 +26,7 @@ export async function authenticateEventTicket(ticket: string, store: LocalStore)
     const result = await jwtVerify(ticket, jwtSecret(), { algorithms: ["HS256"] });
     if (result.payload.kind !== "events" || !result.payload.sub) return null;
     const user = store.getUserById(Number(result.payload.sub));
-    if (!user || (result.payload.tv ?? 0) !== store.tokenVersion(user.id)) return null;
+    if (!user || (result.payload.tv ?? 0) !== store.tokenVersion(user.id) || (result.payload.ep ?? "") !== store.sessionEpoch()) return null;
     return { kind: "user", id: user.id, name: user.username, role: user.role };
   } catch { return null; }
 }
@@ -45,7 +45,7 @@ export async function authenticate(request: Request, store: LocalStore): Promise
     if (result.payload.kind !== "user" || !result.payload.sub) return null;
     // Re-read the account: a role change, password reset, or removed account takes effect immediately, not when the 8 h token expires.
     const user = store.getUserById(Number(result.payload.sub));
-    if (!user || (result.payload.tv ?? 0) !== store.tokenVersion(user.id)) return null;
+    if (!user || (result.payload.tv ?? 0) !== store.tokenVersion(user.id) || (result.payload.ep ?? "") !== store.sessionEpoch()) return null;
     return { kind: "user", id: user.id, name: user.username, role: user.role };
   } catch { return null; }
 }
