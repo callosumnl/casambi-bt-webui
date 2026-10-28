@@ -54,6 +54,8 @@ export const AUDIT_RETENTION = 20_000;
  * High-volume events from everyday use. They are pruned separately from security and administration events
  * (sign-ins, accounts, keys, configuration), so a flood of light commands cannot push those out of the log.
  */
+const NOTIFICATION_RETENTION = 200;
+export type NotificationRecord = { id: number; kind: string; severity: "info" | "warning" | "error"; title: string; message: string; createdAt: string; readAt: string | null };
 const ROUTINE_AUDIT = "(action LIKE 'lighting.%' OR action IN ('switch.pressed','switch_rule.executed','schedule.executed','schedule.skipped_holiday','bridge.diagnostic','bridge.poll_failed'))";
 
 /**
@@ -108,6 +110,10 @@ export class LocalStore {
       );
       CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT, actor TEXT NOT NULL, action TEXT NOT NULL, detail_json TEXT NOT NULL, created_at TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS notifications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, severity TEXT NOT NULL CHECK(severity IN ('info','warning','error')),
+        title TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL, read_at TEXT
       );
     `);
     const keyColumns = this.db.prepare("PRAGMA table_info(api_keys)").all() as Array<{ name: string }>;
@@ -379,6 +385,35 @@ export class LocalStore {
       ? this.db.prepare("SELECT id,actor,action,detail_json AS detail,created_at AS createdAt FROM audit_log WHERE action LIKE ? ESCAPE '\\' ORDER BY id DESC LIMIT ?").all(`${action.replace(/[\\%_]/g, character => `\\${character}`)}%`, limit)
       : this.db.prepare("SELECT id,actor,action,detail_json AS detail,created_at AS createdAt FROM audit_log ORDER BY id DESC LIMIT ?").all(limit);
     return (rows as Array<{ id: number; actor: string; action: string; detail: string; createdAt: string }>).map(row => ({ ...row, detail: JSON.parse(row.detail) }));
+  }
+
+  /** Stores a notification for administrators, keeping the newest NOTIFICATION_RETENTION. */
+  public addNotification(input: Pick<NotificationRecord, "kind" | "severity" | "title" | "message">): NotificationRecord {
+    const createdAt = NOW();
+    const id = Number(this.db.prepare("INSERT INTO notifications (kind,severity,title,message,created_at) VALUES (?,?,?,?,?)").run(input.kind, input.severity, input.title, input.message, createdAt).lastInsertRowid);
+    this.db.prepare("DELETE FROM notifications WHERE id <= ?").run(id - NOTIFICATION_RETENTION);
+    return { id, ...input, createdAt, readAt: null };
+  }
+  /** Newest first. */
+  public listNotifications(limit = 50): NotificationRecord[] {
+    return this.db.prepare("SELECT id,kind,severity,title,message,created_at AS createdAt,read_at AS readAt FROM notifications ORDER BY id DESC LIMIT ?").all(limit) as NotificationRecord[];
+  }
+  public unreadNotificationCount(): number { return (this.db.prepare("SELECT COUNT(*) AS count FROM notifications WHERE read_at IS NULL").get() as { count: number }).count; }
+  public markNotificationsRead(): void { this.db.prepare("UPDATE notifications SET read_at = ? WHERE read_at IS NULL").run(NOW()); }
+
+  /**
+   * A plain (unencrypted) app setting outside the Casambi configuration. Not for secrets that must survive a restore
+   * on another Pi encrypted: only the Casambi secrets are re-encrypted with the new Pi's key there.
+   */
+  public appSetting(key: string): string | null { return (this.db.prepare("SELECT value FROM settings WHERE key = ? AND encrypted = 0").get(key) as { value: string } | undefined)?.value || null; }
+  public setAppSetting(key: string, value: string | null): void {
+    this.db.prepare("INSERT INTO settings (key,value,encrypted) VALUES (?,?,0) ON CONFLICT(key) DO UPDATE SET value=excluded.value, encrypted=0").run(key, value ?? "");
+  }
+  public latestAuditId(): number { return (this.db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM audit_log").get() as { id: number }).id; }
+  /** Oldest first, after `afterId`, only the given actions. */
+  public auditSince(afterId: number, actions: string[]): Array<{ id: number; action: string; detail: Record<string, unknown> }> {
+    const rows = this.db.prepare(`SELECT id,action,detail_json AS detail FROM audit_log WHERE id > ? AND action IN (${actions.map(() => "?").join(",")}) ORDER BY id LIMIT 200`).all(afterId, ...actions) as Array<{ id: number; action: string; detail: string }>;
+    return rows.map(row => ({ ...row, detail: JSON.parse(row.detail) as Record<string, unknown> }));
   }
 
   /** Tables a backup carries, in an order that satisfies their foreign keys. */

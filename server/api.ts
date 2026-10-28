@@ -17,15 +17,16 @@ import { openApiDocument } from "./openapi";
 import { SetupCode } from "./setupCode";
 import { Updater, UpdateMode } from "./updates";
 import { ServerSettingsHelper } from "./serverSettings";
+import { Notifier } from "./notifications";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
-import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
  * `probes` read the system for the diagnostics, `updater` requests updates, and `serverSettings` requests env-file
- * changes; tests replace all three.
+ * changes; tests replace all three. Without a `notifier` the notification routes answer with an empty list.
  */
-type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper };
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper; notifier?: Notifier };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 
 /** Wraps async routes in a stable JSON error response. */
@@ -89,7 +90,7 @@ function normalizeHolidayDates(dates: string[]): string[] { return Array.from(ne
 function assertAwayDateSet(id: number | null | undefined, store: LocalStore): AwayDateSet | null { if (id == null) return null; const set = store.getAwayDateSet(id); if (!set) throw new Error("Away-date set does not exist."); return set; }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
-export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory) }: Dependencies): Router {
+export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory), notifier }: Dependencies): Router {
   const api = Router();
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
   // Password guessing gets its own, much tighter budget; successful sign-ins do not count against it.
@@ -192,6 +193,25 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
     const bundle = { ...report, configuration: store.getSafeCasambiConfig(), environment: { nodeEnv: process.env.NODE_ENV ?? null, mockMode: process.env.CASAMBI_MOCK_MODE === "true", trustProxy: process.env.CASAMBI_TRUST_PROXY === "true", port: process.env.PORT ?? "3000" }, audit: store.recentAudit(300) };
     response.setHeader("Content-Disposition", `attachment; filename="casambi-diagnostics-${report.generatedAt.slice(0, 19).replace(/:/g, "-")}.json"`);
     response.json(bundle);
+  }));
+  api.get("/admin/notifications", requireAuth(store, "admin"), (_request, response) => {
+    const url = notifier?.webhookUrl() ?? null;
+    let webhookHost: string | null = null;
+    try { webhookHost = url ? new URL(url).host : null; } catch { webhookHost = null; }
+    // The URL itself often carries a secret token (Home Assistant, Slack), so only its host is shown again.
+    response.json({ notifications: store.listNotifications(50), unread: store.unreadNotificationCount(), webhook: { configured: Boolean(url), host: webhookHost } });
+  });
+  api.post("/admin/notifications/read", requireAuth(store, "admin"), (_request, response) => { store.markNotificationsRead(); response.status(204).end(); });
+  api.put("/admin/notifications/webhook", requireAuth(store, "admin"), route(async (request, response) => {
+    if (!notifier) throw new Error("Notifications are not available.");
+    const { url } = parsed(notificationWebhookSchema, request.body);
+    notifier.setWebhookUrl(url || null);
+    store.audit(principal(response).name, "notification.webhook_changed", { configured: Boolean(url) });
+    response.status(204).end();
+  }));
+  api.post("/admin/notifications/test", requireAuth(store, "admin"), route(async (_request, response) => {
+    if (!notifier) throw new Error("Notifications are not available.");
+    response.json(await notifier.testWebhook());
   }));
   api.get("/admin/server-settings", requireAuth(store, "admin"), (_request, response) => response.json(serverSettings.current()));
   api.put("/admin/server-settings", requireAuth(store, "admin"), route(async (request, response) => {

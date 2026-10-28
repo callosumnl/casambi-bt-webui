@@ -6,7 +6,7 @@ import { AuditEntry, LocalApi } from "@/lib/localApi";
 type Props = { api: LocalApi; onNotice: (message: string) => void };
 const FILTERS = [
   ["", "Everything"], ["bridge.", "Bluetooth bridge"], ["lighting.", "Lighting commands"], ["schedule.", "Timers"], ["switch", "Switches and rules"],
-  ["scene.", "Scenes"], ["auth.", "Sign-ins"], ["user.", "Accounts"], ["api_key.", "API keys"], ["room.", "Rooms"],
+  ["scene.", "Scenes"], ["auth.", "Sign-ins"], ["user.", "Accounts"], ["api_key.", "API keys"], ["room.", "Rooms"], ["notification.", "Notifications"],
 ] as const;
 
 /** Read-only view of the audit log, newest first, with a category filter. */

@@ -1,4 +1,6 @@
 import express from "express";
+import { Notifier } from "../notifications";
+import { Updater } from "../updates";
 import helmet from "helmet";
 import { createServer } from "http";
 import net from "net";
@@ -89,10 +91,13 @@ async function startServer() {
   if (store.needsBootstrap()) console.log(development ? `First-run setup code: ${setupCode.reveal()}` : `First-run setup code written to ${setupCode.path} (deploy/install.sh prints it).`);
   casambi.onSwitchPress(press => void switchRules.handle(press));
   app.use(express.json({ limit: "1mb" }));
-  app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler, setupCode }));
+  const updater = new Updater(store.dataDirectory);
+  const notifier = new Notifier(store, events, { connection: () => casambi.cachedSnapshot().connection, update: () => updater.status() });
+  app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler, setupCode, updater, notifier }));
   app.use("/api/v1", apiErrorHandler);
   await casambi.initialize();
   scheduler.reload();
+  notifier.start();
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
