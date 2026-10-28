@@ -8,9 +8,9 @@ version = "0.1.0"
 description = "Raspberry Pi deployment companion for the Casambi BT WebUI lighting-control appliance."
 readme = "README.md"
 requires-python = ">=3.11"
-license = "Apache-2.0"
+license = "PolyForm-Noncommercial-1.0.0"
 license-files = ["LICENSE", "NOTICE"]
-authors = [{ name = "Casambi BT WebUI contributors" }]
+authors = [{ name = "Callosum", email = "info@callosum.nl" }]
 keywords = ["casambi", "bluetooth", "raspberry-pi", "lighting", "webui"]
 classifiers = [
   "Development Status :: 3 - Alpha",

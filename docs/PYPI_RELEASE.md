@@ -2,7 +2,7 @@
 
 The repository is prepared as a **PEP 517 source and wheel distribution** named `casambi-bt-webui`, versioned in `pyproject.toml`. The package intentionally distributes a Raspberry Pi deployment companion rather than pretending that a Python wheel can install and operate the React/Node.js application by itself. The companion provides preflight diagnostics and safe access to non-secret systemd/environment templates; install the full Node.js application from this repository as documented in the root README.
 
-> The package is licensed under the Apache License 2.0 (`LICENSE`, with attribution and the trademark notice in `NOTICE`); both files ship in the source distribution and the wheel. Before first publication, confirm that the project name `casambi-bt-webui` is available on PyPI.
+> The package is licensed under the PolyForm Noncommercial License 1.0.0 (`LICENSE`, with the copyright and trademark notice in `NOTICE`); both files ship in the source distribution and the wheel. Before first publication, confirm that the project name `casambi-bt-webui` is available on PyPI.
 
 ## Local release validation
 

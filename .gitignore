@@ -113,7 +113,7 @@ casambi-bt-webui.env
 # Webdev artifacts (checkpoint zips, migrations, etc.)
 .webdev/
 
-# Manus version file (auto-generated, not part of source)
+# Editor/tool project file (auto-generated, not part of source)
 .project-config.json
 
 # Python bytecode and the bridge environment created by deploy/install.sh

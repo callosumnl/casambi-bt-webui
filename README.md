@@ -137,7 +137,7 @@ CASAMBI_JWT='your-jwt' node scripts/verify-live-bridge.mjs
 
 The upstream library directly provides units, groups, scenes, fixture control types, unit state callbacks, and physical switch events. It does **not** currently expose rooms as a first-class model; rooms, custom names, and local assignments are therefore stored in the Pi’s SQLite database. The bridge additionally captures SENSOR bitfields from subsequent upstream state packets before the upstream parser discards them. These live readings are intentionally labelled `raw` because fixture-specific engineering-unit conversion is not documented by the upstream package. The interface and REST API mirror every upstream entity that can be obtained through the current library, and they display controls only where a connected fixture reports that capability. [1]
 
-See [the REST API reference](docs/API.md) for endpoints and `curl` examples, and [the architecture document](docs/ARCHITECTURE.md) for bridge, storage, security, and scheduling design details.
+See [the REST API reference](docs/API.md) for endpoints and `curl` examples, [the architecture document](docs/ARCHITECTURE.md) for bridge, storage, security, and scheduling design details, and [the development guide](docs/DEVELOPMENT.md) for commands and conventions when changing the code.
 
 ## GitHub workflow
 
@@ -152,7 +152,7 @@ git push origin main
 
 ## License
 
-Casambi BT WebGUI is licensed under the [Apache License 2.0](LICENSE); see [NOTICE](NOTICE) for attribution and the trademark notice. It depends on [`casambi-bt`](https://github.com/lkempf/casambi-bt) by [lkempf](https://github.com/lkempf), which is also licensed under the Apache License 2.0 and is installed as a separate package.
+Casambi BT WebGUI is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may use, change, and share it for noncommercial purposes, such as personal use, education, research, charities, and public institutions. Commercial use needs permission from Callosum (info@callosum.nl). See [NOTICE](NOTICE) for the copyright and trademark notice. It depends on [`casambi-bt`](https://github.com/lkempf/casambi-bt) by [lkempf](https://github.com/lkempf), which is also licensed under the Apache License 2.0 and is installed as a separate package.
 
 ## References
 
