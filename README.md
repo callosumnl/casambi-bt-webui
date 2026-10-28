@@ -158,7 +158,7 @@ This project grew out of many evenings, a lot of testing in a dark living room, 
 
 ## License
 
-Casambi BT WebGUI is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may use, change, and share it for noncommercial purposes, such as personal use, education, research, charities, and public institutions. Commercial use needs permission from Callosum (info@callosum.nl). See [NOTICE](NOTICE) for the copyright and trademark notice. It depends on [`casambi-bt`](https://github.com/lkempf/casambi-bt) by [lkempf](https://github.com/lkempf), which is also licensed under the Apache License 2.0 and is installed as a separate package.
+Casambi BT WebGUI is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may use, change, and share it for noncommercial purposes, such as personal use, education, research, charities, and public institutions. Commercial use needs permission from me (info @ callosum nl). See [NOTICE](NOTICE) for the copyright and trademark notice. It depends on [`casambi-bt`](https://github.com/lkempf/casambi-bt) by [lkempf](https://github.com/lkempf), which is also licensed under the Apache License 2.0 and is installed as a separate package.
 
 ## References
 
