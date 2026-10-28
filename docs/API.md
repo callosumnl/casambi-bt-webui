@@ -36,6 +36,7 @@ Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401
 | `POST` | `/admin/rooms` | admin | Creates a local room with a default brightness. |
 | `PATCH`, `DELETE` | `/admin/rooms/:id` | admin | Renames (`{ name }`) or deletes a room. Deleting a room that timers, switch rules, or scenes use returns `409` naming them. |
 | `PUT` | `/admin/rooms/:id/default-brightness` | admin | Updates a room’s 0–100 default brightness percentage. |
+| `POST` | `/admin/rooms/from-groups` | admin | Creates a room for each Casambi group (reusing rooms with the same name) and places the group's units in it; units already in a room stay. Returns `{ created, assigned, rooms }`. |
 | `PUT` | `/admin/devices/room` | admin | Moves many units (`unitIds`, up to 1,000) into one room, or out of every room with `roomId: null`, keeping their custom names. |
 | `PUT` | `/admin/devices/:id/metadata` | admin | Sets a unit's custom name and/or room; fields left out keep their value, and an empty name restores the Casambi name. |
 | `GET`, `POST` | `/admin/away-date-sets` | admin | Lists or creates shared away-date sets. |

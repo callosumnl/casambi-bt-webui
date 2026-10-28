@@ -18,10 +18,10 @@ const stores = new WeakMap<object, LocalStore>();
 const instanceStore = (instance: object) => stores.get(instance)!;
 /** Answers every system probe with "not available", so tests never run real system commands. */
 const noProbes: Probes = { run: async () => null, read: async () => null, list: async () => [], diskSpace: async () => null };
-function app(options: { setupCode?: (folder: string) => SetupCode } = {}) {
+function app(options: { setupCode?: (folder: string) => SetupCode; groups?: Array<{ id: number; name: string; unitIds: number[] }> } = {}) {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
-  const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString(), connection: { phase: "idle" } }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
+  const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: options.groups ?? [], scenes: [], rooms: [], updatedAt: new Date().toISOString(), connection: { phase: "idle" } }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
   const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder), probes: noProbes })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
 }
@@ -344,5 +344,28 @@ describe("REST API", () => {
     expect(bundle.headers["content-disposition"]).toMatch(/^attachment; filename="casambi-diagnostics-[\d-]+T[\d-]+\.json"$/);
     expect(bundle.body).toMatchObject({ configuration: { networkAddress: "AB:CD:EF:01:23:45", hasNetworkPassword: true }, audit: expect.any(Array) });
     expect(JSON.stringify(bundle.body)).not.toContain("very-secret-network-pass");
+  });
+
+  it("creates a room for each Casambi group and places its units, once", async () => {
+    const groups = [{ id: 1, name: "Kitchen", unitIds: [1, 2] }, { id: 2, name: "Downstairs", unitIds: [2, 3, 4] }, { id: 3, name: " ", unitIds: [5] }];
+    const instance = app({ groups }); const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    const hall = await request(instance).post("/api/v1/admin/rooms").set(auth).send({ name: "Hall" }).expect(201);
+    await request(instance).put("/api/v1/admin/devices/room").set(auth).send({ unitIds: [4], roomId: hall.body.id }).expect(204);
+
+    const first = await request(instance).post("/api/v1/admin/rooms/from-groups").set(auth).expect(201);
+    expect(first.body).toMatchObject({ created: 3, assigned: 4 });
+    const roomOf = (unitId: number) => first.body.rooms.find((room: { id: number }) => room.id === instanceStore(instance).getUnitMetadata().find(metadata => metadata.unitId === unitId)?.roomId)?.name;
+    expect([1, 2, 3, 4, 5].map(roomOf)).toEqual(["Kitchen", "Kitchen", "Downstairs", "Hall", "Group 3"]);
+
+    const again = await request(instance).post("/api/v1/admin/rooms/from-groups").set(auth).expect(201);
+    expect(again.body).toMatchObject({ created: 0, assigned: 0 });
+    await request(app()).post("/api/v1/admin/rooms/from-groups").expect(401);
+  });
+
+  it("refuses to create rooms from groups when the network has none", async () => {
+    const instance = app(); const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const refused = await request(instance).post("/api/v1/admin/rooms/from-groups").set("Authorization", `Bearer ${admin.body.token}`).expect(422);
+    expect(refused.body.error.message).toBe("No Casambi groups found; a connected network with groups is required.");
   });
 });

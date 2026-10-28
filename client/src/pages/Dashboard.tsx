@@ -1,4 +1,5 @@
-import { AlertTriangle, ChevronRight, Pencil, Plus, RefreshCw, Search, X } from "lucide-react";
+import { AlertTriangle, ChevronRight, Pencil, Plus, RefreshCw, Rocket, Search, X } from "lucide-react";
+import { Link } from "wouter";
 import { FormEvent, useState } from "react";
 import "./Dashboard.css";
 import { ConnectionStatusBar } from "@/components/ConnectionStatusBar";
@@ -7,7 +8,7 @@ import { HudFrame } from "@/components/HudFrame";
 import { useNetwork } from "@/hooks/useNetwork";
 import { useSliderCommit } from "@/hooks/useSliderCommit";
 import { percentToDimmer } from "@/lib/brightness";
-import type { LocalScene, SceneScope } from "@/lib/localApi";
+import { getSession, type LocalScene, type SceneScope } from "@/lib/localApi";
 import { averageBrightnessPercent, isLamp, lampsByScope, sameScope } from "@/lib/scenes";
 
 type Chip = { key: string; label: string; kind?: "casambi" | "default"; scene?: LocalScene; apply: () => void };
@@ -65,7 +66,9 @@ export default function Dashboard() {
 
     <section aria-labelledby="lamps-heading">
       <h2 id="lamps-heading" className="section-label">LAMPS</h2>
-      {lamps.length === 0 ? <p className="muted-copy">No lamps yet. Ask an admin to connect the Casambi Bluetooth bridge.</p>
+      {lamps.length === 0 ? (getSession()?.user.role === "admin"
+        ? <p className="muted-copy">No lamps yet. <Link href="/setup" className="outline-button"><Rocket /> SET UP THE CASAMBI NETWORK</Link></p>
+        : <p className="muted-copy">No lamps yet. Ask an admin to connect the Casambi Bluetooth bridge.</p>)
         : !large ? <div className="lamp-grid">{lamps.map(device => <DeviceControlCard key={device.id} device={device} onCommand={command} />)}</div>
           : sections.length === 0 ? <p className="muted-copy">Nothing matches “{query}”.</p>
             : sections.map(section => { const open = sectionOpen(section.key); return <div key={section.key} className="room-section">

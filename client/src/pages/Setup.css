@@ -1,0 +1,17 @@
+@import "./Diagnostics.css";
+
+/* First-run setup: a numbered step bar, then one panel per step. */
+.setup-steps { display: flex; flex-wrap: wrap; gap: .4rem; margin: 0; padding: 0; list-style: none; }
+.setup-steps li { display: flex; align-items: center; gap: .4rem; padding: .35rem .6rem; color: var(--muted); border: 1px solid rgba(255,255,255,.1); font: .6rem "DM Mono"; letter-spacing: .08em; text-transform: uppercase; }
+.setup-steps li span { display: grid; place-items: center; width: 18px; height: 18px; border: 1px solid currentColor; border-radius: 50%; font-size: .55rem; }
+.setup-steps li.current { color: var(--cyan); border-color: rgba(99,244,255,.45); }
+.setup-steps li.done { color: #6dffb5; border-color: rgba(109,255,181,.3); }
+.setup-ok { display: flex; align-items: center; gap: .5rem; margin: 0 0 .8rem; color: #6dffb5; font-size: .8rem; }
+.setup-ok svg { width: 16px; flex: none; }
+.setup-choices { display: grid; gap: .35rem; margin: 0; padding: 0; border: 0; }
+.setup-choices legend { margin-bottom: .4rem; color: var(--muted); font: .6rem "DM Mono"; letter-spacing: .1em; }
+.setup-choices small { margin-left: .4rem; color: var(--muted); font: .6rem "DM Mono"; }
+.setup-choices small.warn { color: #ffd36d; }
+.setup-groups { display: flex; flex-wrap: wrap; gap: .4rem; margin: .4rem 0 1rem; padding: 0; list-style: none; }
+.setup-groups li { padding: .35rem .6rem; border: 1px solid rgba(255,255,255,.1); font-size: .75rem; }
+.setup-groups small { margin-left: .3rem; color: var(--cyan); font: .58rem "DM Mono"; }

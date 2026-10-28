@@ -189,6 +189,24 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
   api.post("/admin/worker/restart", requireAuth(store, "admin"), route(async (_request, response) => { response.status(202).json(service.restartWorker(principal(response).name)); }));
   api.post("/admin/connect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.connect()); }));
   api.post("/admin/disconnect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.disconnect()); }));
+  // Setup shortcut: a room per Casambi group, so rooms match groups and room commands become single group commands.
+  api.post("/admin/rooms/from-groups", requireAuth(store, "admin"), route(async (_request, response) => {
+    const groups = service.cachedSnapshot().groups;
+    if (groups.length === 0) throw new Error("No Casambi groups found; a connected network with groups is required.");
+    const rooms = new Map(store.listRooms().map(room => [room.name.toLowerCase(), room]));
+    const placed = new Set(store.getUnitMetadata().filter(metadata => metadata.roomId !== null).map(metadata => metadata.unitId));
+    let created = 0; let assigned = 0;
+    for (const group of groups) {
+      const name = (group.name.trim() || `Group ${group.id}`).slice(0, 96);
+      let room = rooms.get(name.toLowerCase());
+      if (!room) { room = store.createRoom(name); rooms.set(name.toLowerCase(), room); created += 1; }
+      // A unit in several groups goes to the first room; units already in a room stay where they are.
+      const free = group.unitIds.filter(unitId => !placed.has(unitId));
+      if (free.length) { store.setUnitRooms(free, room.id); free.forEach(unitId => placed.add(unitId)); assigned += free.length; }
+    }
+    store.audit(principal(response).name, "room.created_from_groups", { created, assigned });
+    response.status(201).json({ created, assigned, rooms: store.listRooms() });
+  }));
   api.post("/admin/rooms", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomCreateSchema, request.body); response.status(201).json(store.createRoom(input.name, input.defaultBrightnessPercent)); }));
   api.put("/admin/rooms/:id/default-brightness", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomDefaultBrightnessSchema, request.body); const room = store.setRoomDefaultBrightness(Number(request.params.id), input.defaultBrightnessPercent); store.audit(principal(response).name, "room.default_brightness.updated", { roomId: room.id, defaultBrightnessPercent: room.defaultBrightnessPercent }); response.json(room); }));
   api.patch("/admin/rooms/:id", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(roomRenameSchema, request.body); const room = store.renameRoom(Number(request.params.id), input.name); store.audit(principal(response).name, "room.renamed", { roomId: room.id, name: room.name }); response.json(room); }));
