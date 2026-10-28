@@ -2,12 +2,18 @@ import { describe, expect, it } from "vitest";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, parseConnectDiagnostic, parseWifiLink, Probes, SystemFacts, wifiChannel } from "./diagnostics";
 
 /** Probes that answer from fixed command output and files, the way a Raspberry Pi 5 answers. */
-function fakeProbes(commands: Record<string, string | null>, files: Record<string, string>, directories: Record<string, string[]>): Probes {
+type Network = ReturnType<Probes["network"]>;
+const piNetwork: Network = { hostname: "casambi", interfaces: {
+  lo: [{ address: "127.0.0.1", netmask: "255.0.0.0", family: "IPv4", mac: "00:00:00:00:00:00", internal: true, cidr: "127.0.0.1/8" }],
+  eth0: [{ address: "192.168.1.40", netmask: "255.255.255.0", family: "IPv4", mac: "2c:cf:67:12:34:56", internal: false, cidr: "192.168.1.40/24" }, { address: "fe80::1", netmask: "ffff:ffff:ffff:ffff::", family: "IPv6", mac: "2c:cf:67:12:34:56", internal: false, cidr: "fe80::1/64", scopeid: 2 }],
+} };
+function fakeProbes(commands: Record<string, string | null>, files: Record<string, string>, directories: Record<string, string[]>, network: Network = piNetwork): Probes {
   return {
     run: async (command, args) => commands[[command, ...args].join(" ")] ?? commands[`${command} *`] ?? null,
     read: async path => files[path] ?? null,
     list: async path => directories[path] ?? [],
     diskSpace: async () => ({ freeBytes: 20 * 1024 ** 3, totalBytes: 29 * 1024 ** 3 }),
+    network: () => network,
   };
 }
 
@@ -36,6 +42,7 @@ const healthyApp: AppFacts = {
   workerRestarts: 0,
   configured: { networkAddress: true, networkPassword: true, location: true },
   solarTimers: 0,
+  port: "3000",
 };
 const status = (checks: ReturnType<typeof evaluateChecks>, id: string) => checks.find(check => check.id === id);
 
@@ -53,11 +60,13 @@ describe("gatherSystemFacts", () => {
       temperatureC: 52.7,
       underVoltage: false,
       libraries: { "casambi-bt": "0.3.2", bleak: "3.0.2" },
+      hostname: "casambi",
+      addresses: [{ interface: "eth0", ipv4: "192.168.1.40", mac: "2c:cf:67:12:34:56" }],
     });
   });
 
   it("reports what it cannot read as unknown instead of failing", async () => {
-    const facts = await gatherSystemFacts(fakeProbes({}, {}, {}), options);
+    const facts = await gatherSystemFacts(fakeProbes({}, {}, {}, { hostname: "", interfaces: {} }), options);
     expect(facts).toMatchObject({ bluetoothService: null, bluetoothBlocked: null, adapterPowered: null, wifi: null, ethernetUp: null, clock: null, temperatureC: null, underVoltage: null, libraries: null });
     expect(evaluateChecks(facts, healthyApp).filter(check => check.status === "info").map(check => check.id)).toEqual(["bluetooth-service", "bluetooth-adapter", "radio", "clock"]);
   });
@@ -74,7 +83,7 @@ describe("evaluateChecks", () => {
   });
 
   it("only suggests turning Wi-Fi off when an Ethernet cable is connected", () => {
-    const facts: SystemFacts = { bluetoothService: { active: true, since: null }, bluetoothBlocked: false, adapterPowered: true, wifi: [{ interface: "wlan0", ssid: "Home", frequencyMhz: 2462 }], ethernetUp: true, clock: { synchronized: true, timezone: null }, disk: null, temperatureC: null, underVoltage: null, libraries: null };
+    const facts: SystemFacts = { bluetoothService: { active: true, since: null }, bluetoothBlocked: false, adapterPowered: true, wifi: [{ interface: "wlan0", ssid: "Home", frequencyMhz: 2462 }], ethernetUp: true, clock: { synchronized: true, timezone: null }, disk: null, temperatureC: null, underVoltage: null, libraries: null, hostname: null, addresses: [] };
     const radio = status(evaluateChecks(facts, healthyApp), "radio");
     expect(radio?.detail).toContain("channel 11");
     expect(radio?.detail).not.toContain("which channel 11 overlaps");
@@ -82,21 +91,22 @@ describe("evaluateChecks", () => {
   });
 
   it("passes a healthy Pi on Ethernet and flags the problems a user can fix", () => {
-    const healthy: SystemFacts = { bluetoothService: { active: true, since: null }, bluetoothBlocked: false, adapterPowered: true, wifi: [], ethernetUp: true, clock: { synchronized: true, timezone: "Europe/Amsterdam" }, disk: { freeBytes: 8 * 1024 ** 3, totalBytes: 29 * 1024 ** 3 }, temperatureC: 48, underVoltage: false, libraries: null };
+    const healthy: SystemFacts = { bluetoothService: { active: true, since: null }, bluetoothBlocked: false, adapterPowered: true, wifi: [], ethernetUp: true, clock: { synchronized: true, timezone: "Europe/Amsterdam" }, disk: { freeBytes: 8 * 1024 ** 3, totalBytes: 29 * 1024 ** 3 }, temperatureC: 48, underVoltage: false, libraries: null, hostname: "casambi", addresses: [{ interface: "eth0", ipv4: "192.168.1.40", mac: "2c:cf:67:12:34:56" }] };
     const checks = evaluateChecks(healthy, healthyApp);
-    expect(checks.every(check => check.status === "ok")).toBe(true);
+    expect(checks.filter(check => check.id !== "address").every(check => check.status === "ok")).toBe(true);
+    expect(status(checks, "address")).toEqual({ id: "address", title: "Address", status: "info", detail: "Open the app at http://casambi.local:3000 or http://192.168.1.40:3000 (Ethernet).", advice: "So the IP address never changes, reserve 192.168.1.40 for device 2c:cf:67:12:34:56 in your router's DHCP settings (often called a reserved or static lease)." });
     expect(status(checks, "radio")?.detail).toBe("Wi-Fi is not in use; the Pi is on Ethernet.");
 
     const broken = evaluateChecks({ ...healthy, bluetoothBlocked: true, clock: { synchronized: false, timezone: null }, disk: { freeBytes: 100 * 1024 ** 2, totalBytes: 29 * 1024 ** 3 }, temperatureC: 83, underVoltage: true },
       { ...healthyApp, connection: { phase: "failed", lastError: "Wrong password" }, configured: { networkAddress: true, networkPassword: true, location: false }, solarTimers: 2, workerRestarts: 1 });
-    expect(Object.fromEntries(broken.filter(check => check.status !== "ok").map(check => [check.id, check.status]))).toEqual({
+    expect(Object.fromEntries(broken.filter(check => check.status !== "ok" && check.status !== "info").map(check => [check.id, check.status]))).toEqual({
       "bluetooth-adapter": "fail", "casambi-config": "fail", worker: "warn", clock: "warn", location: "warn", disk: "warn", temperature: "warn", power: "warn",
     });
     expect(status(broken, "bluetooth-adapter")?.advice).toBe("Run: sudo rfkill unblock bluetooth");
   });
 
   it("asks to set up the Casambi network before anything else", () => {
-    const checks = evaluateChecks({ bluetoothService: null, bluetoothBlocked: null, adapterPowered: null, wifi: null, ethernetUp: null, clock: null, disk: null, temperatureC: null, underVoltage: null, libraries: null },
+    const checks = evaluateChecks({ bluetoothService: null, bluetoothBlocked: null, adapterPowered: null, wifi: null, ethernetUp: null, clock: null, disk: null, temperatureC: null, underVoltage: null, libraries: null, hostname: null, addresses: [] },
       { ...healthyApp, connection: { phase: "idle" }, lastConnect: null, bluetoothTiming: null, configured: { networkAddress: false, networkPassword: false, location: false } });
     expect(status(checks, "casambi-config")).toMatchObject({ status: "fail", advice: "Under Admin, use Discover, enter the network password, and save." });
   });
@@ -115,5 +125,10 @@ describe("diagnostics helpers", () => {
     const commit = "90f2cf3aaaa1111bbbb2222cccc3333dddd4444e";
     const read = async (path: string) => ({ "/app/package.json": '{"version":"1.0.0"}', "/app/.git/HEAD": "ref: refs/heads/main", "/app/.git/packed-refs": `# pack-refs\n${commit} refs/heads/main` } as Record<string, string>)[path] ?? null;
     expect(await appVersion({ read }, "/app")).toEqual({ version: "1.0.0", commit });
+  });
+
+  it("warns about the default host name, which clashes between Pis", () => {
+    const facts = { bluetoothService: null, bluetoothBlocked: null, adapterPowered: null, wifi: null, ethernetUp: null, clock: null, disk: null, temperatureC: null, underVoltage: null, libraries: null, hostname: "raspberrypi", addresses: [{ interface: "wlan0", ipv4: "10.0.0.7", mac: null }] };
+    expect(status(evaluateChecks(facts, healthyApp), "address")).toMatchObject({ status: "warn", detail: expect.stringContaining("http://raspberrypi.local:3000 or http://10.0.0.7:3000 (Wi-Fi)"), advice: expect.stringContaining("sudo raspi-config → System Options → Hostname") });
   });
 });

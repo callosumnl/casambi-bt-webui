@@ -30,7 +30,7 @@ die() { printf '\nError: %s\n' "$*" >&2; exit 1; }
 
 step "Installing system packages"
 sudo apt-get update -qq
-sudo apt-get install -y -qq git curl ca-certificates gnupg python3 python3-venv python3-dev build-essential bluez rfkill >/dev/null
+sudo apt-get install -y -qq git curl ca-certificates gnupg python3 python3-venv python3-dev build-essential bluez rfkill avahi-daemon >/dev/null
 python3 -c 'import sys; sys.exit(sys.version_info < (3, 11))' || die "Python 3.11 or newer is required; found $(python3 --version)."
 
 node_major() { command -v node >/dev/null 2>&1 && node -p 'process.versions.node.split(".")[0]' || echo 0; }
@@ -163,13 +163,26 @@ sudo systemctl enable --now casambi-bt-webui-update-check.path casambi-bt-webui-
 # restart, not `enable --now`: a running service must pick up the new build.
 sudo systemctl restart casambi-bt-webui.service
 
-step "Checking that the web interface answers"
 port="$(sudo sed -n 's/^PORT=//p' "$ENV_FILE" | tail -n 1)"; port="${port:-3000}"
+# Announce the web app over mDNS (avahi also makes <hostname>.local resolve); avahi picks the file up by itself.
+if [[ -d /etc/avahi/services ]]; then
+  sed -e "s|<port>3000</port>|<port>$port</port>|" "$APP_DIR/deploy/avahi-casambi-bt-webui.service" | sudo tee /etc/avahi/services/casambi-bt-webui.service >/dev/null
+  sudo systemctl enable --now avahi-daemon.service >/dev/null 2>&1 || echo "Warning: could not start avahi-daemon; $(hostname).local may not resolve." >&2
+fi
+
+step "Checking that the web interface answers"
 for _ in $(seq 1 60); do
   if curl -fsS "http://127.0.0.1:$port/api/v1/health" >/dev/null 2>&1; then
     printf '\nCasambi BT WebGUI is running. Open it in a browser on your network:\n'
     for address in $(hostname -I 2>/dev/null); do [[ "$address" == *:* ]] || printf '  http://%s:%s\n' "$address" "$port"; done
     printf '  http://%s.local:%s\n' "$(hostname)" "$port"
+    [[ "$(hostname)" != raspberrypi ]] || printf '\nTip: give the Pi its own name (sudo raspi-config, System Options, Hostname); "raspberrypi" clashes when there is more than one Pi.\n'
+    # The interface of the default route carries the address people use; its MAC is what a router reservation needs.
+    route_interface="$(ip route show default 2>/dev/null | awk '{ for (i = 1; i < NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"
+    if [[ -n "$route_interface" && -r "/sys/class/net/$route_interface/address" ]]; then
+      route_address="$(ip -4 -o addr show dev "$route_interface" 2>/dev/null | awk '{ split($4, parts, "/"); print parts[1]; exit }')"
+      printf '\nTip: reserve %s for device %s in your router (DHCP reservation), so the address never changes.\n' "${route_address:-this address}" "$(cat "/sys/class/net/$route_interface/address")"
+    fi
     # The service writes this one-time code on a fresh install and deletes it once the admin account exists.
     db_path="$(sudo sed -n 's/^CASAMBI_DB_PATH=//p' "$ENV_FILE" | tail -n 1)"
     if setup_code="$(sudo cat "$(dirname "${db_path:-$DATA_DIR/casambi-bt-webui.db}")/setup-code" 2>/dev/null)"; then

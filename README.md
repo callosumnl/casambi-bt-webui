@@ -43,6 +43,7 @@ That single installer sets up everything and can be run again at any time:
 - the checkout handed to your account (also after `sudo git clone`), so later updates never hit root-owned files;
 - a least-privilege `casambi` service account in the `bluetooth` group, and its data directory `/var/lib/casambi-bt-webui/` (database and the upstream `casambi-bt-store` cache);
 - Bluetooth unblocked and the `bluetooth` service enabled;
+- `avahi-daemon`, so the Pi is reachable as `http://<hostname>.local:3000` and announces the web app to apps and browsers that list local (Bonjour) services;
 - the Python bridge environment (`.venv`) and the web application build, both owned by your account;
 - `/etc/casambi-bt-webui.env` with **freshly generated, unique secrets** on the first run; later runs keep it and only add settings introduced by newer versions;
 - the systemd service, enabled at boot and restarted on the new build, followed by a check that the web interface answers.
@@ -55,6 +56,7 @@ Settings live in `/etc/casambi-bt-webui.env`; change them with `sudoedit /etc/ca
 
 | Task | Command or action |
 | --- | --- |
+| Find the Pi | `http://<hostname>.local:3000` (for example `http://casambi.local:3000`). The system check and the end of `install.sh` show the IP address and the device (MAC) address to reserve in your router, so the IP address never changes. |
 | Check the system | Admin → **SYSTEM CHECK** (or **DIAGNOSE** in the desktop menu): Bluetooth, Wi-Fi interference, the Casambi connection, clock, storage, temperature, and power, with advice. **DOWNLOAD DIAGNOSTICS FILE** gives one file to share when asking for help; it contains no passwords or keys. |
 | Restart after a settings change | `sudo systemctl restart casambi-bt-webui` |
 | Inspect service logs | `sudo journalctl -u casambi-bt-webui.service -n 200 --no-pager` |

@@ -1,5 +1,6 @@
 import { execFile } from "child_process";
 import { readdir, readFile, statfs } from "fs/promises";
+import { hostname, networkInterfaces } from "os";
 import { resolve } from "path";
 
 /** One line of the system check: what was checked, how it looks, and what to do about it. */
@@ -18,6 +19,9 @@ export type SystemFacts = {
   temperatureC: number | null;
   underVoltage: boolean | null;
   libraries: Record<string, string> | null;
+  /** The Pi's name on the network (reachable as <hostname>.local) and its IPv4 addresses. */
+  hostname: string | null;
+  addresses: Array<{ interface: string; ipv4: string; mac: string | null }>;
 };
 
 /** What the application itself knows; supplied by the API from the service, store, and bridge. */
@@ -28,6 +32,7 @@ export type AppFacts = {
   workerRestarts: number;
   configured: { networkAddress: boolean; networkPassword: boolean; location: boolean };
   solarTimers: number;
+  port: string;
 };
 
 /** Reads the system without privileges; each probe has a short timeout and returns null on any failure. */
@@ -36,6 +41,7 @@ export type Probes = {
   read(path: string): Promise<string | null>;
   list(path: string): Promise<string[]>;
   diskSpace(path: string): Promise<{ freeBytes: number; totalBytes: number } | null>;
+  network(): { hostname: string; interfaces: ReturnType<typeof networkInterfaces> };
 };
 
 const PROBE_TIMEOUT_MS = 3_000;
@@ -47,6 +53,7 @@ export const systemProbes: Probes = {
   read: path => readFile(path, "utf8").then(text => text.trim(), () => null),
   list: path => readdir(path).catch(() => []),
   diskSpace: path => statfs(path).then(stats => ({ freeBytes: stats.bavail * stats.bsize, totalBytes: stats.blocks * stats.bsize }), () => null),
+  network: () => ({ hostname: hostname(), interfaces: networkInterfaces() }),
 };
 
 /** `systemctl show` and `timedatectl show` print key=value lines. */
@@ -100,7 +107,14 @@ export async function gatherSystemFacts(probes: Probes, options: { adapter: stri
   let libraryVersions: Record<string, string> | null = null;
   try { libraryVersions = libraries === null ? null : JSON.parse(libraries) as Record<string, string>; } catch { libraryVersions = null; }
 
+  const network = probes.network();
+  const addresses = Object.entries(network.interfaces).flatMap(([name, entries]) => (entries ?? [])
+    .filter(entry => entry.family === "IPv4" && !entry.internal && !name.startsWith("docker") && !name.startsWith("veth"))
+    .map(entry => ({ interface: name, ipv4: entry.address, mac: entry.mac && entry.mac !== "00:00:00:00:00:00" ? entry.mac : null })));
+
   return {
+    hostname: network.hostname || null,
+    addresses,
     bluetoothService: serviceValues ? { active: serviceValues.get("ActiveState") === "active", since: serviceValues.get("ActiveEnterTimestamp") || null } : null,
     bluetoothBlocked: bluetoothRadios.length ? bluetoothRadios.some(radio => radio.soft === "1" || radio.hard === "1") : null,
     adapterPowered: powered,
@@ -156,6 +170,21 @@ export function evaluateChecks(system: SystemFacts, app: AppFacts): Check[] {
         : "Connect the Pi with an Ethernet cable (best), use a 5 GHz Wi-Fi network, or add a USB Bluetooth adapter. Change network settings only with a cable or screen attached, or you can lose access to the Pi.",
     });
   } else add({ id: "radio", title: "Wi-Fi and Bluetooth", status: "ok", detail: system.wifi.length ? `Wi-Fi uses ${Math.round(system.wifi[0].frequencyMhz! / 100) / 10} GHz, which does not disturb Bluetooth.` : `Wi-Fi is not in use${system.ethernetUp ? "; the Pi is on Ethernet" : ""}.` });
+
+  // How to reach the app: a name that works without knowing the IP, and an IP that should not change.
+  const primary = system.addresses.find(address => /^(eth|en)/.test(address.interface)) ?? system.addresses[0];
+  if (system.hostname || primary) {
+    const urls = [system.hostname ? `http://${system.hostname}.local:${app.port}` : null, primary ? `http://${primary.ipv4}:${app.port}` : null].filter(Boolean);
+    const generic = system.hostname === "raspberrypi";
+    add({
+      id: "address", title: "Address", status: generic ? "warn" : "info",
+      detail: `Open the app at ${urls.join(" or ")}${primary ? ` (${primary.interface.startsWith("wl") ? "Wi-Fi" : "Ethernet"})` : ""}.${generic ? " The Pi still has the default name \"raspberrypi\", which clashes when there is more than one Pi on the network." : ""}`,
+      advice: [
+        generic ? "Give the Pi its own name: sudo raspi-config → System Options → Hostname (for example casambi), then reboot." : null,
+        primary ? `So the IP address never changes, reserve ${primary.ipv4}${primary.mac ? ` for device ${primary.mac}` : ""} in your router's DHCP settings (often called a reserved or static lease).` : null,
+      ].filter(Boolean).join(" "),
+    });
+  }
 
   // The Casambi connection.
   if (!app.configured.networkAddress || !app.configured.networkPassword) add({ id: "casambi-config", title: "Casambi network", status: "fail", detail: "No Casambi network is set up yet.", advice: "Under Admin, use Discover, enter the network password, and save." });

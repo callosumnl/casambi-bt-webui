@@ -1,0 +1,12 @@
+<?xml version="1.0" standalone='no'?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<!-- Announces the web app on the local network (Bonjour/mDNS), so it shows up in apps and browsers that list
+     local services. deploy/install.sh writes the configured port into /etc/avahi/services/. -->
+<service-group>
+  <name replace-wildcards="yes">Casambi BT WebGUI on %h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>3000</port>
+    <txt-record>path=/</txt-record>
+  </service>
+</service-group>

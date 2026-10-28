@@ -18,7 +18,7 @@ const folders: string[] = [];
 const stores = new WeakMap<object, LocalStore>();
 const instanceStore = (instance: object) => stores.get(instance)!;
 /** Answers every system probe with "not available", so tests never run real system commands. */
-const noProbes: Probes = { run: async () => null, read: async () => null, list: async () => [], diskSpace: async () => null };
+const noProbes: Probes = { run: async () => null, read: async () => null, list: async () => [], diskSpace: async () => null, network: () => ({ hostname: "", interfaces: {} }) };
 function app(options: { setupCode?: (folder: string) => SetupCode; groups?: Array<{ id: number; name: string; unitIds: number[] }>; updaterState?: (folder: string) => string } = {}) {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();

@@ -171,6 +171,7 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
       workerRestarts: worker.restarts,
       configured: { networkAddress: Boolean(config.networkAddress), networkPassword: Boolean(config.networkPassword), location: config.solarLatitude !== null && config.solarLongitude !== null },
       solarTimers: store.listSchedules().filter(schedule => schedule.solar).length,
+      port: process.env.PORT || "3000",
     };
     const [system, version] = await Promise.all([
       gatherSystemFacts(probes, { adapter: config.btAdapter || "hci0", dataDirectory: store.dataDirectory, pythonCommand: process.env.CASAMBI_PYTHON_COMMAND || "python3" }),
