@@ -30,4 +30,4 @@ jobs:
       - name: Build
         run: pnpm build
       - name: Lint shell scripts
-        run: shellcheck deploy/install.sh scripts/validate-package.sh
+        run: shellcheck deploy/install.sh deploy/update.sh scripts/validate-package.sh

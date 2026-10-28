@@ -87,6 +87,7 @@ describe("LocalStore", () => {
     expect(() => database.revokeApiKey(999)).toThrow("API key does not exist.");
   });
 
+  // These insert over 20,000 audit rows, which takes several seconds on a CI runner.
   it("prunes everyday events separately, so they cannot push security events out of the audit log", () => {
     const database = store();
     database.audit("admin", "user.deleted", { id: 7 });
@@ -94,7 +95,7 @@ describe("LocalStore", () => {
     for (let index = 1; index <= AUDIT_RETENTION + 499; index += 1) database.audit("operator", "lighting.control", { index });
     expect(database.recentAudit(1, "user.")).toEqual([expect.objectContaining({ action: "user.deleted", detail: { id: 7 } })]);
     expect(database.recentAudit(AUDIT_RETENTION + 10, "lighting.")).toHaveLength(AUDIT_RETENTION);
-  });
+  }, 30_000);
 
   it("prunes the audit log to the newest entries and matches action prefixes literally", () => {
     const database = store();
@@ -105,7 +106,7 @@ describe("LocalStore", () => {
     expect(count).toBe(AUDIT_RETENTION);
     expect(database.recentAudit(3, "bridge.").every(entry => entry.action === "bridge.poll_failed")).toBe(true);
     expect(database.recentAudit(3, "bridge_")).toEqual([]);
-  });
+  }, 30_000);
 
   it("stops accepting an API key once it has expired", () => {
     vi.useFakeTimers({ now: new Date("2026-10-26T12:00:00Z") });

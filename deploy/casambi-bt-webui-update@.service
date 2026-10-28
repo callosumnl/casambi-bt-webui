@@ -1,0 +1,13 @@
+[Unit]
+Description=Casambi BT WebGUI update (%i)
+Documentation=file:///opt/casambi-bt-webui/deploy/update.sh
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Started by casambi-bt-webui-update-%i.path when the web app asks, and daily (check only) by the
+# timer. Runs as root like deploy/install.sh, which it calls; the web app can only request it.
+Type=oneshot
+ExecStart=/opt/casambi-bt-webui/deploy/update.sh %i
+Environment=HOME=/root
+TimeoutStartSec=45min

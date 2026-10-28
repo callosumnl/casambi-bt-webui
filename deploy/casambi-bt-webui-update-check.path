@@ -1,0 +1,10 @@
+[Unit]
+Description=Start a Casambi BT WebGUI update check when the web app asks for one
+
+[Path]
+# The web app (user casambi) creates this file; update.sh deletes it when it starts.
+PathExists=/var/lib/casambi-bt-webui/update/check-request
+Unit=casambi-bt-webui-update@check.service
+
+[Install]
+WantedBy=multi-user.target

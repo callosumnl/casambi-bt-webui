@@ -14,6 +14,7 @@ SERVICE_USER="${SERVICE_USER:-casambi}"
 DATA_DIR=/var/lib/casambi-bt-webui
 ENV_FILE=/etc/casambi-bt-webui.env
 UNIT_FILE=/etc/systemd/system/casambi-bt-webui.service
+UPDATER_DIR=/var/lib/casambi-bt-webui-updater
 NODE_MAJOR=22
 # NodeSource's apt signing key; the downloaded key must match it before apt trusts the repository.
 # Cross-checked against keyserver.ubuntu.com.
@@ -145,8 +146,20 @@ sed -e "s|/opt/casambi-bt-webui|$APP_DIR|g" -e "s|/usr/bin/node|$NODE_BIN|" \
     "$APP_DIR/deploy/casambi-bt-webui.service" > "$unit"
 sudo install -m 0644 "$unit" "$UNIT_FILE"
 rm -f "$unit"
+# Updates from the web app: the service (user casambi) may only drop a request file in $DATA_DIR/update;
+# path units then start deploy/update.sh as root, which reports to a directory the service can only read.
+sudo install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR/update"
+sudo install -d -m 0755 -o root -g root "$UPDATER_DIR"
+for updater_unit in casambi-bt-webui-update@.service casambi-bt-webui-update-check.path casambi-bt-webui-update-apply.path casambi-bt-webui-update-check.timer; do
+  rendered="$(mktemp)"
+  sed -e "s|/opt/casambi-bt-webui|$APP_DIR|g" "$APP_DIR/deploy/$updater_unit" > "$rendered"
+  sudo install -m 0644 "$rendered" "/etc/systemd/system/$updater_unit"
+  rm -f "$rendered"
+done
 sudo systemctl daemon-reload
 sudo systemctl enable casambi-bt-webui.service >/dev/null 2>&1
+sudo systemctl enable --now casambi-bt-webui-update-check.path casambi-bt-webui-update-apply.path casambi-bt-webui-update-check.timer >/dev/null 2>&1 \
+  || echo "Warning: could not enable updates from the web app." >&2
 # restart, not `enable --now`: a running service must pick up the new build.
 sudo systemctl restart casambi-bt-webui.service
 

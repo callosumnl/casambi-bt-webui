@@ -11,14 +11,15 @@ import { SolarSchedule, validateSolarLocation, validateSolarSchedule } from "./s
 import { switchRulePatchSchema, switchRuleSchema } from "./switchRules";
 import { openApiDocument } from "./openapi";
 import { SetupCode } from "./setupCode";
+import { Updater, UpdateMode } from "./updates";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
 import { apiKeyCreateSchema, awayDateSetSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
- * `probes` read the system for the diagnostics; tests replace them.
+ * `probes` read the system for the diagnostics, and `updater` requests updates; tests replace both.
  */
-type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes };
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 
 /** Wraps async routes in a stable JSON error response. */
@@ -82,7 +83,7 @@ function normalizeHolidayDates(dates: string[]): string[] { return Array.from(ne
 function assertAwayDateSet(id: number | null | undefined, store: LocalStore): AwayDateSet | null { if (id == null) return null; const set = store.getAwayDateSet(id); if (!set) throw new Error("Away-date set does not exist."); return set; }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
-export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes }: Dependencies): Router {
+export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory) }: Dependencies): Router {
   const api = Router();
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
   // Password guessing gets its own, much tighter budget; successful sign-ins do not count against it.
@@ -185,6 +186,16 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
     response.setHeader("Content-Disposition", `attachment; filename="casambi-diagnostics-${report.generatedAt.slice(0, 19).replace(/:/g, "-")}.json"`);
     response.json(bundle);
   }));
+  api.get("/admin/update", requireAuth(store, "admin"), route(async (_request, response) => {
+    response.json({ supported: updater.supported, running: await appVersion(probes), pending: { check: updater.pending("check"), apply: updater.pending("apply") }, status: updater.status() });
+  }));
+  for (const mode of ["check", "apply"] as UpdateMode[]) {
+    api.post(`/admin/update/${mode}`, requireAuth(store, "admin"), route(async (_request, response) => {
+      updater.request(mode);
+      store.audit(principal(response).name, `update.${mode}_requested`, {});
+      response.status(202).json({ requested: mode });
+    }));
+  }
   api.get("/admin/worker", requireAuth(store, "admin"), (_request, response) => response.json(service.workerState()));
   api.post("/admin/worker/restart", requireAuth(store, "admin"), route(async (_request, response) => { response.status(202).json(service.restartWorker(principal(response).name)); }));
   api.post("/admin/connect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.connect()); }));

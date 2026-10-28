@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { mkdtempSync, rmSync } from "fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,7 @@ import { EventHub } from "./events";
 import { DurableScheduler } from "./scheduler";
 import { SetupCode } from "./setupCode";
 import type { Probes } from "./diagnostics";
+import { Updater } from "./updates";
 import { LocalStore } from "./store";
 import { existsSync } from "fs";
 
@@ -18,12 +19,12 @@ const stores = new WeakMap<object, LocalStore>();
 const instanceStore = (instance: object) => stores.get(instance)!;
 /** Answers every system probe with "not available", so tests never run real system commands. */
 const noProbes: Probes = { run: async () => null, read: async () => null, list: async () => [], diskSpace: async () => null };
-function app(options: { setupCode?: (folder: string) => SetupCode; groups?: Array<{ id: number; name: string; unitIds: number[] }> } = {}) {
+function app(options: { setupCode?: (folder: string) => SetupCode; groups?: Array<{ id: number; name: string; unitIds: number[] }>; updaterState?: (folder: string) => string } = {}) {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
   const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: options.groups ?? [], scenes: [], rooms: [], updatedAt: new Date().toISOString(), connection: { phase: "idle" } }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
-  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder), probes: noProbes })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
+  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder), probes: noProbes, updater: new Updater(join(folder, "data"), options.updaterState?.(folder) ?? join(folder, "no-updater")) })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
 }
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })));
 
@@ -367,5 +368,24 @@ describe("REST API", () => {
     const instance = app(); const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
     const refused = await request(instance).post("/api/v1/admin/rooms/from-groups").set("Authorization", `Bearer ${admin.body.token}`).expect(422);
     expect(refused.body.error.message).toBe("No Casambi groups found; a connected network with groups is required.");
+  });
+
+  it("requests updates through a file only when the updater is installed, and reports its status", async () => {
+    let state = "";
+    const instance = app({ updaterState: folder => (state = join(folder, "updater")) });
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    expect((await request(instance).get("/api/v1/admin/update").set(auth).expect(200)).body).toMatchObject({ supported: false, status: {} });
+    expect((await request(instance).post("/api/v1/admin/update/check").set(auth).expect(422)).body.error.message).toContain("deploy/install.sh must run once");
+
+    mkdirSync(state);
+    writeFileSync(join(state, "status.json"), JSON.stringify({ state: "available", behind: 2, changes: ["Second", "Third"] }));
+    await request(instance).post("/api/v1/admin/update/apply").set(auth).expect(202);
+    const status = await request(instance).get("/api/v1/admin/update").set(auth).expect(200);
+    expect(status.body).toMatchObject({ supported: true, pending: { check: false, apply: true }, status: { state: "available", behind: 2, changes: ["Second", "Third"] } });
+    expect(instanceStore(instance).recentAudit(5, "update.").map(entry => entry.action)).toEqual(["update.apply_requested"]);
+
+    writeFileSync(join(state, "status.json"), JSON.stringify({ state: "updating" }));
+    expect((await request(instance).post("/api/v1/admin/update/apply").set(auth).expect(422)).body.error.message).toBe("An update is already running; it must finish first.");
   });
 });

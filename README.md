@@ -58,7 +58,7 @@ Settings live in `/etc/casambi-bt-webui.env`; change them with `sudoedit /etc/ca
 | Check the system | Admin → **SYSTEM CHECK** (or **DIAGNOSE** in the desktop menu): Bluetooth, Wi-Fi interference, the Casambi connection, clock, storage, temperature, and power, with advice. **DOWNLOAD DIAGNOSTICS FILE** gives one file to share when asking for help; it contains no passwords or keys. |
 | Restart after a settings change | `sudo systemctl restart casambi-bt-webui` |
 | Inspect service logs | `sudo journalctl -u casambi-bt-webui.service -n 200 --no-pager` |
-| Update | `cd /opt/casambi-bt-webui && git pull && ./deploy/install.sh` |
+| Update | Admin → **UPDATES**: **CHECK FOR UPDATES**, then **UPDATE NOW**. The Pi also checks once a day by itself. A failed update restores the previous version automatically. By hand: `cd /opt/casambi-bt-webui && git pull && ./deploy/install.sh` (also needed once on installs from before updates from the app existed). |
 | Back up state | Stop the service and securely copy all of `/var/lib/casambi-bt-webui/`, including the SQLite database and upstream Casambi cache. |
 | Restore state | Stop the service, restore `/var/lib/casambi-bt-webui/` with owner `casambi:casambi`, then start the service. |
 | Development without hardware | Set `CASAMBI_MOCK_MODE=true`, then run `pnpm dev`; mock fixtures are clearly marked development-only. |
