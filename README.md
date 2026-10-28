@@ -55,6 +55,7 @@ Settings live in `/etc/casambi-bt-webui.env`; change them with `sudoedit /etc/ca
 
 | Task | Command or action |
 | --- | --- |
+| Check the system | Admin → **SYSTEM CHECK** (or **DIAGNOSE** in the desktop menu): Bluetooth, Wi-Fi interference, the Casambi connection, clock, storage, temperature, and power, with advice. **DOWNLOAD DIAGNOSTICS FILE** gives one file to share when asking for help; it contains no passwords or keys. |
 | Restart after a settings change | `sudo systemctl restart casambi-bt-webui` |
 | Inspect service logs | `sudo journalctl -u casambi-bt-webui.service -n 200 --no-pager` |
 | Update | `cd /opt/casambi-bt-webui && git pull && ./deploy/install.sh` |

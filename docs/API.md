@@ -29,7 +29,9 @@ Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401
 | `PATCH`, `DELETE` | `/schedules/:id` | owner or admin | Edits (only the fields sent) or deletes a timer. |
 | `GET` | `/away-date-sets` | user | Lists shared away-date sets for the timer form. |
 | `GET`, `PUT` | `/admin/config` | admin | Reads safe settings or saves encrypted bridge configuration, including bounded polling enablement and interval. |
-| `GET` | `/admin/discovery` | admin | Scans nearby Casambi networks. |
+| `GET` | `/admin/diagnostics` | admin | The system check: Bluetooth service and adapter, Wi-Fi interference (2.4 GHz Wi-Fi shares the Pi's radio with Bluetooth), the Casambi connection and last connect, Bluetooth command times, clock, location, storage, temperature, and power, each `ok`/`warn`/`fail`/`info` with advice; plus versions. Checks that cannot be read report `info`. |
+| `GET` | `/admin/diagnostics/bundle` | admin | The same as a downloadable JSON file, with the facts behind the checks, the worker state, the safe configuration, and the last 300 audit entries. No passwords or keys. |
+| `GET` | `/admin/discovery` | admin | Scans nearby Casambi networks for 5 s: `[{ address, rssi }]`, strongest signal first (`rssi` in dBm, `null` when it could not be measured). |
 | `POST` | `/admin/connect`, `/admin/disconnect` | admin | Connects or disconnects the live Bluetooth bridge. |
 | `POST` | `/admin/rooms` | admin | Creates a local room with a default brightness. |
 | `PATCH`, `DELETE` | `/admin/rooms/:id` | admin | Renames (`{ name }`) or deletes a room. Deleting a room that timers, switch rules, or scenes use returns `409` naming them. |

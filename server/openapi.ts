@@ -76,7 +76,12 @@ const schemas: Record<string, JsonSchema> = {
     description: "Units, groups, and Casambi scenes with local names and room assignments. Levels are 0-255.",
   },
   Sensor: object({ deviceId: { type: "integer" }, deviceName: { type: "string" }, label: { type: "string" }, value: nullable({ type: "number" }), unit: nullable({ type: "string" }) }),
-  DiscoveredNetwork: object({ address: { type: "string", description: "BLE address of a Casambi network endpoint in range." } }),
+  SystemCheck: object({
+    generatedAt: timestamp,
+    checks: { type: "array", items: object({ id: { type: "string" }, title: { type: "string" }, status: { type: "string", enum: ["ok", "warn", "fail", "info"] }, detail: { type: "string" }, advice: { type: "string" } }, ["id", "title", "status", "detail"]) },
+    versions: { type: "object", description: "Application version and commit, Node.js, and the Python Bluetooth libraries.", additionalProperties: { type: ["string", "null"] } },
+  }),
+  DiscoveredNetwork: object({ address: { type: "string", description: "BLE address of a Casambi network endpoint in range." }, rssi: nullable({ type: "integer", description: "Signal strength in dBm (closer to 0 is stronger); null when the scan could not measure it." }) }),
   LightScene: object({
     id, name: { type: "string" },
     scope: object({ type: { type: "string", enum: ["group", "room", "network"] }, id: nullable({ type: "integer" }) }),
@@ -161,7 +166,9 @@ const operations: Operation[] = [
   // Administration: bridge.
   { method: "get", path: "/admin/config", tag: "Admin: bridge", summary: "Bridge settings", access: "admin", responses: { 200: { description: "Settings without secrets.", schema: "CasambiConfig" } } },
   { method: "put", path: "/admin/config", tag: "Admin: bridge", summary: "Change bridge settings", description: "Omitted fields keep their value; an empty secret clears it.", access: "admin", body: "CasambiConfigUpdate", bodyRequired: true, responses: { 200: { description: "Saved.", schema: "CasambiConfig" } } },
-  { method: "get", path: "/admin/discovery", tag: "Admin: bridge", summary: "Scan for Casambi networks", access: "admin", responses: { 200: { description: "Networks in range.", schema: list("DiscoveredNetwork") } } },
+  { method: "get", path: "/admin/diagnostics", tag: "Admin: bridge", summary: "System check", description: "Checks Bluetooth, Wi-Fi interference, the Casambi connection, the clock, storage, temperature, and power, each with advice. Reads the system without privileges; checks that cannot be read report `info`.", access: "admin", responses: { 200: { description: "The checks and versions.", schema: "SystemCheck" } } },
+  { method: "get", path: "/admin/diagnostics/bundle", tag: "Admin: bridge", summary: "Download a diagnostics file", description: "A JSON file with the checks, the facts behind them, versions, the worker state, the safe configuration, and the last 300 audit entries, for whoever helps troubleshoot. Contains no passwords or keys.", access: "admin", responses: { 200: { description: "The diagnostics file (attachment).", schema: { type: "object" } } } },
+  { method: "get", path: "/admin/discovery", tag: "Admin: bridge", summary: "Scan for Casambi networks", description: "A 5-second Bluetooth scan; light commands wait while it runs. Strongest signal first.", access: "admin", responses: { 200: { description: "Networks in range.", schema: list("DiscoveredNetwork") } } },
   { method: "post", path: "/admin/connect", tag: "Admin: bridge", summary: "Connect", access: "admin", responses: { 200: { description: "Connected.", schema: "NetworkSnapshot" } } },
   { method: "post", path: "/admin/disconnect", tag: "Admin: bridge", summary: "Disconnect", access: "admin", responses: { 200: { description: "Disconnected.", schema: "NetworkSnapshot" } } },
   { method: "get", path: "/admin/worker", tag: "Admin: bridge", summary: "Bluetooth worker state", access: "admin", responses: { 200: { description: "Worker state.", schema: "WorkerState" } } },

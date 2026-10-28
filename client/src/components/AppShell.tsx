@@ -1,4 +1,4 @@
-import { Activity, BookOpen, CalendarClock, CircuitBoard, LogOut, Settings2, ShieldCheck } from "lucide-react";
+import { Activity, BookOpen, CalendarClock, CircuitBoard, LogOut, Settings2, ShieldCheck, Stethoscope } from "lucide-react";
 import { ReactNode } from "react";
 import { Link, useLocation } from "wouter";
 import { Role } from "@/lib/localApi";
@@ -8,8 +8,9 @@ const nav = [{ href: "/", label: "CONTROL", icon: CircuitBoard }, { href: "/sche
 /** Persistent HUD navigation for authenticated appliance sessions. */
 export function AppShell({ role, username, onLogout, children }: { role: Role; username: string; onLogout: () => void; children: ReactNode }) {
   const [location] = useLocation();
-  // The API reference is a desktop tool; the phone navigation stays at three tabs (see .rail-link.desktop-only).
-  const items = role === "admin" ? [...nav, { href: "/admin", label: "ADMIN", icon: Settings2 }, { href: "/api", label: "API", icon: BookOpen, desktopOnly: true }] : nav;
+  // The API reference and diagnostics are desktop entries; the phone navigation stays at three tabs (see .rail-link.desktop-only),
+  // and phones reach diagnostics from the Admin page.
+  const items = role === "admin" ? [...nav, { href: "/admin", label: "ADMIN", icon: Settings2 }, { href: "/diagnostics", label: "DIAGNOSE", icon: Stethoscope, desktopOnly: true }, { href: "/api", label: "API", icon: BookOpen, desktopOnly: true }] : nav;
   return <div className="app-shell">
     <aside className="side-rail">
       <div className="brand-mark"><span>CB</span><small>Casambi BT<br />WebGUI</small></div>

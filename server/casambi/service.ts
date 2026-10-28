@@ -98,7 +98,8 @@ export class CasambiService {
   }
 
   /** Discovers nearby Casambi networks using the actual Bluetooth adapter. */
-  public discover(): Promise<Array<{ address: string }>> { return this.bridge.execute("discover"); }
+  /** Casambi networks in range, strongest signal first; `rssi` (dBm) is null when the scan could not measure it. */
+  public discover(): Promise<Array<{ address: string; rssi: number | null }>> { return this.bridge.execute("discover"); }
 
   /** Manual connect: takes over from any pending automatic retry. A failure is reported to the caller and not retried. */
   public async connect(): Promise<NetworkSnapshot> {

@@ -9,18 +9,21 @@ import { CasambiService } from "./casambi/service";
 import { EventHub } from "./events";
 import { DurableScheduler } from "./scheduler";
 import { SetupCode } from "./setupCode";
+import type { Probes } from "./diagnostics";
 import { LocalStore } from "./store";
 import { existsSync } from "fs";
 
 const folders: string[] = [];
 const stores = new WeakMap<object, LocalStore>();
 const instanceStore = (instance: object) => stores.get(instance)!;
+/** Answers every system probe with "not available", so tests never run real system commands. */
+const noProbes: Probes = { run: async () => null, read: async () => null, list: async () => [], diskSpace: async () => null };
 function app(options: { setupCode?: (folder: string) => SetupCode } = {}) {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
-  const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
+  const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString(), connection: { phase: "idle" } }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
-  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder) })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
+  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder), probes: noProbes })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
 }
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })));
 
@@ -323,5 +326,23 @@ describe("REST API", () => {
     const missing = await request(instance).put("/api/v1/admin/devices/room").set(auth).send({ unitIds: [4], roomId: 999 }).expect(422);
     expect(missing.body.error.message).toBe("A referenced item does not exist.");
     expect(instanceStore(instance).getUnitMetadata().some(metadata => metadata.unitId === 4)).toBe(false);
+  });
+
+  it("runs the system check for admins and gives a diagnostics file without secrets", async () => {
+    const instance = app(); const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    await request(instance).put("/api/v1/admin/config").set(auth).send({ networkAddress: "AB:CD:EF:01:23:45", networkPassword: "very-secret-network-pass" }).expect(200);
+    await request(instance).post("/api/v1/admin/users").set(auth).send({ username: "operator", password: "another-strong-password", role: "user" }).expect(201);
+    const user = await request(instance).post("/api/v1/auth/login").send({ username: "operator", password: "another-strong-password" });
+    await request(instance).get("/api/v1/admin/diagnostics").set("Authorization", `Bearer ${user.body.token}`).expect(403);
+
+    const report = await request(instance).get("/api/v1/admin/diagnostics").set(auth).expect(200);
+    expect(report.body.checks).toEqual(expect.arrayContaining([expect.objectContaining({ id: "casambi-config", status: "info", detail: "Not connected." })]));
+    expect(report.body.versions.node).toBe(process.version);
+
+    const bundle = await request(instance).get("/api/v1/admin/diagnostics/bundle").set(auth).expect(200);
+    expect(bundle.headers["content-disposition"]).toMatch(/^attachment; filename="casambi-diagnostics-[\d-]+T[\d-]+\.json"$/);
+    expect(bundle.body).toMatchObject({ configuration: { networkAddress: "AB:CD:EF:01:23:45", hasNetworkPassword: true }, audit: expect.any(Array) });
+    expect(JSON.stringify(bundle.body)).not.toContain("very-secret-network-pass");
   });
 });

@@ -11,10 +11,14 @@ import { SolarSchedule, validateSolarLocation, validateSolarSchedule } from "./s
 import { switchRulePatchSchema, switchRuleSchema } from "./switchRules";
 import { openApiDocument } from "./openapi";
 import { SetupCode } from "./setupCode";
+import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
 import { apiKeyCreateSchema, awayDateSetSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
 
-/** `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install. */
-type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode };
+/**
+ * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
+ * `probes` read the system for the diagnostics; tests replace them.
+ */
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 
 /** Wraps async routes in a stable JSON error response. */
@@ -78,7 +82,7 @@ function normalizeHolidayDates(dates: string[]): string[] { return Array.from(ne
 function assertAwayDateSet(id: number | null | undefined, store: LocalStore): AwayDateSet | null { if (id == null) return null; const set = store.getAwayDateSet(id); if (!set) throw new Error("Away-date set does not exist."); return set; }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
-export function createCasambiApi({ store, service, events, scheduler, setupCode }: Dependencies): Router {
+export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes }: Dependencies): Router {
   const api = Router();
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
   // Password guessing gets its own, much tighter budget; successful sign-ins do not count against it.
@@ -149,6 +153,38 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode 
   api.get("/admin/config", requireAuth(store, "admin"), (_request, response) => response.json(store.getSafeCasambiConfig()));
   api.put("/admin/config", requireAuth(store, "admin"), route(async (request, response) => { const input = parsed(configSchema, request.body); if ("solarLatitude" in input || "solarLongitude" in input) { const current = store.getCasambiConfig(); const latitude = input.solarLatitude === undefined ? current.solarLatitude : input.solarLatitude; const longitude = input.solarLongitude === undefined ? current.solarLongitude : input.solarLongitude; if (latitude !== null || longitude !== null) validateSolarLocation({ latitude: latitude ?? undefined, longitude: longitude ?? undefined }); } service.saveConfiguration(input); scheduler.reload(); store.audit(principal(response).name, "config.updated", {}); response.json(store.getSafeCasambiConfig()); }));
   api.get("/admin/discovery", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.discover()); }));
+  /** Everything the system check looks at; the same data goes into the downloadable diagnostics file. */
+  const diagnose = async () => {
+    const config = store.getCasambiConfig();
+    const worker = service.workerState();
+    const connection = service.cachedSnapshot().connection;
+    const lastConnect = store.recentAudit(100, "bridge.diagnostic").find(entry => /^(Connected in|Connect failed)/.test(String(entry.detail.detail ?? "")));
+    const app: AppFacts = {
+      connection: { phase: connection.phase, ...("lastError" in connection && connection.lastError ? { lastError: connection.lastError } : {}) },
+      lastConnect: lastConnect ? { detail: String(lastConnect.detail.detail), at: lastConnect.createdAt } : null,
+      bluetoothTiming: worker.bluetooth,
+      workerRestarts: worker.restarts,
+      configured: { networkAddress: Boolean(config.networkAddress), networkPassword: Boolean(config.networkPassword), location: config.solarLatitude !== null && config.solarLongitude !== null },
+      solarTimers: store.listSchedules().filter(schedule => schedule.solar).length,
+    };
+    const [system, version] = await Promise.all([
+      gatherSystemFacts(probes, { adapter: config.btAdapter || "hci0", dataDirectory: store.dataDirectory, pythonCommand: process.env.CASAMBI_PYTHON_COMMAND || "python3" }),
+      appVersion(probes),
+    ]);
+    return { generatedAt: new Date().toISOString(), checks: evaluateChecks(system, app), versions: { app: version.version, commit: version.commit, node: process.version, ...(system.libraries ?? {}) }, system, app, worker };
+  };
+  api.get("/admin/diagnostics", requireAuth(store, "admin"), route(async (_request, response) => {
+    const { generatedAt, checks, versions } = await diagnose();
+    response.json({ generatedAt, checks, versions });
+  }));
+  // One file to hand to whoever helps: the checks with their facts, versions, and recent audit entries. No secrets:
+  // the configuration is the same safe view as /admin/config, and audit entries never contain passwords or keys.
+  api.get("/admin/diagnostics/bundle", requireAuth(store, "admin"), route(async (_request, response) => {
+    const report = await diagnose();
+    const bundle = { ...report, configuration: store.getSafeCasambiConfig(), environment: { nodeEnv: process.env.NODE_ENV ?? null, mockMode: process.env.CASAMBI_MOCK_MODE === "true", trustProxy: process.env.CASAMBI_TRUST_PROXY === "true", port: process.env.PORT ?? "3000" }, audit: store.recentAudit(300) };
+    response.setHeader("Content-Disposition", `attachment; filename="casambi-diagnostics-${report.generatedAt.slice(0, 19).replace(/:/g, "-")}.json"`);
+    response.json(bundle);
+  }));
   api.get("/admin/worker", requireAuth(store, "admin"), (_request, response) => response.json(service.workerState()));
   api.post("/admin/worker/restart", requireAuth(store, "admin"), route(async (_request, response) => { response.status(202).json(service.restartWorker(principal(response).name)); }));
   api.post("/admin/connect", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await service.connect()); }));

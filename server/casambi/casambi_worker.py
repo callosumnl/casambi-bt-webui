@@ -62,6 +62,8 @@ SHUTDOWN_DISCONNECT_SECONDS = 5
 # here (a healthy one has taken 42 s); Node's 90 s command timeout and watchdog cover it.
 PREVIOUS_DISCONNECT_TIMEOUT_SECONDS = 8
 DISCOVERY_TIMEOUT_SECONDS = 20
+# Casambi's Bluetooth SIG company identifier, which casambi-bt's discover() filters on as well.
+CASAMBI_MANUFACTURER_ID = 963
 
 
 async def discover_with_timeout(discover: Any) -> list[Any]:
@@ -512,13 +514,32 @@ class CasambiWorker:
             self.apply_fast_writes(report=True)
         return {"ok": True, "fastWrites": self.fast_writes, "active": self.fast_writes_active()}
 
-    async def discover(self) -> list[dict[str, str]]:
-        """Discover nearby Casambi networks through the upstream filtering logic."""
-        if self.mock:
-            return [{"address": "00:00:00:00:00:01"}]
-        from CasambiBt import discover
+    async def discover(self) -> list[dict[str, Any]]:
+        """Discover nearby Casambi networks, with each one's signal strength (RSSI, dBm) when available.
 
-        return [{"address": device.address} for device in await discover_with_timeout(discover)]
+        casambi-bt's discover() returns BLEDevice objects, which no longer carry an RSSI in current bleak, so
+        this scans with bleak directly and applies the same filter (Casambi's manufacturer id and service
+        UUID). If that is not possible (another casambi-bt or bleak), it falls back to casambi-bt without RSSI.
+        """
+        if self.mock:
+            return [{"address": "00:00:00:00:00:01", "rssi": -50}]
+        try:
+            from bleak import BleakScanner
+            from CasambiBt._constants import CASA_UUID
+        except ImportError:
+            from CasambiBt import discover
+
+            return [{"address": device.address, "rssi": None} for device in await discover_with_timeout(discover)]
+
+        async def scan() -> list[dict[str, Any]]:
+            found = await BleakScanner.discover(return_adv=True)
+            return [
+                {"address": device.address, "rssi": advertisement.rssi}
+                for device, advertisement in found.values()
+                if CASAMBI_MANUFACTURER_ID in advertisement.manufacturer_data and CASA_UUID in advertisement.service_uuids
+            ]
+
+        return sorted(await discover_with_timeout(scan), key=lambda endpoint: -(endpoint["rssi"] if endpoint["rssi"] is not None else -999))
 
     async def control(self, payload: dict[str, Any]) -> dict[str, Any]:
         """Run one validated control request against a unit, group, scene, or network.

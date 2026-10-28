@@ -1,0 +1,16 @@
+/* System check: one row per check, coloured by status, with advice underneath. */
+.check-list { display: grid; gap: .5rem; margin: .6rem 0 0; padding: 0; list-style: none; }
+.check { display: flex; gap: .7rem; padding: .65rem .75rem; background: rgba(255,255,255,.025); border: 1px solid rgba(255,255,255,.08); border-left-width: 3px; }
+.check > svg { flex: none; width: 18px; margin-top: .1rem; }
+.check div { min-width: 0; }
+.check strong { font-size: .85rem; }
+.check p { margin: .25rem 0 0; color: var(--muted); font-size: .78rem; line-height: 1.5; overflow-wrap: anywhere; }
+.check .check-advice { color: var(--lavender); }
+.check.ok { border-left-color: #6dffb5; } .check.ok > svg { color: #6dffb5; }
+.check.warn { border-left-color: #ffd36d; } .check.warn > svg { color: #ffd36d; }
+.check.fail { border-left-color: var(--danger); } .check.fail > svg { color: var(--danger); }
+.check.info { border-left-color: rgba(255,255,255,.2); } .check.info > svg { color: var(--muted); }
+.version-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: .4rem .9rem; margin: 0; }
+.version-list div { display: flex; justify-content: space-between; gap: .5rem; padding: .35rem 0; border-bottom: 1px solid rgba(255,255,255,.07); }
+.version-list dt { color: var(--muted); font: .62rem "DM Mono"; letter-spacing: .06em; }
+.version-list dd { margin: 0; color: var(--lavender); font: .66rem "DM Mono"; overflow-wrap: anywhere; text-align: right; }
