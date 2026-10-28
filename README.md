@@ -102,55 +102,11 @@ Use an address returned by that command. If it returns an empty list, move the P
 
 The Python bridge restarts after unexpected exit with capped exponential backoff. Commands are serialized and timeout-bounded so one malformed response cannot permanently block the HTTP service. When an administrator enables polling, the service requests fresh snapshots at the selected interval and backs off after errors. A bridge disconnect publishes state updates to browser clients and is recorded in the audit history without returning secrets.
 
-## Development and testing
-
-Install the JavaScript packages and Python library as above, then run the following from the repository root.
-
-```bash
-pnpm install
-pnpm check
-pnpm test
-pnpm build
-CASAMBI_MOCK_MODE=true pnpm dev
-```
-
-## Python package preparation
-
-The repository is also prepared for a future PyPI distribution named `casambi-bt-webui`. Its wheel is a **Raspberry Pi deployment companion**, not a replacement for the Node.js web application: it provides the `casambi-bt-webui` command for prerequisite diagnostics and for writing non-secret systemd and environment templates. The complete UI and API continue to be deployed from this repository.
-
-```bash
-# Available after a future PyPI release, or from a locally built wheel.
-casambi-bt-webui doctor
-casambi-bt-webui systemd-template
-casambi-bt-webui write-templates --directory ./deployment-templates
-```
-
-See [the PyPI release guide](docs/PYPI_RELEASE.md) for the build, TestPyPI, Trusted Publishing, and production-release process.
-
-The Vitest suite covers password and API-key handling, encrypted settings, role-protected REST routes, bridge JSON-lines correlation and events, and schedule validation. It deliberately uses a deterministic mock bridge in development; no automated test attempts to address live Bluetooth hardware.
-
-After deploying on a connected Raspberry Pi, run the hardware-facing smoke test to verify the real bridge and any reported SENSOR controls. Obtain an `admin` or `user` JWT from the login endpoint, then run the script locally; it never prints Casambi credentials.
-
-```bash
-CASAMBI_JWT='your-jwt' node scripts/verify-live-bridge.mjs
-```
-
 ## Feature boundary
 
 The upstream library directly provides units, groups, scenes, fixture control types, unit state callbacks, and physical switch events. It does **not** currently expose rooms as a first-class model; rooms, custom names, and local assignments are therefore stored in the Pi’s SQLite database. The bridge additionally captures SENSOR bitfields from subsequent upstream state packets before the upstream parser discards them. These live readings are intentionally labelled `raw` because fixture-specific engineering-unit conversion is not documented by the upstream package. The interface and REST API mirror every upstream entity that can be obtained through the current library, and they display controls only where a connected fixture reports that capability. [1]
 
 See [the REST API reference](docs/API.md) for endpoints and `curl` examples, [the architecture document](docs/ARCHITECTURE.md) for bridge, storage, security, and scheduling design details, and [the development guide](docs/DEVELOPMENT.md) for commands and conventions when changing the code.
-
-## GitHub workflow
-
-The repository is configured for the intended private GitHub destination. To publish local changes manually after validation, use a normal reviewable Git workflow.
-
-```bash
-git status
-git add .
-git commit -m "Describe the change"
-git push origin main
-```
 
 ## Buy me a coffee ☕
 
