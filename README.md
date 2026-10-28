@@ -2,6 +2,8 @@
 
 **Casambi BT WebGUI** is a self-hosted lighting-control appliance for a Raspberry Pi. It places a cyberpunk-styled React interface, a JWT- and API-key-protected REST API, a local SQLite configuration store, durable timer rules, and a supervised Node.js-to-Python Bluetooth bridge behind one local service. The Python bridge uses [`lkempf/casambi-bt`](https://github.com/lkempf/casambi-bt), which must be treated as an unofficial, alpha-quality Casambi protocol implementation. [1]
 
+[![Buy me a coffee on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/callosum/)
+
 > **Disclaimer:** Casambi BT WebGUI is an independent open-source project. It is not affiliated with, endorsed by, or supported by Casambi Technologies. "Casambi" is a trademark of Casambi Technologies and is used here only to describe the lighting system this software works with. The Bluetooth protocol support comes from the unofficial [`casambi-bt`](https://github.com/lkempf/casambi-bt) library; use this software at your own risk.
 
 Sign in with a local account. The initial `admin` account is created in the browser with a one-time setup code that the installer prints.
@@ -149,6 +151,10 @@ git add .
 git commit -m "Describe the change"
 git push origin main
 ```
+
+## Buy me a coffee ☕
+
+This project grew out of many evenings, a lot of testing in a dark living room, and the occasional "why is the hallway lamp blinking?". If it saves you time, or you smile when your lights come on at sunset all by themselves, you can say thanks on [Ko-fi](https://ko-fi.com/callosum/). Every coffee keeps the updates coming. 💡
 
 ## License
 
