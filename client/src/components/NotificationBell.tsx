@@ -2,6 +2,7 @@ import { Bell } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Link } from "wouter";
+import { t } from "@/lib/i18n";
 import { LocalApi } from "@/lib/localApi";
 import { freshNotifications, newestNotificationId, type NotificationsInfo } from "@/lib/notifications";
 
@@ -35,6 +36,6 @@ export function NotificationBell() {
     window.addEventListener("notifications-changed", reload);
     return () => { stopped = true; window.clearInterval(timer); window.removeEventListener("notifications-changed", reload); };
   }, [api]);
-  const label = unread ? `${unread} unread notification${unread === 1 ? "" : "s"}` : "Notifications";
+  const label = unread ? (unread === 1 ? t("{count} unread notification", { count: unread }) : t("{count} unread notifications", { count: unread })) : t("Notifications");
   return <Link href="/admin#notifications" className={`notification-bell ${unread ? "has-unread" : ""}`} aria-label={label} title={label}><Bell />{unread > 0 && <span>{unread > 99 ? "99+" : unread}</span>}</Link>;
 }

@@ -1,3 +1,5 @@
+import { t } from "@/lib/i18n";
+
 /** Mirrors `GET /admin/server-settings`. */
 export type ServerSettingsInfo = {
   supported: boolean;
@@ -16,7 +18,7 @@ export function addressOnPort(location: { protocol: string; hostname: string }, 
 
 /** The panel's line about the last change, or null when there is nothing to report. */
 export function describeSettingsStatus(info: ServerSettingsInfo): string | null {
-  if (!info.supported) return "Changing these from the app is set up by running deploy/install.sh once more on the Pi (cd /opt/casambi-bt-webui && git pull && ./deploy/install.sh).";
-  if (info.pending) return "Applying the new settings…";
+  if (!info.supported) return t("Changing these from the app is set up by running deploy/install.sh once more on the Pi (cd /opt/casambi-bt-webui && git pull && ./deploy/install.sh).");
+  if (info.pending) return t("Applying the new settings…");
   return info.status.message ?? null;
 }

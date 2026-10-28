@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { connectedBuild, watchBuild } from "@/lib/buildWatch";
 import { ConnectionStatus, LocalApi, LocalScene, NetworkSnapshot, SceneScope } from "@/lib/localApi";
+import { t } from "@/lib/i18n";
 
 /** Loads the Casambi network and saved scenes, keeps them live over SSE, and sends controls. */
 export function useNetwork() {
@@ -13,11 +14,11 @@ export function useNetwork() {
   // While the event stream is open it delivers every post-command snapshot, so the POST can skip its duplicate body.
   const live = useRef(false);
   const lastCommandError = useRef<string | null>(null);
-  const LIVE_LOST = "Live connection interrupted; reconnecting automatically.";
+  const LIVE_LOST = t("Live connection interrupted; reconnecting automatically.");
 
   /** Surfaces a failed control in the dashboard warning, and clears it again after the next successful control. */
   const reportCommand = useCallback((reason: unknown) => {
-    const message = reason === undefined ? null : reason instanceof Error ? reason.message : "The lighting command failed.";
+    const message = reason === undefined ? null : reason instanceof Error ? reason.message : t("The lighting command failed.");
     const previous = lastCommandError.current;
     lastCommandError.current = message;
     setError(current => message ?? (current === previous ? null : current));
@@ -26,7 +27,7 @@ export function useNetwork() {
   /** Loads the server's cached state instantly; `fresh` asks the bridge instead (explicit sync buttons). */
   const refresh = useCallback(async (fresh = false) => {
     try { setError(null); const next = await api.request<NetworkSnapshot & { connection?: ConnectionStatus }>(fresh ? "/network?fresh=1" : "/network"); setNetwork(next); if (next.connection) setConnection(next.connection); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to load the Casambi network."); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : t("Unable to load the Casambi network.")); }
     finally { setLoading(false); }
   }, [api]);
 

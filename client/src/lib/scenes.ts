@@ -1,4 +1,5 @@
 import type { Device, LocalScene, NetworkSnapshot, SceneScope } from "./localApi";
+import { t } from "@/lib/i18n";
 
 /** Capabilities that make a unit a controllable light; switches and sensors report none of them. */
 const LAMP_CAPABILITIES = new Set(["dimmer", "onoff", "white", "rgb", "temperature", "vertical", "colorsource", "xy", "slider"]);
@@ -29,7 +30,7 @@ export function averageBrightnessPercent(lamps: Device[]): number {
 
 /** Scenes a timer or switch rule can activate: Casambi network scenes and scenes saved on the Pi, as `type:id` option values. */
 export function sceneTargetOptions(network: NetworkSnapshot | null, scenes: LocalScene[]): Array<{ value: string; label: string }> {
-  const scopeName = (scope: SceneScope) => scope.type === "network" ? "All lights" : scope.type === "group" ? network?.groups.find(group => group.id === scope.id)?.name ?? `Group ${scope.id}` : network?.rooms.find(room => room.id === scope.id)?.name ?? `Room ${scope.id}`;
+  const scopeName = (scope: SceneScope) => scope.type === "network" ? t("All lights") : scope.type === "group" ? network?.groups.find(group => group.id === scope.id)?.name ?? t("Group {id}", { id: String(scope.id) }) : network?.rooms.find(room => room.id === scope.id)?.name ?? t("Room {id}", { id: String(scope.id) });
   return [
     ...scenes.map(scene => ({ value: `local_scene:${scene.id}`, label: `${scene.name} · ${scopeName(scene.scope)}` })),
     ...(network?.scenes ?? []).map(scene => ({ value: `scene:${scene.id}`, label: `${scene.name} · Casambi` })),

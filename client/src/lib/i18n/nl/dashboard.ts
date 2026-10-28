@@ -1,0 +1,86 @@
+/** dashboard texts. */
+export const dashboard: Record<string, string> = {
+  // pages/Dashboard.tsx
+  "CONNECTING TO LIGHTING GRID…": "VERBINDEN MET DE VERLICHTING…",
+  "NETWORK OFFLINE": "NETWERK OFFLINE",
+  "No Casambi snapshot is available yet.": "Er is nog geen Casambi-momentopname beschikbaar.",
+  "RETRY LINK": "OPNIEUW VERBINDEN",
+  "ALL": "ALLES",
+  "All lights": "Alle lampen",
+  "GROUP": "GROEP",
+  "ROOM": "RUIMTE",
+  "Default {percent}%": "Standaard {percent}%",
+  "Not in a room": "Niet in een ruimte",
+  "Online": "Online",
+  "Offline": "Offline",
+  "No network": "Geen netwerk",
+  "{on}/{total} on": "{on}/{total} aan",
+  "Sync status with the lamps": "Status met de lampen synchroniseren",
+  "Find a room, group, or lamp": "Zoek een ruimte, groep of lamp",
+  "GROUPS & ROOMS": "GROEPEN & RUIMTES",
+  "LAMPS": "LAMPEN",
+  "No lamps yet.": "Nog geen lampen.",
+  "SET UP THE CASAMBI NETWORK": "CASAMBI-NETWERK INSTELLEN",
+  "No lamps yet. Ask an admin to connect the Casambi Bluetooth bridge.": "Nog geen lampen. Vraag een beheerder om de Casambi Bluetooth-brug te verbinden.",
+  "Nothing matches “{query}”.": "Niets gevonden voor “{query}”.",
+  "SENSORS": "SENSOREN",
+  "ON": "AAN",
+  "OFF": "UIT",
+  "{name} brightness": "Helderheid {name}",
+  "New name for {scene}": "Nieuwe naam voor {scene}",
+  "SAVE": "OPSLAAN",
+  "Cancel renaming": "Hernoemen annuleren",
+  "Scene stored in the Casambi network": "Scène opgeslagen in het Casambi-netwerk",
+  "Room default brightness": "Standaardhelderheid van de ruimte",
+  "Apply this scene": "Deze scène toepassen",
+  "Rename {scene}": "{scene} hernoemen",
+  "Rename": "Hernoemen",
+  "Update {scene} to the current lights": "{scene} bijwerken naar de huidige verlichting",
+  "Update to the current lights": "Bijwerken naar de huidige verlichting",
+  "Delete {scene}": "{scene} verwijderen",
+  "Delete": "Verwijderen",
+  "Scene name": "Naam van de scène",
+  "Name for the new {name} scene": "Naam voor de nieuwe scène van {name}",
+  "Cancel": "Annuleren",
+  "Save the current lights as a scene": "Huidige verlichting als scène opslaan",
+  "SCENE": "SCÈNE",
+  "DONE": "KLAAR",
+  "EDIT": "BEWERKEN",
+
+  // components/DeviceControlCard.tsx
+  "OFFLINE": "OFFLINE",
+  "Turn {name} off": "{name} uitzetten",
+  "Turn {name} on": "{name} aanzetten",
+  "DIM": "DIM",
+  "TEMP": "TEMP",
+  "{name} colour temperature": "Kleurtemperatuur {name}",
+
+  // components/ConnectionStatusBar.tsx
+  "CONNECTING TO THE CASAMBI NETWORK…": "VERBINDEN MET HET CASAMBI-NETWERK…",
+  "ATTEMPT {attempt}": "POGING {attempt}",
+  "This can take up to a minute.": "Dit kan tot een minuut duren.",
+  "CONNECTION FAILED": "VERBINDING MISLUKT",
+  "RETRYING IN {seconds} S": "NIEUWE POGING OVER {seconds} S",
+  "RETRYING NOW…": "NIEUWE POGING…",
+  "Attempt {attempt}: {error}": "Poging {attempt}: {error}",
+  "NOT CONNECTED": "NIET VERBONDEN",
+
+  // hooks/useNetwork.ts
+  "Live connection interrupted; reconnecting automatically.": "Live verbinding onderbroken; er wordt automatisch opnieuw verbonden.",
+  "The lighting command failed.": "De lichtopdracht is mislukt.",
+  "Unable to load the Casambi network.": "Het Casambi-netwerk kan niet worden geladen.",
+
+  // pages/NotFound.tsx
+  "Page Not Found": "Pagina niet gevonden",
+  "Sorry, the page you are looking for doesn't exist.": "Sorry, de pagina die je zoekt bestaat niet.",
+  "It may have been moved or deleted.": "Misschien is hij verplaatst of verwijderd.",
+  "Go Home": "Naar de startpagina",
+
+  // components/ErrorBoundary.tsx
+  "An unexpected error occurred.": "Er is een onverwachte fout opgetreden.",
+  "Reload Page": "Pagina opnieuw laden",
+
+  // lib/scenes.ts
+  "Group {id}": "Groep {id}",
+  "Room {id}": "Ruimte {id}",
+};

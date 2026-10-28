@@ -14,6 +14,7 @@ import NotFound from "./pages/NotFound";
 import Schedules from "./pages/Schedules";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { t } from "./lib/i18n";
 
 /** Routes local appliance users through a cyberpunk dashboard and role-gated Admin Panel. */
 function App() {
@@ -23,7 +24,7 @@ function App() {
   // The current URL is kept, so signing in again lands on the same page.
   useEffect(() => {
     if (!session) return;
-    const expire = () => { clearSession(); setSession(null); toast("Your session has expired. Please sign in again.", { id: "session-expired" }); };
+    const expire = () => { clearSession(); setSession(null); toast(t("Your session has expired. Please sign in again."), { id: "session-expired" }); };
     window.addEventListener(SESSION_EXPIRED_EVENT, expire);
     const expiresAt = tokenExpiresAt(session.token);
     const timer = expiresAt === null ? undefined : window.setTimeout(expire, Math.max(0, expiresAt - Date.now()));

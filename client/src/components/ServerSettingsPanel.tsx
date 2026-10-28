@@ -1,6 +1,7 @@
 import { ExternalLink, Server } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { HudFrame } from "@/components/HudFrame";
+import { t } from "@/lib/i18n";
 import { LocalApi } from "@/lib/localApi";
 import { addressOnPort, describeSettingsStatus, type ServerSettingsInfo } from "@/lib/serverSettings";
 
@@ -37,30 +38,30 @@ export function ServerSettingsPanel({ api, onNotice }: { api: LocalApi; onNotice
     const nextPort = Number(port);
     const moving = nextPort !== info.port;
     const warning = moving
-      ? `Move the app to port ${nextPort}? The service restarts; afterwards open ${addressOnPort(window.location, nextPort)} and sign in again there. Bookmarks, Home Assistant, and a reverse proxy must use the new port too. If the app does not start on the new port, the previous settings come back within about two minutes.`
-      : "Save and restart the service? Control is unavailable for a few seconds.";
+      ? t("Move the app to port {port}? The service restarts; afterwards open {address} and sign in again there. Bookmarks, Home Assistant, and a reverse proxy must use the new port too. If the app does not start on the new port, the previous settings come back within about two minutes.", { port: nextPort, address: addressOnPort(window.location, nextPort) })
+      : t("Save and restart the service? Control is unavailable for a few seconds.");
     if (!window.confirm(warning)) return;
     try {
       await api.request("/admin/server-settings", { method: "PUT", body: JSON.stringify({ port: nextPort, trustProxy }) });
       setMovedTo(moving ? nextPort : null);
       setWaiting(true);
-    } catch (error) { onNotice(error instanceof Error ? error.message : "Saving the server settings failed."); }
+    } catch (error) { onNotice(error instanceof Error ? error.message : t("Saving the server settings failed.")); }
   };
 
-  const statusLine = info ? (waiting ? "Applying the new settings… the service restarts." : describeSettingsStatus(info)) : null;
-  return <HudFrame className="form-panel"><h3><Server /> SERVER</h3>
-    {!info && <p className="muted-copy">Loading…</p>}
+  const statusLine = info ? (waiting ? t("Applying the new settings… the service restarts.") : describeSettingsStatus(info)) : null;
+  return <HudFrame className="form-panel"><h3><Server /> {t("SERVER")}</h3>
+    {!info && <p className="muted-copy">{t("Loading…")}</p>}
     {info && <>
-      <p className="muted-copy">Other settings live in {info.readOnly.envFile} on the Pi and can only be changed there.</p>
+      <p className="muted-copy">{t("Other settings live in {file} on the Pi and can only be changed there.", { file: info.readOnly.envFile })}</p>
       <form onSubmit={event => void save(event)} className="admin-form">
-        <label>PORT<input type="number" min={1024} max={65535} value={port} onChange={event => setPort(event.target.value)} disabled={!info.supported || waiting} required /></label>
-        <label className="checkbox-row"><input type="checkbox" checked={trustProxy} onChange={event => setTrustProxy(event.target.checked)} disabled={!info.supported || waiting} /> BEHIND A REVERSE PROXY</label>
-        <p className="muted-copy">Only turn this on when a reverse proxy (for HTTPS, for example) is in front of the app on this Pi. Without one, any client could choose its own address and evade the sign-in rate limit.</p>
-        <button className="neon-button" disabled={!info.supported || waiting || (Number(port) === info.port && trustProxy === info.trustProxy)}>SAVE AND RESTART</button>
+        <label>{t("PORT")}<input type="number" min={1024} max={65535} value={port} onChange={event => setPort(event.target.value)} disabled={!info.supported || waiting} required /></label>
+        <label className="checkbox-row"><input type="checkbox" checked={trustProxy} onChange={event => setTrustProxy(event.target.checked)} disabled={!info.supported || waiting} /> {t("BEHIND A REVERSE PROXY")}</label>
+        <p className="muted-copy">{t("Only turn this on when a reverse proxy (for HTTPS, for example) is in front of the app on this Pi. Without one, any client could choose its own address and evade the sign-in rate limit.")}</p>
+        <button className="neon-button" disabled={!info.supported || waiting || (Number(port) === info.port && trustProxy === info.trustProxy)}>{t("SAVE AND RESTART")}</button>
       </form>
       {statusLine && <p role="status">{statusLine}</p>}
-      {waiting && movedTo !== null && <p><a className="outline-button" href={addressOnPort(window.location, movedTo)}><ExternalLink /> OPEN {addressOnPort(window.location, movedTo)}</a></p>}
-      <details className="update-log"><summary>Read-only settings</summary><pre>{[
+      {waiting && movedTo !== null && <p><a className="outline-button" href={addressOnPort(window.location, movedTo)}><ExternalLink /> {t("OPEN {address}", { address: addressOnPort(window.location, movedTo) })}</a></p>}
+      <details className="update-log"><summary>{t("Read-only settings")}</summary><pre>{[
         `NODE_ENV=${info.readOnly.nodeEnv ?? ""}`, `CASAMBI_MOCK_MODE=${info.readOnly.mockMode}`, `CASAMBI_DB_PATH=${info.readOnly.databasePath ?? "(default)"}`,
         `CASAMBI_CACHE_PATH=${info.readOnly.cachePath ?? "(default)"}`, `CASAMBI_PYTHON_COMMAND=${info.readOnly.pythonCommand ?? "(default)"}`,
       ].join("\n")}</pre></details>

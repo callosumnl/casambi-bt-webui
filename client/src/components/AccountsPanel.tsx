@@ -1,6 +1,7 @@
 import { Trash2, Users } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { getSession, LocalApi, LocalUser, Role } from "@/lib/localApi";
+import { t } from "@/lib/i18n";
 
 type Props = { api: LocalApi; onNotice: (message: string) => void };
 
@@ -12,35 +13,35 @@ export function AccountsPanel({ api, onNotice }: Props) {
   const [newPassword, setNewPassword] = useState("");
   const myId = getSession()?.user.id;
 
-  const load = async () => { try { setUsers(await api.request<LocalUser[]>("/admin/users")); } catch (error) { onNotice(error instanceof Error ? error.message : "Unable to load accounts."); } };
+  const load = async () => { try { setUsers(await api.request<LocalUser[]>("/admin/users")); } catch (error) { onNotice(error instanceof Error ? error.message : t("Unable to load accounts.")); } };
   useEffect(() => { void load(); }, []);
-  const run = async (action: () => Promise<unknown>, done: string) => { try { await action(); onNotice(done); await load(); return true; } catch (error) { onNotice(error instanceof Error ? error.message : "The account change failed."); return false; } };
+  const run = async (action: () => Promise<unknown>, done: string) => { try { await action(); onNotice(done); await load(); return true; } catch (error) { onNotice(error instanceof Error ? error.message : t("The account change failed.")); return false; } };
 
   const create = async (event: FormEvent) => {
     event.preventDefault();
-    if (await run(() => api.request("/admin/users", { method: "POST", body: JSON.stringify(draft) }), `Account ${draft.username} created.`)) setDraft({ username: "", password: "", role: "user" });
+    if (await run(() => api.request("/admin/users", { method: "POST", body: JSON.stringify(draft) }), t("Account {username} created.", { username: draft.username }))) setDraft({ username: "", password: "", role: "user" });
   };
-  const setRole = (user: LocalUser, role: Role) => void run(() => api.request(`/admin/users/${user.id}`, { method: "PATCH", body: JSON.stringify({ role }) }), `${user.username} is now ${role === "admin" ? "an admin" : "a user"}.`);
+  const setRole = (user: LocalUser, role: Role) => void run(() => api.request(`/admin/users/${user.id}`, { method: "PATCH", body: JSON.stringify({ role }) }), role === "admin" ? t("{username} is now an admin.", { username: user.username }) : t("{username} is now a user.", { username: user.username }));
   const savePassword = async (event: FormEvent, user: LocalUser) => {
     event.preventDefault();
-    if (await run(() => api.request(`/admin/users/${user.id}`, { method: "PATCH", body: JSON.stringify({ password: newPassword }) }), `New password set for ${user.username}.`)) { setResetting(null); setNewPassword(""); }
+    if (await run(() => api.request(`/admin/users/${user.id}`, { method: "PATCH", body: JSON.stringify({ password: newPassword }) }), t("New password set for {username}.", { username: user.username }))) { setResetting(null); setNewPassword(""); }
   };
   const remove = (user: LocalUser) => {
-    if (!window.confirm(`Delete the account "${user.username}"? Its timers move to your account.`)) return;
-    void run(() => api.request(`/admin/users/${user.id}`, { method: "DELETE" }), `${user.username} deleted.`);
+    if (!window.confirm(t("Delete the account \"{username}\"? Its timers move to your account.", { username: user.username }))) return;
+    void run(() => api.request(`/admin/users/${user.id}`, { method: "DELETE" }), t("{name} deleted.", { name: user.username }));
   };
 
-  return <section className="accounts-panel"><h3 className="subheading"><Users /> LOCAL ACCOUNTS</h3>
+  return <section className="accounts-panel"><h3 className="subheading"><Users /> {t("LOCAL ACCOUNTS")}</h3>
     <div className="away-set-list">{users.map(user => <article key={user.id}>
-      <div><strong>{user.username}{user.id === myId ? " (you)" : ""}</strong><small>since {new Date(user.createdAt).toLocaleDateString()}</small></div>
+      <div><strong>{user.username}{user.id === myId ? ` ${t("(you)")}` : ""}</strong><small>{t("since {date}", { date: new Date(user.createdAt).toLocaleDateString() })}</small></div>
       <div className="away-set-actions">
-        <select aria-label={`Role of ${user.username}`} value={user.role} disabled={user.id === myId} onChange={event => setRole(user, event.target.value as Role)}><option value="user">user</option><option value="admin">admin</option></select>
+        <select aria-label={t("Role of {username}", { username: user.username })} value={user.role} disabled={user.id === myId} onChange={event => setRole(user, event.target.value as Role)}><option value="user">{t("user")}</option><option value="admin">{t("admin")}</option></select>
         {resetting === user.id
-          ? <form className="password-reset" onSubmit={event => void savePassword(event, user)}><input type="password" autoComplete="new-password" minLength={12} value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder="new password (12+)" aria-label={`New password for ${user.username}`} autoFocus /><button className="outline-button" disabled={newPassword.length < 12}>SET</button><button type="button" className="outline-button" onClick={() => { setResetting(null); setNewPassword(""); }}>CANCEL</button></form>
-          : <button type="button" className="outline-button" onClick={() => { setResetting(user.id); setNewPassword(""); }}>NEW PASSWORD</button>}
-        {user.id !== myId && <button type="button" className="icon-button danger" aria-label={`Delete account ${user.username}`} onClick={() => remove(user)}><Trash2 /></button>}
+          ? <form className="password-reset" onSubmit={event => void savePassword(event, user)}><input type="password" autoComplete="new-password" minLength={12} value={newPassword} onChange={event => setNewPassword(event.target.value)} placeholder={t("new password (12+)")} aria-label={t("New password for {username}", { username: user.username })} autoFocus /><button className="outline-button" disabled={newPassword.length < 12}>{t("SET")}</button><button type="button" className="outline-button" onClick={() => { setResetting(null); setNewPassword(""); }}>{t("CANCEL")}</button></form>
+          : <button type="button" className="outline-button" onClick={() => { setResetting(user.id); setNewPassword(""); }}>{t("NEW PASSWORD")}</button>}
+        {user.id !== myId && <button type="button" className="icon-button danger" aria-label={t("Delete account {username}", { username: user.username })} onClick={() => remove(user)}><Trash2 /></button>}
       </div>
     </article>)}</div>
-    <form onSubmit={event => void create(event)} className="admin-form"><input required minLength={3} value={draft.username} onChange={event => setDraft({ ...draft, username: event.target.value })} placeholder="username" aria-label="New username" /><input required minLength={12} type="password" autoComplete="new-password" value={draft.password} onChange={event => setDraft({ ...draft, password: event.target.value })} placeholder="temporary password (12+)" aria-label="Temporary password" /><select value={draft.role} onChange={event => setDraft({ ...draft, role: event.target.value as Role })} aria-label="New account role"><option value="user">user</option><option value="admin">admin</option></select><button className="outline-button">CREATE ACCOUNT</button></form>
+    <form onSubmit={event => void create(event)} className="admin-form"><input required minLength={3} value={draft.username} onChange={event => setDraft({ ...draft, username: event.target.value })} placeholder={t("username")} aria-label={t("New username")} /><input required minLength={12} type="password" autoComplete="new-password" value={draft.password} onChange={event => setDraft({ ...draft, password: event.target.value })} placeholder={t("temporary password (12+)")} aria-label={t("Temporary password")} /><select value={draft.role} onChange={event => setDraft({ ...draft, role: event.target.value as Role })} aria-label={t("New account role")}><option value="user">{t("user")}</option><option value="admin">{t("admin")}</option></select><button className="outline-button">{t("CREATE ACCOUNT")}</button></form>
   </section>;
 }

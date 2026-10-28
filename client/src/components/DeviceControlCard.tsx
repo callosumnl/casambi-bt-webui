@@ -2,6 +2,7 @@ import { Power, WifiOff } from "lucide-react";
 import { useSliderCommit } from "@/hooks/useSliderCommit";
 import { Device } from "@/lib/localApi";
 import { dimmerToPercent, percentToDimmer } from "@/lib/brightness";
+import { t } from "@/lib/i18n";
 
 /** A compact lamp control: name, power toggle, and only the sliders the fixture reports. */
 export function DeviceControlCard({ device, onCommand }: { device: Device; onCommand: (payload: unknown) => Promise<void> }) {
@@ -14,10 +15,10 @@ export function DeviceControlCard({ device, onCommand }: { device: Device; onCom
   return <article className={`lamp-card ${device.state.on ? "lit" : ""} ${device.state.online ? "" : "offline"}`}>
     <div className="lamp-head">
       <div><h3>{device.name}</h3>{device.roomName && <p>{device.roomName}</p>}</div>
-      {!device.state.online && <span className="lamp-offline"><WifiOff /> OFFLINE</span>}
-      <button className="lamp-power" aria-pressed={device.state.on} onClick={() => void sendCommand(device.state.on ? "off" : "on")} aria-label={`Turn ${device.name} ${device.state.on ? "off" : "on"}`}><Power /></button>
+      {!device.state.online && <span className="lamp-offline"><WifiOff /> {t("OFFLINE")}</span>}
+      <button className="lamp-power" aria-pressed={device.state.on} onClick={() => void sendCommand(device.state.on ? "off" : "on")} aria-label={device.state.on ? t("Turn {name} off", { name: device.name }) : t("Turn {name} on", { name: device.name })}><Power /></button>
     </div>
-    {supports("dimmer") && <label className="lamp-slider"><span>DIM</span><input type="range" min="0" max="100" value={brightness.value} aria-label={`${device.name} brightness`} {...brightness.handlers} /><b>{brightness.value}%</b></label>}
-    {supports("temperature") && <label className="lamp-slider"><span>TEMP</span><input type="range" min={minKelvin} max={maxKelvin} step="50" value={temperature.value} aria-label={`${device.name} colour temperature`} {...temperature.handlers} /><b>{device.state.temperature == null && !temperature.adjusting ? "—" : `${temperature.value}K`}</b></label>}
+    {supports("dimmer") && <label className="lamp-slider"><span>{t("DIM")}</span><input type="range" min="0" max="100" value={brightness.value} aria-label={t("{name} brightness", { name: device.name })} {...brightness.handlers} /><b>{brightness.value}%</b></label>}
+    {supports("temperature") && <label className="lamp-slider"><span>{t("TEMP")}</span><input type="range" min={minKelvin} max={maxKelvin} step="50" value={temperature.value} aria-label={t("{name} colour temperature", { name: device.name })} {...temperature.handlers} /><b>{device.state.temperature == null && !temperature.adjusting ? "—" : `${temperature.value}K`}</b></label>}
   </article>;
 }
