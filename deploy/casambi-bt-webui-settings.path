@@ -1,0 +1,10 @@
+[Unit]
+Description=Apply Casambi BT WebGUI server settings when the web app asks
+
+[Path]
+# The web app (user casambi) writes this file; apply-settings.sh validates it strictly and deletes it.
+PathExists=/var/lib/casambi-bt-webui/settings/request.json
+Unit=casambi-bt-webui-settings.service
+
+[Install]
+WantedBy=multi-user.target

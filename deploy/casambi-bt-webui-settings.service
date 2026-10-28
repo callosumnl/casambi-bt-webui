@@ -1,0 +1,9 @@
+[Unit]
+Description=Apply Casambi BT WebGUI server settings (port, reverse proxy)
+Documentation=file:///opt/casambi-bt-webui/deploy/apply-settings.sh
+
+[Service]
+# Root, because /etc/casambi-bt-webui.env is root-owned; the web app can only request the change.
+Type=oneshot
+ExecStart=/opt/casambi-bt-webui/deploy/apply-settings.sh
+TimeoutStartSec=5min

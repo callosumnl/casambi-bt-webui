@@ -16,14 +16,16 @@ import { switchRulePatchSchema, switchRuleSchema } from "./switchRules";
 import { openApiDocument } from "./openapi";
 import { SetupCode } from "./setupCode";
 import { Updater, UpdateMode } from "./updates";
+import { ServerSettingsHelper } from "./serverSettings";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
-import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
- * `probes` read the system for the diagnostics, and `updater` requests updates; tests replace both.
+ * `probes` read the system for the diagnostics, `updater` requests updates, and `serverSettings` requests env-file
+ * changes; tests replace all three.
  */
-type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater };
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 
 /** Wraps async routes in a stable JSON error response. */
@@ -87,7 +89,7 @@ function normalizeHolidayDates(dates: string[]): string[] { return Array.from(ne
 function assertAwayDateSet(id: number | null | undefined, store: LocalStore): AwayDateSet | null { if (id == null) return null; const set = store.getAwayDateSet(id); if (!set) throw new Error("Away-date set does not exist."); return set; }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
-export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory) }: Dependencies): Router {
+export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory) }: Dependencies): Router {
   const api = Router();
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
   // Password guessing gets its own, much tighter budget; successful sign-ins do not count against it.
@@ -190,6 +192,13 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
     const bundle = { ...report, configuration: store.getSafeCasambiConfig(), environment: { nodeEnv: process.env.NODE_ENV ?? null, mockMode: process.env.CASAMBI_MOCK_MODE === "true", trustProxy: process.env.CASAMBI_TRUST_PROXY === "true", port: process.env.PORT ?? "3000" }, audit: store.recentAudit(300) };
     response.setHeader("Content-Disposition", `attachment; filename="casambi-diagnostics-${report.generatedAt.slice(0, 19).replace(/:/g, "-")}.json"`);
     response.json(bundle);
+  }));
+  api.get("/admin/server-settings", requireAuth(store, "admin"), (_request, response) => response.json(serverSettings.current()));
+  api.put("/admin/server-settings", requireAuth(store, "admin"), route(async (request, response) => {
+    const input = parsed(serverSettingsSchema, request.body);
+    serverSettings.request(input);
+    store.audit(principal(response).name, "server_settings.requested", input);
+    response.status(202).json({ requested: input });
   }));
   api.get("/admin/update", requireAuth(store, "admin"), route(async (_request, response) => {
     response.json({ supported: updater.supported, running: await appVersion(probes), pending: { check: updater.pending("check"), apply: updater.pending("apply") }, status: updater.status() });

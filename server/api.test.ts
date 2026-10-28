@@ -1,6 +1,6 @@
 import express from "express";
 import request from "supertest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -11,6 +11,7 @@ import { DurableScheduler } from "./scheduler";
 import { SetupCode } from "./setupCode";
 import type { Probes } from "./diagnostics";
 import { Updater } from "./updates";
+import { ServerSettingsHelper } from "./serverSettings";
 import { LocalStore } from "./store";
 import { existsSync } from "fs";
 
@@ -24,7 +25,7 @@ function app(options: { setupCode?: (folder: string) => SetupCode; groups?: Arra
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
   const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: options.groups ?? [], scenes: [], rooms: [], updatedAt: new Date().toISOString(), connection: { phase: "idle" } }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
-  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder), probes: noProbes, updater: new Updater(join(folder, "data"), options.updaterState?.(folder) ?? join(folder, "no-updater")) })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
+  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder), probes: noProbes, updater: new Updater(join(folder, "data"), options.updaterState?.(folder) ?? join(folder, "no-updater")), serverSettings: new ServerSettingsHelper(join(folder, "data"), options.updaterState?.(folder) ?? join(folder, "no-updater")) })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
 }
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })));
 
@@ -387,6 +388,25 @@ describe("REST API", () => {
 
     writeFileSync(join(state, "status.json"), JSON.stringify({ state: "updating" }));
     expect((await request(instance).post("/api/v1/admin/update/apply").set(auth).expect(422)).body.error.message).toBe("An update is already running; it must finish first.");
+  });
+
+  it("requests a port or proxy change through a file only when the settings helper is installed", async () => {
+    let state = "";
+    const instance = app({ updaterState: folder => (state = join(folder, "updater")) });
+    const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    expect((await request(instance).get("/api/v1/admin/server-settings").set(auth).expect(200)).body).toMatchObject({ supported: false, pending: false, status: {}, readOnly: { envFile: "/etc/casambi-bt-webui.env" } });
+    expect((await request(instance).put("/api/v1/admin/server-settings").set(auth).send({ port: 8080, trustProxy: false }).expect(422)).body.error.message).toContain("deploy/install.sh must run once");
+
+    const requestDirectory = join(state, "..", "data", "settings");
+    mkdirSync(requestDirectory, { recursive: true }); mkdirSync(state, { recursive: true });
+    await request(instance).put("/api/v1/admin/server-settings").set(auth).send({ port: 80, trustProxy: false }).expect(422);
+    await request(instance).put("/api/v1/admin/server-settings").set(auth).send({ port: 8080, trustProxy: true, extra: 1 }).expect(202);
+    expect(JSON.parse(readFileSync(join(requestDirectory, "request.json"), "utf8"))).toEqual({ port: 8080, trustProxy: true });
+    expect((await request(instance).put("/api/v1/admin/server-settings").set(auth).send({ port: 8081, trustProxy: false }).expect(422)).body.error.message).toBe("A settings change is already being applied; it must finish first.");
+    writeFileSync(join(state, "settings-status.json"), JSON.stringify({ state: "applying", message: "Restarting on port 8080…" }));
+    expect((await request(instance).get("/api/v1/admin/server-settings").set(auth).expect(200)).body).toMatchObject({ supported: true, pending: true, status: { state: "applying" } });
+    expect(instanceStore(instance).recentAudit(5, "server_settings.").map(entry => entry.action)).toEqual(["server_settings.requested"]);
   });
 
   it("downloads an encrypted backup and restores it, ending every session", async () => {

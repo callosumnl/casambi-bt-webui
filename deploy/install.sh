@@ -146,11 +146,12 @@ sed -e "s|/opt/casambi-bt-webui|$APP_DIR|g" -e "s|/usr/bin/node|$NODE_BIN|" \
     "$APP_DIR/deploy/casambi-bt-webui.service" > "$unit"
 sudo install -m 0644 "$unit" "$UNIT_FILE"
 rm -f "$unit"
-# Updates from the web app: the service (user casambi) may only drop a request file in $DATA_DIR/update;
-# path units then start deploy/update.sh as root, which reports to a directory the service can only read.
-sudo install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR/update"
+# Updates and server settings from the web app: the service (user casambi) may only drop a request file in
+# $DATA_DIR/update or $DATA_DIR/settings; path units then start deploy/update.sh or deploy/apply-settings.sh as
+# root, which report to a directory the service can only read.
+sudo install -d -m 0750 -o "$SERVICE_USER" -g "$SERVICE_USER" "$DATA_DIR/update" "$DATA_DIR/settings"
 sudo install -d -m 0755 -o root -g root "$UPDATER_DIR"
-for updater_unit in casambi-bt-webui-update@.service casambi-bt-webui-update-check.path casambi-bt-webui-update-apply.path casambi-bt-webui-update-check.timer; do
+for updater_unit in casambi-bt-webui-update@.service casambi-bt-webui-update-check.path casambi-bt-webui-update-apply.path casambi-bt-webui-update-check.timer casambi-bt-webui-settings.service casambi-bt-webui-settings.path; do
   rendered="$(mktemp)"
   sed -e "s|/opt/casambi-bt-webui|$APP_DIR|g" "$APP_DIR/deploy/$updater_unit" > "$rendered"
   sudo install -m 0644 "$rendered" "/etc/systemd/system/$updater_unit"
@@ -158,8 +159,8 @@ for updater_unit in casambi-bt-webui-update@.service casambi-bt-webui-update-che
 done
 sudo systemctl daemon-reload
 sudo systemctl enable casambi-bt-webui.service >/dev/null 2>&1
-sudo systemctl enable --now casambi-bt-webui-update-check.path casambi-bt-webui-update-apply.path casambi-bt-webui-update-check.timer >/dev/null 2>&1 \
-  || echo "Warning: could not enable updates from the web app." >&2
+sudo systemctl enable --now casambi-bt-webui-update-check.path casambi-bt-webui-update-apply.path casambi-bt-webui-update-check.timer casambi-bt-webui-settings.path >/dev/null 2>&1 \
+  || echo "Warning: could not enable updates and settings from the web app." >&2
 # restart, not `enable --now`: a running service must pick up the new build.
 sudo systemctl restart casambi-bt-webui.service
 
