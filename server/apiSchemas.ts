@@ -48,3 +48,4 @@ export const matterSettingsSchema = z.object({
   vendorId: z.number().int().min(1).max(0xfffe).describe("Vendor id the bridge announces; must match the Google Home Developer Console integration (test vendor id 0xFFF1 = 65521)."),
   productId: z.number().int().min(1).max(0xffff).describe("Product id the bridge announces; must match the Developer Console integration (default 0x8000 = 32768)."),
 });
+export const matterAccessoriesSchema = z.object({ hidden: z.array(z.string().min(1).max(200)).max(1000).describe("Keys (from `accessories` in GET /admin/matter) of what Google Home should not show; everything else is shown. Separate from HomeKit's choice.") });

@@ -18,11 +18,11 @@ function newStore(): LocalStore {
   return new LocalStore(join(folder, "state.db"), "test-key");
 }
 
-function fakeSource(snapshot: LightingSnapshot) {
+function fakeSource(snapshot: LightingSnapshot, options: { fail?: boolean } = {}) {
   const sent: ControlRequest[] = [];
   const source: LightingSource & { snapshot: LightingSnapshot } = {
     snapshot, cachedSnapshot: () => source.snapshot, onStateChange: () => undefined,
-    control: async command => { sent.push(command); },
+    control: async command => { if (options.fail) throw new Error("Bluetooth is busy."); sent.push(command); },
   };
   return { source, sent };
 }
@@ -60,18 +60,19 @@ describe("Matter lights", () => {
     expect(fromMatterLevel(127)).toBe(128);
   });
 
-  it("adds lamps, groups, and rooms, with on, level, and reachability, and no scenes or switches yet", async () => {
+  it("adds lamps, groups, rooms, and scenes, with on, level, and reachability, and no wall switches", async () => {
     const store = newStore(); const { source } = fakeSource(fixture({ scenes: [{ id: 5, name: "Avond" }] })); const { factory, devices, last } = fakeFactory();
     const lights = lightsFor(store, source);
     await lights.attach(factory);
-    expect(Array.from(devices.keys()).sort()).toEqual(["group:net:7", "room:1", "unit:uuid-1", "unit:uuid-2", "unit:uuid-3"]);
-    expect(lights.status()).toEqual({ lights: 5 });
+    expect(Array.from(devices.keys()).sort()).toEqual(["group:net:7", "room:1", "scene:net:5", "unit:uuid-1", "unit:uuid-2", "unit:uuid-3"]);
+    expect(lights.status()).toEqual({ lights: 6 });
     // Matter keeps the room's name as it is; HomeKit drops the brackets.
     expect(devices.get("group:net:7")!.name).toBe("Eiland (keuken)");
     expect(last("unit:uuid-1")).toMatchObject({ reachable: true, on: true, level: 254 });
     expect(last("unit:uuid-2")).toMatchObject({ reachable: true, on: true, level: 127 });
     expect(last("unit:uuid-3")).toMatchObject({ reachable: true, on: false, level: null });
-    expect(lights.catalog().map(entry => entry.kind)).not.toContain("scene");
+    expect(last("scene:net:5")).toMatchObject({ reachable: true, on: false });
+    expect(lights.catalog().map(entry => entry.kind)).not.toContain("switch");
   });
 
   it("sends Google Home's commands to Casambi as planned commands, merging on and level", async () => {
@@ -153,5 +154,38 @@ describe("Matter lights", () => {
     await settle();
     expect(sent).toHaveLength(1);
     expect(sent[0]).toMatchObject({ targetType: "unit", targetId: 13, operation: "set_xy" });
+  });
+
+  it("activates a scene from its switch, which goes off again after a second; a failure switches it off at once", async () => {
+    const store = newStore(); const { source, sent } = fakeSource(fixture({ scenes: [{ id: 5, name: "Avond" }] })); const { factory, devices, last } = fakeFactory();
+    const saved = store.createLightScene("Lezen", { type: "network", id: null }, []);
+    const lights = lightsFor(store, source);
+    await lights.attach(factory);
+    devices.get("scene:net:5")!.handlers.onOn(true);
+    devices.get(`local_scene:${saved.id}`)!.handlers.onOn(true);
+    devices.get("scene:net:5")!.handlers.onOn(false); // switching it off does nothing
+    await settle();
+    expect(sent).toEqual([{ targetType: "scene", targetId: 5, operation: "activate_scene" }, { targetType: "local_scene", targetId: saved.id, operation: "activate_scene" }]);
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+    expect(last("scene:net:5")).toMatchObject({ on: false });
+    const failing = fakeSource(fixture({ scenes: [{ id: 5, name: "Avond" }] }), { fail: true });
+    const other = fakeFactory();
+    await lightsFor(newStore(), failing.source).attach(other.factory);
+    other.devices.get("scene:net:5")!.handlers.onOn(true);
+    await settle();
+    expect(other.last("scene:net:5")).toMatchObject({ on: false });
+  });
+
+  it("hides what an administrator unticks for Google Home, separate from HomeKit", async () => {
+    const store = newStore(); const { source } = fakeSource(fixture()); const { factory, devices } = fakeFactory();
+    const lights = lightsFor(store, source);
+    await lights.attach(factory);
+    await lights.setHidden(["unit:uuid-3", "room:1"]);
+    expect(Array.from(devices.keys()).sort()).toEqual(["group:net:7", "unit:uuid-1", "unit:uuid-2"]);
+    expect(lights.catalog().find(entry => entry.key === "unit:uuid-3")?.shown).toBe(false);
+    expect(store.appSetting("matter.hidden")).toContain("unit:uuid-3");
+    expect(store.appSetting("homekit.hidden")).toBeNull();
+    await lights.setHidden([]);
+    expect(devices.has("room:1")).toBe(true);
   });
 });

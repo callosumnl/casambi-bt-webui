@@ -10,12 +10,12 @@ describe("Matter panel helpers", () => {
     expect(parseId("FFF1")).toBeNaN();
   });
 
-  it("names an iPhone's own Matter connection, and says 1 light in the singular", () => {
+  it("names an iPhone's own Matter connection, and says 1 device in the singular", () => {
     expect(isIphoneFabric({ vendorId: 0x1384 })).toBe(true);
     expect(fabricName({ owner: "iPhone (Apple keychain)", vendorId: 0x1384 })).toBe("iPhone (Apple keychain)");
     expect(fabricName({ owner: "Google Home", vendorId: 0x6006 })).toBe("Google Home");
     const running = { state: "running", lights: 1 } as MatterInfo;
-    expect(describeMatterLights(running)).toBe("1 light for Google Home.");
-    expect(describeMatterLights({ ...running, lights: 3 })).toBe("3 lights (lamps, groups, and rooms) for Google Home.");
+    expect(describeMatterLights(running)).toBe("1 device for Google Home.");
+    expect(describeMatterLights({ ...running, lights: 3 })).toBe("3 devices (lamps, groups, rooms, and scenes) for Google Home.");
   });
 });

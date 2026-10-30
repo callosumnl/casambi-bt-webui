@@ -151,6 +151,8 @@ describe("Matter admin API", () => {
     expect((await request(instance).delete("/api/v1/admin/matter/fabrics/1").set(auth).expect(200)).body.fabrics).toEqual([]);
     await request(instance).delete("/api/v1/admin/matter/fabrics/1").set(auth).expect(404);
     await request(instance).post("/api/v1/admin/matter/reset").set(auth).expect(200);
+    // Without lights the bridge cannot hide anything.
+    await request(instance).put("/api/v1/admin/matter/accessories").set(auth).send({ hidden: [] }).expect(422);
   });
 
   it("refuses when the server has no Matter bridge", async () => {

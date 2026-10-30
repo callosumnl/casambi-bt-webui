@@ -16,7 +16,7 @@ export function adminSectionLabel(section: AdminSection): string {
     case "automation": return t("AUTOMATION");
     case "access": return t("ACCESS");
     case "homekit": return t("HOMEKIT");
-    case "google": return t("GOOGLE HOME");
+    case "google": return t("GOOGLE HOME / MATTER");
     case "system": return t("SYSTEM");
   }
 }
@@ -29,7 +29,7 @@ export function adminSectionSummary(section: AdminSection): string {
     case "automation": return t("Wall switch rules, away dates for timers, and the location for sunrise and sunset.");
     case "access": return t("Who can sign in, and keys for other apps that use the REST API.");
     case "homekit": return t("Control these lights and scenes from the Apple Home app and Siri, and choose what appears there.");
-    case "google": return t("Control these lights from Google Home and a Google Nest, through Matter; separate from HomeKit.");
+    case "google": return t("Control these lights and scenes from Google Home and a Google Nest, through Matter, and choose what appears there; separate from HomeKit.");
     case "system": return t("Notifications, updates, backups, the web server, and the audit log.");
   }
 }

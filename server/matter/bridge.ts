@@ -1,6 +1,7 @@
 import type { LocalStore } from "../store";
 import { fabricOwner, generateDiscriminator, generateNodeId, generatePasscode, isValidDiscriminator, isValidNodeId, isValidPasscode, matterLabel } from "./identity";
 import { endpointFactory } from "./devices";
+import type { CatalogEntry } from "../lighting/registry";
 import type { MatterLights } from "./lights";
 import { startError, type MatterHost, type MatterRuntime } from "./runtime";
 
@@ -20,8 +21,10 @@ export type MatterStatus = MatterSettings & {
   fabrics: Array<{ index: number; owner: string; vendorId: number }>;
   pairingWindowUntil: string | null;
   manualPairingCode: string | null; qrPairingCode: string | null;
-  /** Lamps, groups, and rooms the bridge shows. */
+  /** Lamps, groups, rooms, and scenes the bridge shows. */
   lights: number;
+  /** Everything Google Home can show, and whether it does. */
+  accessories: CatalogEntry[];
 };
 
 type Identity = { nodeId: string; passcode: number; discriminator: number };
@@ -69,6 +72,7 @@ export class MatterBridge {
       pairingWindowUntil: commissioned && windowOpen ? new Date(this.pairingWindowUntil!).toISOString() : null,
       manualPairingCode: codes?.manualPairingCode ?? null, qrPairingCode: codes?.qrPairingCode ?? null,
       lights: host ? this.lights?.status().lights ?? 0 : 0,
+      accessories: this.lights?.catalog() ?? [],
     };
   }
 
@@ -83,6 +87,14 @@ export class MatterBridge {
     for (const [key, value] of Object.entries(settings)) this.store.setAppSetting(`matter.${key}`, String(value));
     this.store.audit(actor, "matter.settings_changed", settings);
     await this.serialized(async () => { await this.close(); await this.startIfEnabled(); });
+    return this.status();
+  }
+
+  /** Shows everything in Google Home except these keys (lamps, groups, rooms, scenes); separate from HomeKit's choice. */
+  public async setHidden(keys: string[], actor: string): Promise<MatterStatus> {
+    if (!this.lights) throw new Error("Matter cannot show accessories: it is not set up in this server.");
+    await this.lights.setHidden(keys);
+    this.store.audit(actor, "matter.accessories_changed", { hidden: keys.length });
     return this.status();
   }
 

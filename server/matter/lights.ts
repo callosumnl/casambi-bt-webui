@@ -1,6 +1,7 @@
 import type { LocalStore } from "../store";
 import { rgbToHueSaturation, xyToRgb } from "../lighting/colour";
-import { LightDescriptor, LightingSnapshot, lightState, lightUnitIds, LightWrite } from "../lighting/model";
+import type { ControlRequest } from "../casambi/types";
+import { isScene, LightDescriptor, LightingSnapshot, lightState, lightUnitIds, LightWrite } from "../lighting/model";
 import { LightRegistry, LightingSource, RegistryChange } from "../lighting/registry";
 import { WriteBatcher } from "../lighting/writes";
 import { DeviceFactory, DeviceState, fromMatterLevel, MatterDevice, toMatterLevel } from "./devices";
@@ -11,14 +12,16 @@ type Options = { flushMs: number; removeAfterMs: number; writeTimeoutMs: number;
  * `lastLevel` is the Matter level shown while a light is off, so Google Home keeps its slider where it was; `colour`
  * the last hue (0–360) and saturation (0–100), for a command that changes only one of them.
  */
-type Device = { descriptor: LightDescriptor; device: MatterDevice | null; pushed: DeviceState | null; lastLevel: number; colour: { hue: number; saturation: number } };
+type Device = { descriptor: LightDescriptor; device: MatterDevice | null; pushed: DeviceState | null; lastLevel: number; colour: { hue: number; saturation: number }; sceneOnUntil?: number };
+/** How long a scene switch stays on in Google Home after it activated its scene. */
+const SCENE_SWITCH_MS = 1_000;
 const newDevice = (descriptor: LightDescriptor): Device => ({ descriptor, device: null, pushed: null, lastLevel: 254, colour: { hue: 0, saturation: 0 } });
 /** Matter hue and saturation are 0–254; the shared model uses degrees and percent. */
 const toMatter = { hue: (degrees: number) => Math.round((degrees / 360) * 254), saturation: (percent: number) => Math.round((percent / 100) * 254) };
 const fromMatter = { hue: (value: number) => (value / 254) * 360, saturation: (value: number) => (value / 254) * 100 };
 
-/** Kinds the Matter bridge shows so far: lamps, Casambi groups, and rooms, with on/off, level, and colour. */
-const SUPPORTED = new Set<LightDescriptor["kind"]>(["unit", "group", "room"]);
+/** Kinds the Matter bridge shows: lamps, Casambi groups, and rooms as lights, and scenes as switches. */
+const SUPPORTED = new Set<LightDescriptor["kind"]>(["unit", "group", "room", "scene", "local_scene"]);
 
 const unreachable = () => new Error("The Casambi network cannot be reached.");
 
@@ -70,6 +73,14 @@ export class MatterLights {
   }
 
   public catalog() { return this.registry.catalog().filter(entry => SUPPORTED.has(entry.kind)); }
+
+  /** Hides these keys from Google Home and shows everything else; hidden devices are removed at once. */
+  public setHidden(keys: string[]): Promise<void> {
+    return this.serialized(async () => {
+      await this.apply(this.registry.setHidden(keys));
+      await this.syncNow();
+    });
+  }
   public status(): { lights: number } { return { lights: Array.from(this.devices.values()).filter(device => device.device).length }; }
   public sync(): Promise<void> { return this.serialized(() => this.syncNow()); }
 
@@ -131,13 +142,27 @@ export class MatterLights {
     const key = device.descriptor.key;
     const state = this.state(device, this.source.cachedSnapshot());
     device.device = await this.factory.add(device.descriptor, state, {
-      onOn: on => this.write(key, { on }),
+      onOn: on => (isScene(device.descriptor) ? (on ? this.activate(device) : undefined) : this.write(key, { on })),
       onLevel: level => this.write(key, { level: fromMatterLevel(level) }),
       onMired: mired => this.write(key, { mired }),
       onHueSaturation: colour => this.write(key, { ...(colour.hue !== undefined ? { hue: fromMatter.hue(colour.hue) } : {}), ...(colour.saturation !== undefined ? { saturation: fromMatter.saturation(colour.saturation) } : {}) }),
       onXy: (x, y) => this.write(key, rgbToHueSaturation(xyToRgb([x, y]))),
     });
     device.pushed = state;
+  }
+
+  /** Activates a scene, then switches its switch off again; a failure is audited and the switch goes off at once. */
+  private activate(device: Device): void {
+    const { kind, id } = device.descriptor;
+    device.sceneOnUntil = this.options.now() + SCENE_SWITCH_MS;
+    const switchOff = () => { device.sceneOnUntil = 0; device.pushed = null; void this.serialized(() => this.push(device, this.source.cachedSnapshot())); };
+    const timer = setTimeout(switchOff, SCENE_SWITCH_MS);
+    timer.unref();
+    void this.source.control({ targetType: kind, targetId: id, operation: "activate_scene" } as ControlRequest, "matter").catch(error => {
+      this.store.audit("matter", "matter.control_failed", { message: error instanceof Error ? error.message : "Unknown error." });
+      clearTimeout(timer);
+      switchOff();
+    });
   }
 
   /** A command from Google Home; a failure is audited by the batcher and corrected by the next state push. */
@@ -148,6 +173,8 @@ export class MatterLights {
   private state(device: Device, snapshot: LightingSnapshot): DeviceState {
     const { descriptor } = device;
     const state = lightState(descriptor, snapshot);
+    // A scene switch is on only for the second after it activated its scene.
+    if (isScene(descriptor)) return { reachable: state.available, on: this.options.now() < (device.sceneOnUntil ?? 0), level: null, mired: null, hue: null, saturation: null, colorMode: null };
     if (state.level !== null) device.lastLevel = toMatterLevel(state.level);
     if (state.hue !== null && state.saturation !== null) device.colour = { hue: state.hue, saturation: state.saturation };
     const range = descriptor.temperature;
