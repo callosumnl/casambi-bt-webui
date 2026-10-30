@@ -1,6 +1,6 @@
 # Matter / Google Home plan
 
-Status: phase 0 (spike) succeeded on 2026-10-30; phase 1 (shared lighting core) is next.
+Status: phase 0 (spike) succeeded on 2026-10-30, and phase 1 (shared lighting core) is done; phase 2 (the Matter bridge) is next.
 
 ## Goal
 
@@ -168,8 +168,10 @@ reacted, and how Google Home handled 60 lamps.
 0. **Spike (go/no-go):** on the Pi, a matter.js bridge with one dimmable mock light. Create the Developer Console
    project and integration, commission it in Google Home, and say "Hey Google, zet de testlamp aan". Confirms the
    Nest is a Matter hub, IPv6/mDNS on the network, and matter.js next to avahi. Nothing is merged before this works.
-1. **Shared lighting core:** move the protocol-neutral parts of `server/homekit/` to `server/lighting/`; HomeKit
-   behaves exactly as before.
+1. **Shared lighting core (done):** `server/lighting/` holds the model (`model.ts`: which lights, their state, write
+   planning, with each platform's naming rule passed in), colour conversions (`colour.ts`), the per-platform list of
+   what is shown (`registry.ts`: settings under `<prefix>.lights`, `.hidden`, `.buttons`, removal rules), and write
+   batching (`writes.ts`). `HomeKitLights` only builds HAP accessories on top; HomeKit behaves exactly as before.
 2. **Matter bridge:** settings, storage, commissioning codes with QR code, the MATTER tab, connected ecosystems,
    pairing window, reset, audit.
 3. **Lamps, groups and rooms:** on/off and dimming, state from the cache, `reachable`, write planning.

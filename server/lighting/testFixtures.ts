@@ -1,4 +1,4 @@
-import type { LightingSnapshot } from "./mapping";
+import type { LightingSnapshot } from "./model";
 
 /** Test data for the HomeKit tests. */
 const dimmer = [{ type: "dimmer", min: 0, max: 255, readOnly: false }];
