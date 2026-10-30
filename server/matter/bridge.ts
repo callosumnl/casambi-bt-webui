@@ -17,7 +17,7 @@ export type MatterState = "disabled" | "starting" | "running" | "failed";
 /** What the Admin panel shows. The pairing codes are there only while a controller can use them; never audited. */
 export type MatterStatus = MatterSettings & {
   state: MatterState; error: string | null; commissioned: boolean;
-  fabrics: Array<{ index: number; owner: string }>;
+  fabrics: Array<{ index: number; owner: string; vendorId: number }>;
   pairingWindowUntil: string | null;
   manualPairingCode: string | null; qrPairingCode: string | null;
   /** Lamps, groups, and rooms the bridge shows. */
@@ -65,7 +65,7 @@ export class MatterBridge {
     const codes = host && (!commissioned || windowOpen) ? host.pairingCodes() : null;
     return {
       ...this.settings(), state: this.state, error: this.error, commissioned,
-      fabrics: host?.fabrics().map(fabric => ({ index: fabric.index, owner: fabricOwner(fabric.vendorId, fabric.label) })) ?? [],
+      fabrics: host?.fabrics().map(fabric => ({ index: fabric.index, owner: fabricOwner(fabric.vendorId, fabric.label), vendorId: fabric.vendorId })) ?? [],
       pairingWindowUntil: commissioned && windowOpen ? new Date(this.pairingWindowUntil!).toISOString() : null,
       manualPairingCode: codes?.manualPairingCode ?? null, qrPairingCode: codes?.qrPairingCode ?? null,
       lights: host ? this.lights?.status().lights ?? 0 : 0,

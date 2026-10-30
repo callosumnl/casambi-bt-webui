@@ -27,8 +27,14 @@ export function matterLabel(name: string, fallback: string): string {
   return (name.trim().replace(/\s+/g, " ") || fallback).slice(0, 32).trim();
 }
 
+/**
+ * The Apple keychain fabric: an iPhone that adds a Matter device, also for the Google Home app, first adds it to its
+ * own system fabric and shares it from there. Removing the device in the iPhone's Matter settings removes it from
+ * every app that got it through the iPhone, Google Home included.
+ */
+export const APPLE_KEYCHAIN_VENDOR_ID = 0x1384;
 /** Who a fabric belongs to, by its root vendor id; Google Home is the one this bridge is for. */
-const VENDORS: Record<number, string> = { 0x6006: "Google Home", 0x1349: "Apple Home", 0x1217: "Amazon Alexa", 0x110a: "SmartThings" };
+const VENDORS: Record<number, string> = { 0x6006: "Google Home", 0x1349: "Apple Home", [APPLE_KEYCHAIN_VENDOR_ID]: "iPhone (Apple keychain)", 0x1217: "Amazon Alexa", 0x110a: "SmartThings" };
 export function fabricOwner(vendorId: number, label: string): string {
   return VENDORS[vendorId] ?? (label || `Vendor 0x${vendorId.toString(16).toUpperCase().padStart(4, "0")}`);
 }

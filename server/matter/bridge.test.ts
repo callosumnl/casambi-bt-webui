@@ -65,6 +65,7 @@ describe("Matter identity", () => {
     expect(matterLabel("a".repeat(40), "x")).toHaveLength(32);
     expect(fabricOwner(0x6006, "")).toBe("Google Home");
     expect(fabricOwner(0x1234, "")).toBe("Vendor 0x1234");
+    expect(fabricOwner(0x1384, "")).toBe("iPhone (Apple keychain)");
   });
 });
 
@@ -102,7 +103,7 @@ describe("Matter bridge", () => {
     clock += 16 * 60_000;
     expect(bridge.status()).toMatchObject({ pairingWindowUntil: null, manualPairingCode: null });
     hosts[0].commission(0x1349);
-    expect((await bridge.removeFabric(2, "admin")).fabrics).toEqual([{ index: 1, owner: "Google Home" }]);
+    expect((await bridge.removeFabric(2, "admin")).fabrics).toEqual([{ index: 1, owner: "Google Home", vendorId: 0x6006 }]);
     await expect(bridge.removeFabric(9, "admin")).rejects.toThrow("does not exist");
     expect(await bridge.reset("admin")).toMatchObject({ commissioned: false, fabrics: [] });
     expect(store.auditSince(0, ["matter.pairing_window_opened", "matter.fabric_removed", "matter.reset"]).map(entry => entry.action)).toEqual(["matter.pairing_window_opened", "matter.fabric_removed", "matter.reset"]);

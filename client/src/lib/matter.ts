@@ -10,13 +10,20 @@ export type MatterInfo = {
   state: "disabled" | "starting" | "running" | "failed";
   error: string | null;
   commissioned: boolean;
-  fabrics: Array<{ index: number; owner: string }>;
+  fabrics: Array<{ index: number; owner: string; vendorId: number }>;
   pairingWindowUntil: string | null;
   manualPairingCode: string | null;
   qrPairingCode: string | null;
   qrSvg: string | null;
   lights: number;
 };
+
+/** An iPhone's own Matter fabric; the Google Home app on an iPhone adds the bridge through it. */
+export const APPLE_KEYCHAIN_VENDOR_ID = 0x1384;
+export const isIphoneFabric = (fabric: { vendorId: number }) => fabric.vendorId === APPLE_KEYCHAIN_VENDOR_ID;
+
+/** A connected app's name for the panel. */
+export function fabricName(fabric: { owner: string; vendorId: number }): string { return isIphoneFabric(fabric) ? t("iPhone (Apple keychain)") : fabric.owner; }
 
 /** The panel's status line. */
 export function describeMatter(info: MatterInfo): string {
@@ -25,12 +32,13 @@ export function describeMatter(info: MatterInfo): string {
   if (info.state === "starting") return t("Starting the Matter bridge…");
   if (!info.commissioned) return t("Ready to pair: in the Google Home app choose + → Device → Matter device, and scan the code.");
   if (info.pairingWindowUntil) return t("Another app can add the bridge with the code until {time}.", { time: new Date(info.pairingWindowUntil).toLocaleTimeString() });
-  return info.fabrics.length === 1 ? t("Paired with {owner}.", { owner: info.fabrics[0].owner }) : t("Paired with {count} apps.", { count: info.fabrics.length });
+  return info.fabrics.length === 1 ? t("Paired with {owner}.", { owner: fabricName(info.fabrics[0]) }) : t("Paired with {count} apps.", { count: info.fabrics.length });
 }
 
 /** How many lights Google Home gets, while the bridge runs. */
 export function describeMatterLights(info: MatterInfo): string | null {
-  return info.state === "running" ? t("{count} lights (lamps, groups, and rooms) for Google Home.", { count: info.lights }) : null;
+  if (info.state !== "running") return null;
+  return info.lights === 1 ? t("1 light for Google Home.") : t("{count} lights (lamps, groups, and rooms) for Google Home.", { count: info.lights });
 }
 
 /** The 11-digit manual code as the Google Home app shows it: 1234-567-8901. */

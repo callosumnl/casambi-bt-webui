@@ -4,7 +4,7 @@ import { HudFrame } from "@/components/HudFrame";
 import { qrImageSource } from "@/lib/homekit";
 import { t } from "@/lib/i18n";
 import { LocalApi } from "@/lib/localApi";
-import { describeMatter, describeMatterLights, formatId, formatManualCode, parseId, type MatterInfo } from "@/lib/matter";
+import { describeMatter, describeMatterLights, fabricName, formatId, formatManualCode, isIphoneFabric, parseId, type MatterInfo } from "@/lib/matter";
 
 /** Runs the Pi as a Matter bridge for Google Home, separate from HomeKit, and shows the code to add it. */
 export function MatterPanel({ api, onNotice }: { api: LocalApi; onNotice: (message: string) => void }) {
@@ -32,9 +32,13 @@ export function MatterPanel({ api, onNotice }: { api: LocalApi; onNotice: (messa
     void run(() => api.request<MatterInfo>("/admin/matter", { method: "PUT", body: JSON.stringify({ enabled: form.enabled, name: form.name, port: Number(form.port), vendorId, productId }) }), t("Matter settings saved."), t("Unable to save the Matter settings."));
   };
   const openWindow = () => void run(() => api.request<MatterInfo>("/admin/matter/pairing-window", { method: "POST" }), t("Another app can now add the bridge with the code, for 15 minutes."), t("Unable to open a pairing window."));
-  const remove = (fabric: { index: number; owner: string }) => {
-    if (!window.confirm(t("Remove {owner}? The lights disappear from that app, with their rooms and routines there.", { owner: fabric.owner }))) return;
-    void run(() => api.request<MatterInfo>(`/admin/matter/fabrics/${fabric.index}`, { method: "DELETE" }), t("{owner} removed.", { owner: fabric.owner }), t("Unable to remove the connection."));
+  const remove = (fabric: { index: number; owner: string; vendorId: number }) => {
+    const name = fabricName(fabric);
+    const question = isIphoneFabric(fabric)
+      ? t("Remove the iPhone's connection? If you added the bridge to Google Home with an iPhone, Google Home can lose it too. It costs nothing to keep.")
+      : t("Remove {owner}? The lights disappear from that app, with their rooms and routines there.", { owner: name });
+    if (!window.confirm(question)) return;
+    void run(() => api.request<MatterInfo>(`/admin/matter/fabrics/${fabric.index}`, { method: "DELETE" }), t("{owner} removed.", { owner: name }), t("Unable to remove the connection."));
   };
   const reset = () => {
     if (!window.confirm(t("Reset the Matter bridge? Every app that added it loses it, with its rooms and routines. Remove it in the Google Home app as well, then add it again with the code."))) return;
@@ -68,7 +72,8 @@ export function MatterPanel({ api, onNotice }: { api: LocalApi; onNotice: (messa
         <div><p className="muted-copy">{t("SETUP CODE")}</p><code className="homekit-code">{formatManualCode(info.manualPairingCode)}</code></div>
       </div>}
       {info.fabrics.length > 0 && <div className="matter-fabrics"><p className="muted-copy">{t("CONNECTED APPS")}</p>
-        {info.fabrics.map(fabric => <div key={fabric.index} className="matter-fabric"><span>{fabric.owner}</span><button className="outline-button danger" disabled={busy} onClick={() => remove(fabric)}><Trash2 /> {t("REMOVE")}</button></div>)}
+        {info.fabrics.some(isIphoneFabric) && <p className="muted-copy">{t("The Google Home app on an iPhone adds the bridge through the iPhone's own Matter connection. Keep it: removing it, here or under Settings → General → Matter Accessories on the iPhone, can remove the bridge from Google Home too.")}</p>}
+        {info.fabrics.map(fabric => <div key={fabric.index} className="matter-fabric"><span>{fabricName(fabric)}</span><button className="outline-button danger" disabled={busy} onClick={() => remove(fabric)}><Trash2 /> {t("REMOVE")}</button></div>)}
       </div>}
       <div className="button-pair">
         {info.commissioned && <button className="outline-button" disabled={busy || info.state !== "running"} onClick={openWindow}><DoorOpen /> {t("LET ANOTHER APP ADD IT")}</button>}
