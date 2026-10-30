@@ -3,7 +3,8 @@ import { createCipheriv, createDecipheriv, randomBytes, scrypt as scryptCallback
 export const BACKUP_FORMAT = "casambi-bt-webgui-backup";
 const KDF = { N: 2 ** 15, r: 8, p: 1 };
 
-export type BackupSecrets = { networkPassword: string | null; apiKey: string | null };
+/** `other`: every other secret setting (for example the automatic backup passphrase), re-encrypted on restore. */
+export type BackupSecrets = { networkPassword: string | null; apiKey: string | null; other?: Record<string, string> };
 /** The HomeKit bridge's keys and pairings, as HAP-NodeJS stores them; null when HomeKit was never published. */
 export type HomeKitPairing = { username: string; entries: Record<string, unknown> };
 /** The Matter node's storage (keys, fabrics, endpoint numbers) as file path → base64; null when Matter was never used. */

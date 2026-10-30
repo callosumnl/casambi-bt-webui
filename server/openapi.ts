@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
+  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema, autoBackupSchema, webdavTestSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
   roomDefaultBrightnessSchema, roomRenameSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userUpdateSchema,
 } from "./apiSchemas";
 import { controlRequestSchema, groupSchema, networkSnapshotSchema, sceneSchema, unitSchema } from "./casambi/types";
@@ -96,6 +96,18 @@ const schemas: Record<string, JsonSchema> = {
   HomeKitAccessories: fromZod(homekitAccessoriesSchema),
   MatterSettings: fromZod(matterSettingsSchema),
   MatterAccessories: fromZod(matterAccessoriesSchema),
+  AutoBackupSettings: fromZod(autoBackupSchema),
+  WebdavTest: fromZod(webdavTestSchema),
+  AutoBackupStatus: object({
+    frequency: { type: "string", enum: ["off", "daily", "weekly", "monthly"] }, time: { type: "string", description: "HH:MM, the Pi's time zone." },
+    weekday: { type: "integer", description: "For weekly: 0 is Sunday." }, monthDay: { type: "integer", description: "For monthly: 1–28." }, keep: { type: "integer" },
+    toLocal: { type: "boolean", description: "Backups go to the SD card." }, toWebdav: { type: "boolean", description: "Backups go to the WebDAV folder." },
+    webdavUrl: nullable({ type: "string" }), webdavUser: nullable({ type: "string" }),
+    hasPassphrase: { type: "boolean" }, hasWebdavPassword: { type: "boolean" },
+    lastRun: nullable(object({ at: timestamp, ok: { type: "boolean" }, file: nullable({ type: "string" }), local: { type: "boolean" }, uploaded: { type: "boolean" }, message: { type: "string" } })),
+    nextRun: nullable(timestamp),
+    files: { type: "array", description: "Backups on the Pi, newest first.", items: object({ name: { type: "string" }, size: { type: "integer" }, createdAt: timestamp }) },
+  }),
   MatterStatus: object({
     enabled: { type: "boolean" }, name: { type: "string" }, port: { type: "integer" }, vendorId: { type: "integer" }, productId: { type: "integer" },
     state: { type: "string", enum: ["disabled", "starting", "running", "failed"] },
@@ -241,6 +253,11 @@ const operations: Operation[] = [
   { method: "post", path: "/admin/matter/pairing-window", tag: "Admin: bridge", summary: "Let another ecosystem add the bridge", description: "Opens a 15-minute window in which another Matter controller can add the already paired bridge with the setup code.", access: "admin", responses: { 200: { description: "Opened; the new status with the setup code.", schema: "MatterStatus" }, 422: { description: "Not running or not paired yet.", schema: "Error" } } },
   { method: "delete", path: "/admin/matter/fabrics/{id}", tag: "Admin: bridge", summary: "Remove an ecosystem", description: "Removes one ecosystem's access (by fabric index from `fabrics`); the bridge disappears from that app.", access: "admin", responses: { 200: { description: "Removed; the new status.", schema: "MatterStatus" }, 404: { description: "No such connection.", schema: "Error" } } },
   { method: "post", path: "/admin/matter/reset", tag: "Admin: bridge", summary: "Reset the Matter bridge", description: "Removes every ecosystem and all Matter keys. The bridge can then be added again with the same setup code.", access: "admin", responses: { 200: { description: "Reset; the new status.", schema: "MatterStatus" } } },
+  { method: "get", path: "/admin/auto-backup", tag: "Admin: bridge", summary: "Automatic backups", description: "Settings, the last run, the next run, and the backups on the Pi. Secrets are only reported as present.", access: "admin", responses: { 200: { description: "The status.", schema: "AutoBackupStatus" } } },
+  { method: "put", path: "/admin/auto-backup", tag: "Admin: bridge", summary: "Set up automatic backups", description: "A backup daily, weekly (`weekday`), or monthly (`monthDay`) at `time`, or none (`off`); to the SD card (`toLocal`) and/or a WebDAV folder (`toWebdav`, NAS or Nextcloud). The last `keep` of each are kept. A passphrase is required once a schedule is on.", access: "admin", body: "AutoBackupSettings", bodyRequired: true, responses: { 200: { description: "Saved; the new status.", schema: "AutoBackupStatus" }, 422: { description: "Invalid, no place chosen, or no passphrase.", schema: "Error" } } },
+  { method: "post", path: "/admin/auto-backup/run", tag: "Admin: bridge", summary: "Make an automatic backup now", access: "admin", responses: { 200: { description: "The run and the new status.", schema: object({ run: { type: "object" }, status: ref("AutoBackupStatus") }) } } },
+  { method: "post", path: "/admin/auto-backup/test", tag: "Admin: bridge", summary: "Test a WebDAV folder", description: "Writes and deletes a small test file. Without `webdavPassword` the stored one is used.", access: "admin", body: "WebdavTest", bodyRequired: true, responses: { 200: { description: "Whether it worked.", schema: object({ ok: { type: "boolean" }, message: { type: "string" } }) } } },
+  { method: "get", path: "/admin/auto-backup/files/{name}", tag: "Admin: bridge", summary: "Download a backup from the Pi", access: "admin", responses: { 200: { description: "The backup file.", schema: "BackupFile", contentType: "application/json" }, 404: { description: "No such backup.", schema: "Error" } } },
   { method: "get", path: "/admin/update", tag: "Admin: bridge", summary: "Update status", description: "Whether updates from the app are set up (`supported`), the running version, open requests, and what deploy/update.sh last reported: `state` (checking, available, up_to_date, updating, updated, rolling_back, rolled_back, failed), the current and latest commit, the new changes, and for an update the tail of its log.", access: "admin", responses: { 200: { description: "The update status.", schema: "UpdateStatus" } } },
   { method: "post", path: "/admin/update/check", tag: "Admin: bridge", summary: "Check for an update", description: "Asks the Pi to fetch from the checkout's upstream branch and report how far it is behind. Runs in the background; poll `GET /admin/update`.", access: "admin", responses: { 202: { description: "Requested.", schema: object({ requested: { type: "string" } }) }, 422: { description: "Updates from the app are not set up.", schema: "Error" } } },
   { method: "post", path: "/admin/update/apply", tag: "Admin: bridge", summary: "Update now", description: "Asks the Pi to fast-forward to its upstream branch and run deploy/install.sh, which restarts the service. If the update fails, the previous version is installed again. Runs in the background; poll `GET /admin/update`.", access: "admin", responses: { 202: { description: "Requested.", schema: object({ requested: { type: "string" } }) }, 422: { description: "Not set up, or an update is already running.", schema: "Error" } } },

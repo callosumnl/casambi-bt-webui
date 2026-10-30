@@ -13,6 +13,8 @@ import { HomeKitBridge, hapRuntime } from "../homekit/bridge";
 import { HomeKitLights } from "../homekit/lights";
 import { MatterBridge } from "../matter/bridge";
 import { MatterLights } from "../matter/lights";
+import { AutoBackup, createBackup } from "../autoBackup";
+import { appVersion, systemProbes } from "../diagnostics";
 import { matterRuntime } from "../matter/runtime";
 import { DurableScheduler } from "../scheduler";
 import { SetupCode } from "../setupCode";
@@ -102,12 +104,15 @@ async function startServer() {
   const homekit = new HomeKitBridge(store, hapRuntime(join(store.dataDirectory, "homekit")), undefined, new HomeKitLights(store, casambi));
   // Google Home goes through Matter, fully separate from HomeKit: its own settings, identity, and storage folder.
   const matter = new MatterBridge(store, matterRuntime(join(store.dataDirectory, "matter")), undefined, new MatterLights(store, casambi));
-  app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler, setupCode, updater, notifier, homekit, matter }));
+  // Nightly encrypted backups on the Pi and, when set up, in a WebDAV folder.
+  const autoBackup = new AutoBackup(store, passphrase => createBackup({ store, homekit, matter, appVersion: async () => (await appVersion(systemProbes)).version }, passphrase), notifier, join(store.dataDirectory, "backups"));
+  app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler, setupCode, updater, notifier, homekit, matter, autoBackup }));
   app.use("/api/v1", apiErrorHandler);
   await casambi.initialize();
   scheduler.reload();
   notifier.start();
   // Not awaited: a HomeKit failure is reported in the Admin panel and must not delay or stop the web app.
+  autoBackup.schedule();
   void homekit.start();
   void matter.start();
   // development mode uses Vite, production mode uses static files
@@ -131,7 +136,7 @@ async function startServer() {
   });
   // A signal handler replaces Node's default exit, so exit explicitly; open SSE streams would otherwise keep systemd waiting until SIGKILL.
   // HomeKit and Matter get two seconds to withdraw their mDNS announcements, so the apps do not keep trying a stale address.
-  const shutdown = () => { bridge.stop(); void Promise.race([Promise.all([homekit.stop(), matter.stop()]), new Promise(resolve => setTimeout(resolve, 2_000))]).finally(() => process.exit(0)); };
+  const shutdown = () => { autoBackup.stop(); bridge.stop(); void Promise.race([Promise.all([homekit.stop(), matter.stop()]), new Promise(resolve => setTimeout(resolve, 2_000))]).finally(() => process.exit(0)); };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
 }

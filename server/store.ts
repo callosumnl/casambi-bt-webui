@@ -48,6 +48,8 @@ export type CasambiConfig = {
 };
 
 const NOW = () => new Date().toISOString();
+/** The Casambi secrets, which getCasambiConfig decrypts; other secret settings go through secretSetting(). */
+const CASAMBI_SECRETS = ["apiKey", "networkPassword"];
 /** Audit entries kept per class; older ones are pruned (roughly a few months of normal use). */
 export const AUDIT_RETENTION = 20_000;
 /**
@@ -243,7 +245,8 @@ export class LocalStore {
   /** Gets the decrypted config for the bridge. Callers must not return it to clients. */
   public getCasambiConfig(): CasambiConfig {
     const rows = this.db.prepare("SELECT key,value,encrypted FROM settings").all() as Array<{ key: string; value: string; encrypted: number }>;
-    const values = new Map(rows.map(row => [row.key, row.encrypted ? this.decrypt(row.value) : row.value]));
+    // Only the Casambi secrets are decrypted here; other secret settings have their own accessor.
+    const values = new Map(rows.filter(row => !row.encrypted || CASAMBI_SECRETS.includes(row.key)).map(row => [row.key, row.encrypted ? this.decrypt(row.value) : row.value]));
     return {
       networkAddress: values.get("networkAddress") || null, networkUuid: values.get("networkUuid") || null,
       apiKey: values.get("apiKey") || null, networkPassword: values.get("networkPassword") || null,
@@ -409,6 +412,20 @@ export class LocalStore {
   public setAppSetting(key: string, value: string | null): void {
     this.db.prepare("INSERT INTO settings (key,value,encrypted) VALUES (?,?,0) ON CONFLICT(key) DO UPDATE SET value=excluded.value, encrypted=0").run(key, value ?? "");
   }
+  /** A secret setting (encrypted at rest); null when unset, or when it cannot be decrypted (from another Pi's key). */
+  public secretSetting(key: string): string | null {
+    const row = this.db.prepare("SELECT value FROM settings WHERE key = ? AND encrypted = 1").get(key) as { value: string } | undefined;
+    if (!row?.value) return null;
+    try { return this.decrypt(row.value) || null; } catch { return null; }
+  }
+  public setSecretSetting(key: string, value: string | null): void {
+    this.db.prepare("INSERT INTO settings (key,value,encrypted) VALUES (?,?,1) ON CONFLICT(key) DO UPDATE SET value=excluded.value, encrypted=1").run(key, value ? this.encrypt(value) : "");
+  }
+  /** Every secret setting besides the Casambi ones, decrypted, so a backup can carry them to another Pi. */
+  public otherSecrets(): Record<string, string> {
+    const rows = this.db.prepare("SELECT key FROM settings WHERE encrypted = 1").all() as Array<{ key: string }>;
+    return Object.fromEntries(rows.filter(row => !CASAMBI_SECRETS.includes(row.key)).flatMap(row => { const value = this.secretSetting(row.key); return value ? [[row.key, value]] : []; }));
+  }
   public latestAuditId(): number { return (this.db.prepare("SELECT COALESCE(MAX(id), 0) AS id FROM audit_log").get() as { id: number }).id; }
   /** Oldest first, after `afterId`, only the given actions. */
   public auditSince(afterId: number, actions: string[]): Array<{ id: number; action: string; detail: Record<string, unknown> }> {
@@ -433,7 +450,7 @@ export class LocalStore {
    * own, so a backup from an older version gets the current schema. Casambi secrets were encrypted with the other
    * Pi's key, so they are written again from `secrets` with this Pi's key. Every earlier session becomes invalid.
    */
-  public restoreDatabase(file: string, secrets: { networkPassword: string | null; apiKey: string | null }): void {
+  public restoreDatabase(file: string, secrets: { networkPassword: string | null; apiKey: string | null; other?: Record<string, string> }): void {
     new LocalStore(file, "upgrade-only").close();
     this.db.exec("PRAGMA foreign_keys = OFF");
     this.db.prepare("ATTACH DATABASE ? AS backup").run(file);
@@ -450,6 +467,12 @@ export class LocalStore {
         const write = this.db.prepare("INSERT INTO settings (key,value,encrypted) VALUES (?,?,1) ON CONFLICT(key) DO UPDATE SET value=excluded.value, encrypted=1");
         write.run("networkPassword", secrets.networkPassword ? this.encrypt(secrets.networkPassword) : "");
         write.run("apiKey", secrets.apiKey ? this.encrypt(secrets.apiKey) : "");
+        // Other secrets (for example the automatic backup passphrase) come along decrypted in the backup; secrets the
+        // backup does not carry were encrypted with the other Pi's key and cannot be read here, so they are dropped.
+        const other = secrets.other ?? {};
+        for (const [key, value] of Object.entries(other)) if (!CASAMBI_SECRETS.includes(key)) write.run(key, value ? this.encrypt(value) : "");
+        const unreadable = (this.db.prepare("SELECT key FROM settings WHERE encrypted = 1").all() as Array<{ key: string }>).filter(row => !CASAMBI_SECRETS.includes(row.key) && !(row.key in other));
+        for (const row of unreadable) this.db.prepare("DELETE FROM settings WHERE key = ?").run(row.key);
         this.db.prepare("INSERT INTO settings (key,value,encrypted) VALUES ('sessionEpoch',?,0) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(randomBytes(8).toString("hex"));
         if ((this.db.prepare("PRAGMA main.foreign_key_check").all() as unknown[]).length) throw new Error("The backup cannot be restored: its data is inconsistent.");
         this.db.exec("COMMIT");

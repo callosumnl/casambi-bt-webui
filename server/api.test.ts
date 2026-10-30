@@ -14,6 +14,7 @@ import { Updater } from "./updates";
 import { ServerSettingsHelper } from "./serverSettings";
 import { Notifier } from "./notifications";
 import { LocalStore } from "./store";
+import { AutoBackup, createBackup } from "./autoBackup";
 import { existsSync } from "fs";
 
 const folders: string[] = [];
@@ -21,12 +22,13 @@ const stores = new WeakMap<object, LocalStore>();
 const instanceStore = (instance: object) => stores.get(instance)!;
 /** Answers every system probe with "not available", so tests never run real system commands. */
 const noProbes: Probes = { run: async () => null, read: async () => null, list: async () => [], diskSpace: async () => null, network: () => ({ hostname: "", interfaces: {} }) };
-function app(options: { setupCode?: (folder: string) => SetupCode; groups?: Array<{ id: number; name: string; unitIds: number[] }>; updaterState?: (folder: string) => string } = {}) {
+function app(options: { autoBackup?: boolean; setupCode?: (folder: string) => SetupCode; groups?: Array<{ id: number; name: string; unitIds: number[] }>; updaterState?: (folder: string) => string } = {}) {
   const folder = mkdtempSync(join(tmpdir(), "casambi-api-")); folders.push(folder);
   const store = new LocalStore(join(folder, "state.db"), "test-key"); const events = new EventHub();
   const service = { captureLightScene: (name: string, scope: { type: "group" | "room" | "network"; id: number | null }) => store.createLightScene(name, scope, [{ unitId: 1, level: 128, temperature: null }]), recaptureLightScene: (id: number) => store.updateLightScene(id, { lamps: [{ unitId: 1, level: 64, temperature: null }] }), snapshot: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], rooms: [], updatedAt: new Date().toISOString() }), workerState: () => ({ running: true, pid: 4242, busy: null, lastAnswerAt: null, restarts: 0 }), restartWorker: () => ({ running: false, pid: null, busy: null, lastAnswerAt: null, restarts: 1 }), recentSwitchActivity: () => [{ unitId: 2, button: 4, trigger: "tap", raw: {}, at: "2026-09-24T19:17:33.564Z" }], cachedSnapshot: () => ({ connected: false, network: null, units: [], groups: options.groups ?? [], scenes: [], rooms: [], updatedAt: new Date().toISOString(), connection: { phase: "idle" } }), control: async () => ({ connected: false, network: null, units: [], groups: [], scenes: [], updatedAt: new Date().toISOString() }), discover: async () => [], connect: async () => ({}), disconnect: async () => ({}), saveConfiguration: (input: Record<string, unknown>) => store.saveCasambiConfig({ ...store.getCasambiConfig(), ...input }) } as unknown as CasambiService;
   const scheduler = { reload: () => undefined } as unknown as DurableScheduler;
-  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, setupCode: options.setupCode?.(folder), probes: noProbes, updater: new Updater(join(folder, "data"), options.updaterState?.(folder) ?? join(folder, "no-updater")), serverSettings: new ServerSettingsHelper(join(folder, "data"), options.updaterState?.(folder) ?? join(folder, "no-updater")), notifier: new Notifier(store, events, { connection: () => ({ phase: "idle" }), update: () => ({}), post: async () => ({ status: 502 }) }) })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
+  const autoBackup = options.autoBackup ? new AutoBackup(store, passphrase => createBackup({ store, appVersion: async () => null }, passphrase), null, join(folder, "backups")) : undefined;
+  const instance = express(); instance.use(express.json()); instance.use("/api/v1", createCasambiApi({ store, service, events, scheduler, autoBackup, setupCode: options.setupCode?.(folder), probes: noProbes, updater: new Updater(join(folder, "data"), options.updaterState?.(folder) ?? join(folder, "no-updater")), serverSettings: new ServerSettingsHelper(join(folder, "data"), options.updaterState?.(folder) ?? join(folder, "no-updater")), notifier: new Notifier(store, events, { connection: () => ({ phase: "idle" }), update: () => ({}), post: async () => ({ status: 502 }) }) })); instance.use("/api/v1", apiErrorHandler); stores.set(instance, store); return instance;
 }
 afterEach(() => folders.splice(0).forEach(folder => rmSync(folder, { recursive: true, force: true })));
 
@@ -425,6 +427,27 @@ describe("REST API", () => {
     expect((await request(instance).post("/api/v1/admin/notifications/test").set(auth).expect(200)).body).toEqual({ ok: false, status: 502, message: "The webhook answered 502." });
     await request(instance).put("/api/v1/admin/notifications/webhook").set(auth).send({ url: "" }).expect(204);
     expect((await request(instance).post("/api/v1/admin/notifications/test").set(auth).expect(422)).body.error.message).toBe("A webhook URL is required for a test.");
+  });
+
+  it("sets up automatic backups, makes one, and downloads it", async () => {
+    const instance = app({ autoBackup: true }); const admin = await request(instance).post("/api/v1/auth/bootstrap").send({ username: "admin", password: "this-is-a-strong-password" });
+    const auth = { Authorization: `Bearer ${admin.body.token}` };
+    expect((await request(instance).get("/api/v1/admin/auto-backup").set(auth).expect(200)).body).toMatchObject({ frequency: "off", hasPassphrase: false, files: [] });
+    const settings = { frequency: "weekly", time: "04:15", weekday: 1, monthDay: 1, keep: 5, toLocal: true, toWebdav: false, webdavUrl: null };
+    expect((await request(instance).put("/api/v1/admin/auto-backup").set(auth).send(settings).expect(422)).body.error.message).toContain("A passphrase is required");
+    await request(instance).put("/api/v1/admin/auto-backup").set(auth).send({ ...settings, frequency: "hourly", passphrase: "keep this passphrase safe" }).expect(422);
+    await request(instance).put("/api/v1/admin/auto-backup").set(auth).send({ ...settings, toLocal: false, passphrase: "keep this passphrase safe" }).expect(422);
+    await request(instance).put("/api/v1/admin/auto-backup").set(auth).send({ ...settings, toWebdav: true, passphrase: "keep this passphrase safe" }).expect(422);
+    const saved = (await request(instance).put("/api/v1/admin/auto-backup").set(auth).send({ ...settings, passphrase: "keep this passphrase safe" }).expect(200)).body;
+    expect(saved).toMatchObject({ frequency: "weekly", weekday: 1, hasPassphrase: true });
+    expect(saved.nextRun).not.toBeNull();
+    expect(JSON.stringify(saved)).not.toContain("keep this passphrase safe");
+    const made = (await request(instance).post("/api/v1/admin/auto-backup/run").set(auth).expect(200)).body;
+    expect(made.run).toMatchObject({ ok: true, local: true });
+    const file = await request(instance).get(`/api/v1/admin/auto-backup/files/${made.status.files[0].name}`).set(auth).expect(200);
+    expect(file.body.header).toBeDefined();
+    await request(instance).get("/api/v1/admin/auto-backup/files/state.db").set(auth).expect(404);
+    await request(instance).put("/api/v1/admin/auto-backup").set(auth).send({ ...settings, frequency: "off" }).expect(200);
   });
 
   it("downloads an encrypted backup and restores it, ending every session", async () => {
