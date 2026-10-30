@@ -1,6 +1,6 @@
 # HomeKit compatibility plan
 
-Status: phase 1 (bridge, pairing, admin panel) is implemented; lamps are next.
+Status: phases 1 (bridge, pairing, admin panel) and 2 (lamps, groups and rooms) are implemented; colour is next.
 
 ## Goal
 
@@ -153,8 +153,9 @@ New admin API (OpenAPI document and its sync test updated):
 
 1. **Foundation (done):** `hap-nodejs`, settings, `HomeKitBridge` publishing an empty bridge, pairing, admin panel with
    QR code, enable/disable, reset, audit. An iPhone can add the bridge.
-2. **Lamps, groups and rooms:** on/off and brightness for lamps, Casambi groups and local rooms, read from the cache,
-   state pushes, "No Response" when offline, write coalescing with `planTargets`.
+2. **Lamps, groups and rooms (done):** on/off and brightness for lamps, Casambi groups and local rooms, read from the
+   cache, state pushes, "No Response" when offline, write coalescing with `planTargets`, and a cached accessory list so
+   Apple Home keeps its setup across restarts and disconnects (`server/homekit/mapping.ts`, `lights.ts`).
 3. **Colour:** colour temperature and hue/saturation where capabilities allow.
 4. **Scenes:** momentary scene switches (network and local scenes); exposure toggles.
 5. **Operations:** backup/restore of pairing, system check line, Dutch strings for new texts.

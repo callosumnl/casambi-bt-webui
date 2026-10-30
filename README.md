@@ -21,7 +21,7 @@ Sign in with a local account. The initial `admin` account is created in the brow
 | Timers and polling | SQLite-backed timers at a time on chosen days or at sunrise/sunset (±180 min) in IANA time zones, with away dates and shared away-date sets, optional fades, and saved scenes as targets; plus configurable 5–3,600 second state polling. |
 | Physical switches | Live switch activity and switch rules: a tap, hold, or release-after-hold of a Casambi button can toggle, switch, dim, or apply a scene. |
 | REST and real time | Versioned REST API with JWT or API-key authentication, described by an OpenAPI 3.1 document at `/api/v1/openapi.json` and browsable in the web UI under **API**; Server-Sent Events for live state, connection, switch, and timer updates. |
-| HomeKit | Admin → **HOMEKIT** publishes the Pi as a HomeKit bridge, the way Homebridge does, with a setup code and QR code to add it in the Apple Home app. Lamps, groups, and rooms follow in the next steps (see [the HomeKit plan](docs/HOMEKIT_PLAN.md)). |
+| HomeKit | Admin → **HOMEKIT** publishes the Pi as a HomeKit bridge, the way Homebridge does, with a setup code and QR code to add it in the Apple Home app. Every lamp, Casambi group, and room becomes a light there, with on/off and brightness, so Siri and Home automations can switch them. Colour and scenes follow (see [the HomeKit plan](docs/HOMEKIT_PLAN.md)). |
 | Security | Local `admin`/`user` roles, password hashes, short-lived JWTs, revocable hashed API keys, encrypted Casambi credentials, input validation, and audit records. |
 
 ## Requirements

@@ -47,6 +47,7 @@ export class CasambiService {
   private connectionStatus: ConnectionStatus = { phase: "idle" };
   private readonly switchActivity: TimedSwitchPress[] = [];
   private readonly switchListeners: Array<(press: TimedSwitchPress) => void> = [];
+  private readonly stateListeners: Array<() => void> = [];
 
   public constructor(private readonly store: LocalStore, private readonly bridge: JsonLineCasambiBridge, private readonly events: EventHub) {
     this.bridge.on("event", (event: BridgeEvent) => this.handleBridgeEvent(event));
@@ -84,6 +85,12 @@ export class CasambiService {
 
   /** Registers a handler for every reported switch message; handlers must filter on `trigger` themselves. */
   public onSwitchPress(listener: (press: TimedSwitchPress) => void): void { this.switchListeners.push(listener); }
+
+  /**
+   * Registers a handler that runs after every change the live streams hear about: lamp states, new snapshots, and
+   * connection changes. It gets no payload; `cachedSnapshot()` has the new state.
+   */
+  public onStateChange(listener: () => void): void { this.stateListeners.push(listener); }
 
   /** The Python worker's state as seen by its supervisor; answers even when the worker is stuck. */
   public workerState(): WorkerState { return this.bridge.state(); }
@@ -128,7 +135,7 @@ export class CasambiService {
     finally { this.connecting = false; }
     this.reconnectAttempt = 0;
     this.setConnectionStatus({ phase: "connected" });
-    this.events.publish("network.snapshot", this.withMetadata(this.lastSnapshot));
+    this.publishState("network.snapshot", this.withMetadata(this.lastSnapshot));
     return this.lastSnapshot;
   }
 
@@ -158,7 +165,7 @@ export class CasambiService {
 
   private setConnectionStatus(status: ConnectionStatus): void {
     this.connectionStatus = status;
-    this.events.publish("connection.status", status);
+    this.publishState("connection.status", status);
   }
 
   private cancelReconnect(): void {
@@ -173,7 +180,7 @@ export class CasambiService {
     this.cancelReconnect();
     this.lastSnapshot = await this.bridge.execute<NetworkSnapshot>("disconnect");
     this.setConnectionStatus({ phase: "idle" });
-    this.events.publish("network.snapshot", this.withMetadata(this.lastSnapshot));
+    this.publishState("network.snapshot", this.withMetadata(this.lastSnapshot));
     return this.lastSnapshot;
   }
 
@@ -206,7 +213,7 @@ export class CasambiService {
       await this.fadeToLevel(command, generation);
       this.store.audit(actor, "lighting.control", { targetType: command.targetType, targetId: command.targetId ?? null, operation: command.operation, fadeDurationMs: command.fadeDurationMs });
       const faded = this.withMetadata(this.lastSnapshot);
-      this.events.publish("network.snapshot", faded);
+      this.publishState("network.snapshot", faded);
       return faded;
     }
     if (command.targetType === "room") {
@@ -228,7 +235,7 @@ export class CasambiService {
     }
     this.store.audit(actor, "lighting.control", { targetType: command.targetType, targetId: command.targetId ?? null, operation: command.operation });
     const snapshot = this.withMetadata(this.lastSnapshot);
-    this.events.publish("network.snapshot", snapshot);
+    this.publishState("network.snapshot", snapshot);
     return snapshot;
   }
 
@@ -309,7 +316,7 @@ export class CasambiService {
     }
     this.store.audit(actor, "lighting.scene_applied", { sceneId: id, fadeDurationMs });
     const snapshot = this.withMetadata(this.lastSnapshot);
-    this.events.publish("network.snapshot", snapshot);
+    this.publishState("network.snapshot", snapshot);
     return snapshot;
   }
 
@@ -351,7 +358,7 @@ export class CasambiService {
       if (unitIndex >= 0) this.lastSnapshot.units[unitIndex] = event.unit;
       else this.lastSnapshot.units.push(event.unit);
       this.lastSnapshot.updatedAt = new Date().toISOString();
-      this.events.publish("unit.state", this.withMetadata({ ...this.lastSnapshot, units: [event.unit], groups: [], scenes: [] }).units[0]);
+      this.publishState("unit.state", this.withMetadata({ ...this.lastSnapshot, units: [event.unit], groups: [], scenes: [] }).units[0]);
     } else if (event.type === "switch") {
       const press: TimedSwitchPress = { ...event.press, at: new Date().toISOString() };
       this.switchActivity.unshift(press);
@@ -370,7 +377,7 @@ export class CasambiService {
           this.scheduleReconnect("reconnect", "The Bluetooth connection was lost.");
         }
       }
-      this.events.publish(event.type, event);
+      this.publishState(event.type, event);
     }
   }
 
@@ -383,7 +390,7 @@ export class CasambiService {
       try {
         this.lastSnapshot = await this.bridge.snapshot();
         this.pollFailures = 0;
-        this.events.publish("network.snapshot", this.withMetadata(this.lastSnapshot));
+        this.publishState("network.snapshot", this.withMetadata(this.lastSnapshot));
       } catch (error) {
         this.pollFailures += 1;
         this.store.audit("bridge", "bridge.poll_failed", { failures: this.pollFailures, message: this.message(error) });
@@ -408,6 +415,12 @@ export class CasambiService {
         return { ...unit, name: local?.customName || unit.name, ...(room ? { roomId: room.id, roomName: room.name } : {}) };
       }),
     };
+  }
+
+  /** Publishes a state event to the live streams and tells state listeners (HomeKit) about the change. */
+  private publishState(type: string, payload: unknown): void {
+    this.events.publish(type, payload);
+    for (const listener of this.stateListeners) listener();
   }
 
   private message(error: unknown): string { return error instanceof Error ? error.message : "Unknown error."; }

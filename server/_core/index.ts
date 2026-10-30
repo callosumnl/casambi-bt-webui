@@ -10,6 +10,7 @@ import { JsonLineCasambiBridge } from "../casambi/bridge";
 import { CasambiService } from "../casambi/service";
 import { EventHub } from "../events";
 import { HomeKitBridge, hapRuntime } from "../homekit/bridge";
+import { HomeKitLights } from "../homekit/lights";
 import { DurableScheduler } from "../scheduler";
 import { SetupCode } from "../setupCode";
 import { LocalStore } from "../store";
@@ -95,7 +96,7 @@ async function startServer() {
   app.use(express.json({ limit: "1mb" }));
   const updater = new Updater(store.dataDirectory);
   const notifier = new Notifier(store, events, { connection: () => casambi.cachedSnapshot().connection, update: () => updater.status() });
-  const homekit = new HomeKitBridge(store, hapRuntime(join(store.dataDirectory, "homekit")));
+  const homekit = new HomeKitBridge(store, hapRuntime(join(store.dataDirectory, "homekit")), undefined, new HomeKitLights(store, casambi));
   app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler, setupCode, updater, notifier, homekit }));
   app.use("/api/v1", apiErrorHandler);
   await casambi.initialize();
