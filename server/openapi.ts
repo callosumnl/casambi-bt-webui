@@ -117,7 +117,7 @@ const schemas: Record<string, JsonSchema> = {
     qrSvg: nullable({ type: "string", description: "The setup payload as a QR code (SVG) for the Home app, while published." }),
     pairings: { type: "integer", description: "Number of paired Apple Home controllers." },
     lights: { type: "integer", description: "Accessories shown in HomeKit: lamps, Casambi groups, and rooms as lights, scenes as switches." },
-    accessories: { type: "array", description: "Everything HomeKit can show, as last seen on the connected network, and whether it does.", items: object({ key: { type: "string" }, kind: { type: "string", enum: ["unit", "group", "room", "scene", "local_scene"] }, name: { type: "string" }, shown: { type: "boolean" } }) },
+    accessories: { type: "array", description: "Everything HomeKit can show, as last seen on the connected network, and whether it does.", items: object({ key: { type: "string" }, kind: { type: "string", enum: ["unit", "group", "room", "scene", "local_scene", "switch"] }, name: { type: "string" }, shown: { type: "boolean" } }) },
     lightsNotShown: { type: "integer", description: "Lights that did not fit: HomeKit allows 149 accessories per bridge." },
   }),
   BackupFile: { type: "string", contentMediaType: "application/octet-stream", description: "A backup file as downloaded from POST /admin/backup." },

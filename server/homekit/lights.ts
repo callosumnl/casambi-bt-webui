@@ -1,13 +1,15 @@
 import * as hap from "hap-nodejs";
-import type { ControlRequest } from "../casambi/types";
+import type { ControlRequest, SwitchPress } from "../casambi/types";
 import type { LocalStore } from "../store";
-import { describeLights, isScene, LightDescriptor, LightingSnapshot, lightState, LightState, lightUnitIds, LightWrite, planWrites } from "./mapping";
+import { describeLights, isScene, switchKey, LightDescriptor, LightingSnapshot, lightState, LightState, lightUnitIds, LightWrite, planWrites } from "./mapping";
 
 /** Where HomeKit lights read state and send commands; CasambiService in the app. */
 export interface LightingSource {
   cachedSnapshot(): LightingSnapshot;
   control(command: ControlRequest, actor: string): Promise<unknown>;
   onStateChange(listener: () => void): void;
+  /** Wall switch presses; optional, so a source without switches works too. */
+  onSwitchPress?(listener: (press: SwitchPress) => void): void;
 }
 
 /** Adds and removes bridged accessories on the published bridge. */
@@ -21,7 +23,9 @@ export const MAX_LIGHTS = 149;
 const CACHE_KEY = "homekit.lights";
 /** Keys of lamps, groups, rooms, and scenes an administrator chose not to show in HomeKit. */
 const HIDDEN_KEY = "homekit.hidden";
-const KIND_MODEL = { unit: "Casambi lamp", group: "Casambi group", room: "Room", scene: "Casambi scene", local_scene: "Saved scene" } as const;
+/** The buttons seen on each wall switch, by the unit's Casambi UUID; HomeKit shows a switch once a button was pressed. */
+const BUTTONS_KEY = "homekit.buttons";
+const KIND_MODEL = { unit: "Casambi lamp", group: "Casambi group", room: "Room", scene: "Casambi scene", local_scene: "Saved scene", switch: "Casambi switch" } as const;
 /** How long a scene switch stays on in Apple Home after it activated its scene. */
 const SCENE_SWITCH_MS = 1_000;
 
@@ -59,6 +63,7 @@ export class HomeKitLights {
   /** Everything HomeKit could show, hidden or not, as last seen on a connected network. */
   private readonly known = new Map<string, LightDescriptor>();
   private hidden: Set<string>;
+  private buttons: Record<string, number[]>;
   private host: AccessoryHost | null = null;
   private skipped = 0;
   private pending = new Map<string, LightWrite>();
@@ -71,7 +76,9 @@ export class HomeKitLights {
   public constructor(private readonly store: LocalStore, private readonly source: LightingSource, private readonly options: Options = { flushMs: 75, removeAfterMs: 10 * 60_000, writeTimeoutMs: 5_000, now: Date.now }) {
     for (const descriptor of this.loadCache()) { this.lights.set(descriptor.key, newLight(descriptor)); this.known.set(descriptor.key, descriptor); }
     this.hidden = new Set(this.loadHidden());
+    this.buttons = this.loadButtons();
     source.onStateChange(() => this.scheduleSync());
+    source.onSwitchPress?.(press => this.handlePress(press));
     // Room and name changes in the Admin panel do not reach the live state; pick them up within half a minute.
     this.resyncTimer = setInterval(() => this.scheduleSync(), 30_000);
     this.resyncTimer.unref();
@@ -98,6 +105,7 @@ export class HomeKitLights {
     this.known.clear();
     for (const descriptor of this.loadCache()) { this.lights.set(descriptor.key, newLight(descriptor)); this.known.set(descriptor.key, descriptor); }
     this.hidden = new Set(this.loadHidden());
+    this.buttons = this.loadButtons();
   }
 
   /** Everything HomeKit can show, and whether it does; for the Admin panel. */
@@ -157,7 +165,7 @@ export class HomeKitLights {
   private reconcile(snapshot: LightingSnapshot): void {
     const now = this.options.now();
     const localScenes = this.store.listLightScenes();
-    const all = describeLights(snapshot, localScenes);
+    const all = describeLights(snapshot, localScenes, this.buttons);
     this.known.clear();
     for (const descriptor of all) this.known.set(descriptor.key, descriptor);
     const fresh = new Map(all.filter(descriptor => !this.hidden.has(descriptor.key)).map(descriptor => [descriptor.key, descriptor]));
@@ -176,7 +184,7 @@ export class HomeKitLights {
         continue;
       }
       light.missingSince = null;
-      const features = (item: LightDescriptor) => JSON.stringify([item.id, item.dimmable, item.temperature, item.color]);
+      const features = (item: LightDescriptor) => JSON.stringify([item.id, item.dimmable, item.temperature, item.color, item.buttons ?? null]);
       if (features(light.descriptor) !== features(descriptor)) {
         // A characteristic set that changed needs a new accessory; HomeKit keeps it in place because its id stays.
         if (light.accessory) removed.push(light.accessory);
@@ -214,11 +222,22 @@ export class HomeKitLights {
     if (Array.from(this.lights.values()).filter(other => other.accessory).length >= MAX_LIGHTS) { this.skipped += 1; return []; }
     const { key, name, kind, dimmable, temperature, color } = light.descriptor;
     const accessory = new hap.Accessory(name, hap.uuid.generate(`casambi-bt-webui:${key}`));
-    accessory.category = isScene(light.descriptor) ? hap.Categories.SWITCH : hap.Categories.LIGHTBULB;
+    accessory.category = isScene(light.descriptor) ? hap.Categories.SWITCH : kind === "switch" ? hap.Categories.PROGRAMMABLE_SWITCH : hap.Categories.LIGHTBULB;
     accessory.getService(hap.Service.AccessoryInformation)!
       .setCharacteristic(hap.Characteristic.Manufacturer, "Casambi BT WebGUI")
       .setCharacteristic(hap.Characteristic.Model, KIND_MODEL[kind])
       .setCharacteristic(hap.Characteristic.SerialNumber, key);
+    if (kind === "switch") {
+      // One stateless programmable switch per button, numbered in order, as HomeKit expects for a multi-button remote.
+      accessory.addService(hap.Service.ServiceLabel, name).setCharacteristic(hap.Characteristic.ServiceLabelNamespace, hap.Characteristic.ServiceLabelNamespace.ARABIC_NUMERALS);
+      (light.descriptor.buttons ?? []).forEach((button, index) => {
+        const service = accessory.addService(hap.Service.StatelessProgrammableSwitch, `${name} ${index + 1}`, `button-${button}`);
+        service.getCharacteristic(hap.Characteristic.ProgrammableSwitchEvent).setProps({ validValues: [hap.Characteristic.ProgrammableSwitchEvent.SINGLE_PRESS, hap.Characteristic.ProgrammableSwitchEvent.LONG_PRESS] });
+        service.setCharacteristic(hap.Characteristic.ServiceLabelIndex, index + 1);
+      });
+      light.accessory = accessory;
+      return [accessory];
+    }
     if (isScene(light.descriptor)) {
       // A momentary switch, as Homebridge plugins expose scenes: switching it on activates the scene.
       const sceneSwitch = accessory.addService(hap.Service.Switch, name);
@@ -279,6 +298,28 @@ export class HomeKitLights {
     return range ? Math.max(range.minMired, Math.min(range.maxMired, mired)) : mired;
   }
 
+  /**
+   * A wall switch press: a button HomeKit does not know yet is learned (the switch appears or gets the button); a known
+   * one is passed on as a single press (tap) or long press (hold), which Home automations can react to.
+   */
+  private handlePress(press: SwitchPress): void {
+    if ((press.trigger !== "tap" && press.trigger !== "hold") || press.unitId === null || press.button === null) return;
+    const unit = this.source.cachedSnapshot().units.find(item => item.id === press.unitId);
+    if (!unit) return;
+    const id = switchKey(unit);
+    const known = this.buttons[id] ?? [];
+    if (!known.includes(press.button)) {
+      this.buttons = { ...this.buttons, [id]: [...known, press.button] };
+      this.store.setAppSetting(BUTTONS_KEY, JSON.stringify(this.buttons));
+      this.store.audit("homekit", "homekit.button_learned", { unitId: press.unitId, button: press.button });
+      this.sync();
+      return;
+    }
+    const event = press.trigger === "hold" ? hap.Characteristic.ProgrammableSwitchEvent.LONG_PRESS : hap.Characteristic.ProgrammableSwitchEvent.SINGLE_PRESS;
+    this.lights.get(`switch:${id}`)?.accessory?.getServiceById(hap.Service.StatelessProgrammableSwitch, `button-${press.button}`)
+      ?.getCharacteristic(hap.Characteristic.ProgrammableSwitchEvent).updateValue(event);
+  }
+
   private serviceOf(light: Light): hap.Service | undefined {
     return light.accessory?.getService(isScene(light.descriptor) ? hap.Service.Switch : hap.Service.Lightbulb);
   }
@@ -311,6 +352,8 @@ export class HomeKitLights {
 
   /** Pushes a light's state to HomeKit when it changed, or "No Response" while it is unreachable. */
   private push(light: Light, snapshot: LightingSnapshot): void {
+    // A wall switch has no state to push; its button presses are events.
+    if (light.descriptor.kind === "switch") return;
     const service = this.serviceOf(light);
     if (!service) return;
     const state = lightState(light.descriptor, snapshot);
@@ -380,9 +423,17 @@ export class HomeKitLights {
       const cached = JSON.parse(this.store.appSetting(CACHE_KEY) || "[]") as unknown;
       if (!Array.isArray(cached)) return [];
       // Lights cached before colour support have no colour fields; they get them at the next connected sync.
-      return cached.filter(item => Boolean(item) && typeof item.key === "string" && typeof item.name === "string" && ["unit", "group", "room", "scene", "local_scene"].includes(item.kind) && typeof item.id === "number" && typeof item.dimmable === "boolean")
+      return cached.filter(item => Boolean(item) && typeof item.key === "string" && typeof item.name === "string" && ["unit", "group", "room", "scene", "local_scene", "switch"].includes(item.kind) && typeof item.id === "number" && typeof item.dimmable === "boolean")
         .map(item => ({ ...item, temperature: item.temperature ?? null, color: item.color === true }) as LightDescriptor);
     } catch { return []; }
+  }
+
+  private loadButtons(): Record<string, number[]> {
+    try {
+      const stored = JSON.parse(this.store.appSetting(BUTTONS_KEY) || "{}") as unknown;
+      if (!stored || typeof stored !== "object" || Array.isArray(stored)) return {};
+      return Object.fromEntries(Object.entries(stored).map(([key, value]) => [key, Array.isArray(value) ? value.filter((button): button is number => Number.isInteger(button)) : []]));
+    } catch { return {}; }
   }
 
   private loadHidden(): string[] {

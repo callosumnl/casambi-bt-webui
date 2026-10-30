@@ -19,8 +19,8 @@ export type HomeKitInfo = {
 };
 
 /** One lamp, group, room, or scene HomeKit can show. */
-export type HomeKitAccessory = { key: string; kind: "unit" | "group" | "room" | "scene" | "local_scene"; name: string; shown: boolean };
-const KIND_ORDER: HomeKitAccessory["kind"][] = ["unit", "group", "room", "scene", "local_scene"];
+export type HomeKitAccessory = { key: string; kind: "unit" | "group" | "room" | "scene" | "local_scene" | "switch"; name: string; shown: boolean };
+const KIND_ORDER: HomeKitAccessory["kind"][] = ["unit", "group", "room", "scene", "local_scene", "switch"];
 
 export function accessoryKindLabel(kind: HomeKitAccessory["kind"]): string {
   switch (kind) {
@@ -29,6 +29,7 @@ export function accessoryKindLabel(kind: HomeKitAccessory["kind"]): string {
     case "room": return t("ROOMS");
     case "scene": return t("CASAMBI SCENES");
     case "local_scene": return t("SAVED SCENES");
+    case "switch": return t("WALL SWITCHES");
   }
 }
 

@@ -31,6 +31,7 @@ export function HomeKitAccessoriesPanel({ api, onNotice }: { api: LocalApi; onNo
       {groupAccessories(accessories).map(group => <fieldset key={group.kind} className="homekit-accessories"><legend>{accessoryKindLabel(group.kind)}</legend>
         {group.entries.map(entry => <label key={entry.key} className="checkbox-row"><input type="checkbox" checked={shown.has(entry.key)} onChange={event => toggle(entry.key, event.target.checked)} disabled={busy} /> {entry.name}</label>)}
       </fieldset>)}
+      <p className="muted-copy">{t("A Casambi wall switch appears here after each of its buttons was pressed once while the Pi is connected; in the Home app you then choose what a tap or a hold of each button does.")}</p>
       <button className="neon-button" disabled={busy || !changed}>{t("SAVE")}</button>
       <p className="muted-copy">{t("{shown} of {total} shown.", { shown: shown.size, total: accessories.length })}</p>
     </form>}
