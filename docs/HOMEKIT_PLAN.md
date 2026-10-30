@@ -1,6 +1,6 @@
 # HomeKit compatibility plan
 
-Status: phases 1 (bridge, pairing, admin panel), 2 (lamps, groups and rooms), 3 (colour) and 4 (scenes, choosing what HomeKit shows) are implemented; operations (backup of pairings, system check) are next.
+Status: phases 1 to 5 are implemented (bridge and pairing, lamps/groups/rooms, colour, scenes and choosing what HomeKit shows, backup of the pairing and the system check). Wall switches (phase 6) are still open; the Homebridge plugin was dropped.
 
 ## Goal
 
@@ -17,7 +17,7 @@ and **characteristics** (On, Brightness, …) are wired to a device with `onGet`
 | Option | How | Verdict |
 | --- | --- | --- |
 | **A. Built-in HomeKit bridge (recommended)** | `hap-nodejs` runs in the existing service, next to the scheduler and switch rules, and calls `CasambiService` directly. | Fits the single-service appliance model: one installer, one backup, one admin UI, no second process, no API key. |
-| B. Homebridge plugin | Separate npm package `homebridge-casambi-bt-webui` that talks to our REST API with an API key and listens to `/api/v1/events`. | Useful for people who already run Homebridge. Can be added later on top of the same mapping module (phase 6). |
+| B. Homebridge plugin | Separate npm package `homebridge-casambi-bt-webui` that talks to our REST API with an API key and listens to `/api/v1/events`. | Dropped: not needed. |
 
 Running two HomeKit bridges for the same lamps is never useful, so the docs must tell users to pick one.
 
@@ -37,7 +37,7 @@ New module `server/homekit/`:
 | --- | --- |
 | `bridge.ts` | `HomeKitBridge` class: settings, start/stop/publish/unpublish the HAP bridge, pairing events, reset; later also syncing accessories with the snapshot. (Done.) |
 | `identity.ts` | Device id, setup code and setup id generation; HomeKit name sanitising. (Done.) |
-| `mapping.ts` | Pure functions: Casambi unit → HomeKit services; 0–255 ↔ 0–100 %, Kelvin ↔ mireds, RGB/XY ↔ hue/saturation; name sanitising. Shared with a later Homebridge plugin. |
+| `mapping.ts` | Pure functions: Casambi unit → HomeKit services; 0–255 ↔ 0–100 %, Kelvin ↔ mireds, RGB/XY ↔ hue/saturation; name sanitising. |
 | `writeQueue.ts` | Coalesces characteristic writes per unit and across units, then plans them with `planTargets`. |
 
 Changes to existing code:
@@ -162,9 +162,9 @@ New admin API (OpenAPI document and its sync test updated):
 4. **Scenes (done):** Casambi scenes and scenes saved on the Pi as momentary switches (on for a second, then off
    again), and Admin → HomeKit → IN APPLE HOME to choose which lamps, groups, rooms, and scenes HomeKit shows
    (`homekit.hidden`; `PUT /admin/homekit/accessories`).
-5. **Operations:** backup/restore of pairing, system check line, Dutch strings for new texts.
+5. **Operations (done):** backups carry the HomeKit settings and HAP's keys and pairings, so a restore (also on
+   another Pi) keeps the bridge in Apple Home; the system check has a HomeKit line with advice.
 6. **Wall switches:** Casambi buttons as programmable switches for Home automations.
-7. **Optional Homebridge plugin:** for existing Homebridge users, reusing `mapping.ts` over REST + SSE with an API key.
 
 ## Decisions
 

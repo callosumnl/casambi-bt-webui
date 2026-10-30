@@ -49,6 +49,8 @@ function fakeRuntime(options: { busyPorts?: number[]; failPublish?: string } = {
     },
     hasStoredIdentity: username => stored.has(username),
     forgetIdentity: username => { stored.delete(username); },
+    exportIdentity: username => (stored.has(username) ? { [`AccessoryInfo.${username.replace(/:/g, "")}.json`]: { username } } : null),
+    importIdentity: (username, entries) => { if (entries[`AccessoryInfo.${username.replace(/:/g, "")}.json`]) stored.add(username); },
     portAvailable: async port => !(options.busyPorts ?? []).includes(port),
   };
   return { runtime, published, hosts, stored };
@@ -112,6 +114,24 @@ describe("HomeKit bridge", () => {
     expect(after.pincode).not.toBe(before.pincode);
     expect(after.state).toBe("published");
     expect(auditActions(store).map(entry => entry.action)).toContain("homekit.pairing_reset");
+  });
+
+  it("puts its pairing in a backup, and keeps the same bridge in Apple Home after a restore on another Pi", async () => {
+    const oldStore = newStore(); const oldPi = fakeRuntime();
+    const before = await bridgeFor(oldStore, oldPi.runtime).update({ enabled: true, name: "Casambi", port: 51900 }, "admin");
+    const pairing = bridgeFor(oldStore, oldPi.runtime).exportPairing();
+    expect(pairing).toMatchObject({ username: oldPi.published[0].username });
+    // The new Pi gets the old database (with the HomeKit settings), then the pairing from the backup.
+    const newStore_ = newStore(); const newPi = fakeRuntime();
+    for (const key of ["homekit.enabled", "homekit.name", "homekit.port", "homekit.username", "homekit.pincode", "homekit.setupId"]) newStore_.setAppSetting(key, oldStore.appSetting(key));
+    const bridge = bridgeFor(newStore_, newPi.runtime);
+    await bridge.restore(pairing);
+    expect(newPi.published[0]).toMatchObject({ username: oldPi.published[0].username, pincode: before.pincode });
+    // Without a pairing in the backup, it becomes a new bridge instead of one the controllers cannot authenticate.
+    const thirdStore = newStore(); const thirdPi = fakeRuntime();
+    for (const key of ["homekit.enabled", "homekit.port", "homekit.username"]) thirdStore.setAppSetting(key, oldStore.appSetting(key));
+    await bridgeFor(thirdStore, thirdPi.runtime).restore(null);
+    expect(thirdPi.published[0].username).not.toBe(oldPi.published[0].username);
   });
 
   it("reports a busy port or a failed publish instead of crashing, and refuses the web app's port", async () => {
