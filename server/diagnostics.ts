@@ -35,6 +35,8 @@ export type AppFacts = {
   port: string;
   /** The HomeKit bridge's status; absent when the server runs without one. */
   homekit?: { enabled: boolean; state: string; error: string | null; port: number; advertised: boolean; advertiser: string; pairings: number; lights: number; lightsNotShown: number };
+  /** The Matter bridge for Google Home; absent when the server runs without one. `ipv6` says whether the Pi has an IPv6 address. */
+  matter?: { enabled: boolean; state: string; error: string | null; port: number; commissioned: boolean; owners: string[]; lights: number; ipv6: boolean };
 };
 
 /** Reads the system without privileges; each probe has a short timeout and returns null on any failure. */
@@ -223,6 +225,17 @@ export function evaluateChecks(system: SystemFacts, app: AppFacts): Check[] {
     else if (homekit.lightsNotShown > 0) add({ id: "homekit", title: "HomeKit", status: "warn", detail: `${accessories} in HomeKit; ${homekit.lightsNotShown} more do not fit (HomeKit allows 149 per bridge).`, advice: "Hide what you do not need in Apple Home under Admin → HomeKit." });
     else if (homekit.pairings === 0) add({ id: "homekit", title: "HomeKit", status: "info", detail: `Ready to pair on port ${homekit.port}, with ${accessories}.`, advice: "In the Home app choose Add Accessory and scan the code under Admin → HomeKit." });
     else add({ id: "homekit", title: "HomeKit", status: "ok", detail: `Paired with ${homekit.pairings} Apple Home controller${homekit.pairings === 1 ? "" : "s"}; ${accessories}, announced via ${homekit.advertiser}.` });
+  }
+
+  // Google Home through Matter, when it is turned on.
+  const matter = app.matter;
+  if (matter?.enabled) {
+    const devices = `${matter.lights} device${matter.lights === 1 ? "" : "s"}`;
+    if (matter.state === "failed") add({ id: "matter", title: "Google Home (Matter)", status: "fail", detail: `The Matter bridge could not start: ${matter.error ?? "unknown error"}`, advice: matter.error?.includes("in use") ? "Another Matter program on this Pi (a test bridge, Home Assistant) uses the port; stop it or choose another port under Admin → Google Home / Matter." : "Turn the bridge off and on under Admin → Google Home / Matter; the audit log (matter.*) shows more." });
+    else if (matter.state !== "running") add({ id: "matter", title: "Google Home (Matter)", status: "info", detail: "Starting…" });
+    else if (!matter.ipv6) add({ id: "matter", title: "Google Home (Matter)", status: "warn", detail: "The Pi has no IPv6 address; Matter needs IPv6 (a link-local address is enough), so Google Home cannot reach the bridge.", advice: "IPv6 is on by default on Raspberry Pi OS; check that it was not turned off (for example ipv6.disable=1 in /boot/firmware/cmdline.txt)." });
+    else if (!matter.commissioned) add({ id: "matter", title: "Google Home (Matter)", status: "info", detail: `Ready to pair on UDP port ${matter.port}, with ${devices}.`, advice: "In the Google Home app choose + → Device → Matter device, and scan the code under Admin → Google Home / Matter." });
+    else add({ id: "matter", title: "Google Home (Matter)", status: "ok", detail: `Paired with ${matter.owners.join(", ")}; ${devices}.` });
   }
 
   // The Pi itself.

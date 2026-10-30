@@ -143,4 +143,14 @@ describe("diagnostics helpers", () => {
     expect(status(evaluateChecks(facts, { ...healthyApp, homekit: { ...homekit, state: "failed", error: "Port 51827 is already in use." } }), "homekit")).toMatchObject({ status: "fail", advice: expect.stringContaining("another HomeKit port") });
     expect(status(evaluateChecks(facts, { ...healthyApp, homekit: { ...homekit, lightsNotShown: 3 } }), "homekit")).toMatchObject({ status: "warn" });
   });
+
+  it("reports the Matter bridge for Google Home, with advice for a busy port and missing IPv6", () => {
+    const facts = { bluetoothService: null, bluetoothBlocked: null, adapterPowered: null, wifi: null, ethernetUp: null, clock: null, disk: null, temperatureC: null, underVoltage: null, libraries: null, hostname: null, addresses: [] };
+    const matter = { enabled: true, state: "running", error: null, port: 5540, commissioned: true, owners: ["iPhone (Apple keychain)", "Google Home"], lights: 4, ipv6: true };
+    expect(status(evaluateChecks(facts, healthyApp), "matter")).toBeUndefined();
+    expect(status(evaluateChecks(facts, { ...healthyApp, matter }), "matter")).toMatchObject({ status: "ok", detail: "Paired with iPhone (Apple keychain), Google Home; 4 devices." });
+    expect(status(evaluateChecks(facts, { ...healthyApp, matter: { ...matter, commissioned: false } }), "matter")).toMatchObject({ status: "info" });
+    expect(status(evaluateChecks(facts, { ...healthyApp, matter: { ...matter, ipv6: false } }), "matter")).toMatchObject({ status: "warn", advice: expect.stringContaining("ipv6.disable") });
+    expect(status(evaluateChecks(facts, { ...healthyApp, matter: { ...matter, state: "failed", error: "UDP port 5540 is already in use." } }), "matter")).toMatchObject({ status: "fail", advice: expect.stringContaining("Another Matter program") });
+  });
 });

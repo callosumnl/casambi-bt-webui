@@ -12,7 +12,7 @@ function pi(key: string): LocalStore { const folder = mkdtempSync(join(tmpdir(),
 
 describe("backup files", () => {
   it("only open with the passphrase they were made with, and refuse tampering", async () => {
-    const file = await sealBackup({ database: Buffer.from("db bytes"), secrets: { networkPassword: "net-pass", apiKey: null }, homekit: null, appVersion: "1.0.0" }, "correct horse battery");
+    const file = await sealBackup({ database: Buffer.from("db bytes"), secrets: { networkPassword: "net-pass", apiKey: null }, homekit: null, matter: null, appVersion: "1.0.0" }, "correct horse battery");
     await expect(openBackup(file, "correct horse battery")).resolves.toMatchObject({ database: Buffer.from("db bytes"), secrets: { networkPassword: "net-pass", apiKey: null }, appVersion: "1.0.0" });
     await expect(openBackup(file, "wrong passphrase")).rejects.toThrow("The backup passphrase is invalid, or the file is damaged.");
     const tampered = JSON.parse(file.toString()) as { header: { appVersion: string } };
@@ -26,12 +26,14 @@ describe("backup files", () => {
 describe("HomeKit pairing in backups", () => {
   it("carries the pairing encrypted, and opens older backups without one", async () => {
     const pairing = { username: "AA:BB:CC:DD:EE:FF", entries: { "AccessoryInfo.AABBCCDDEEFF.json": { signSk: "private-key-material" } } };
-    const file = await sealBackup({ database: Buffer.from("db"), secrets: { networkPassword: null, apiKey: null }, homekit: pairing, appVersion: null }, "a passphrase");
+    const matter = { nodeId: "casambi-1", files: { "root.operationalCredentials.nocs": Buffer.from("matter-key-material").toString("base64") } };
+    const file = await sealBackup({ database: Buffer.from("db"), secrets: { networkPassword: null, apiKey: null }, homekit: pairing, matter, appVersion: null }, "a passphrase");
     expect(file.toString()).not.toContain("private-key-material");
-    await expect(openBackup(file, "a passphrase")).resolves.toMatchObject({ homekit: pairing });
+    await expect(openBackup(file, "a passphrase")).resolves.toMatchObject({ homekit: pairing, matter });
+    expect(file.toString()).not.toContain(matter.files["root.operationalCredentials.nocs"]);
     // A backup made before HomeKit support: its encrypted part has no homekit field.
     const older = await sealBackup({ database: Buffer.from("db"), secrets: { networkPassword: null, apiKey: null }, appVersion: null } as unknown as Parameters<typeof sealBackup>[0], "a passphrase");
-    await expect(openBackup(older, "a passphrase")).resolves.toMatchObject({ homekit: null });
+    await expect(openBackup(older, "a passphrase")).resolves.toMatchObject({ homekit: null, matter: null });
   });
 });
 
@@ -44,7 +46,7 @@ describe("LocalStore restore", () => {
     oldPi.setUnitMetadata(4, "Island", kitchen.id);
     const key = oldPi.createApiKey("Home Assistant", "user");
     const config = oldPi.getCasambiConfig();
-    const file = await sealBackup({ database: oldPi.exportDatabase(), secrets: { networkPassword: config.networkPassword, apiKey: config.apiKey }, homekit: null, appVersion: null }, "move to the new pi");
+    const file = await sealBackup({ database: oldPi.exportDatabase(), secrets: { networkPassword: config.networkPassword, apiKey: config.apiKey }, homekit: null, matter: null, appVersion: null }, "move to the new pi");
 
     const newPi = pi("key-of-the-new-pi");
     newPi.createUser("setup", "temporary-admin-pass", "admin");

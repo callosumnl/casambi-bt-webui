@@ -1,3 +1,4 @@
+import type { MatterPairing } from "../backup";
 import type { LocalStore } from "../store";
 import { fabricOwner, generateDiscriminator, generateNodeId, generatePasscode, isValidDiscriminator, isValidNodeId, isValidPasscode, matterLabel } from "./identity";
 import { endpointFactory } from "./devices";
@@ -96,6 +97,29 @@ export class MatterBridge {
     await this.lights.setHidden(keys);
     this.store.audit(actor, "matter.accessories_changed", { hidden: keys.length });
     return this.status();
+  }
+
+  /** The Matter node's storage to put in a backup, so a restore keeps the bridge in Google Home; null before first use. */
+  public exportPairing(): MatterPairing | null {
+    const nodeId = this.store.appSetting("matter.nodeId");
+    if (!nodeId || !isValidNodeId(nodeId)) return null;
+    const files = this.runtime.exportStorage(nodeId);
+    return files ? { nodeId, files } : null;
+  }
+
+  /**
+   * After the database was restored: brings back the backup's Matter storage for the restored node id, reloads the
+   * lights, and restarts with the restored settings, so Google Home keeps the bridge. Without a pairing the bridge
+   * starts as a new one with the restored code.
+   */
+  public async restore(pairing: MatterPairing | null): Promise<void> {
+    await this.serialized(async () => {
+      await this.close();
+      const nodeId = this.store.appSetting("matter.nodeId");
+      if (pairing && nodeId && pairing.nodeId === nodeId && isValidNodeId(nodeId)) this.runtime.importStorage(nodeId, pairing.files);
+      await this.lights?.reload();
+      await this.startIfEnabled();
+    });
   }
 
   /** Lets another ecosystem add the bridge for 15 minutes, with the same setup code. */

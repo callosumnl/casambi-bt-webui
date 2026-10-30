@@ -70,9 +70,28 @@ Settings live in `/etc/casambi-bt-webui.env`; change them with `sudoedit /etc/ca
 | HomeKit | Admin → **HOMEKIT**: turn on **PUBLISH AS HOMEKIT BRIDGE**, then in the Home app choose *Add Accessory* and scan the QR code (or type the setup code). iPhone and Pi must be on the same network; the bridge uses TCP port 51827 and mDNS. The Home app calls it an uncertified accessory, as with Homebridge. **RESET PAIRING** forgets every Apple Home that added it. A backup carries the HomeKit pairing, so after a restore (also on another Pi) Apple Home keeps the bridge with its rooms and automations. The system check has a HomeKit line with advice when the bridge cannot start or is not announced on the network. |
 | Port or reverse proxy | Admin → **SYSTEM** → **SERVER**: change the port or turn on **BEHIND A REVERSE PROXY**, then **SAVE AND RESTART**. If the app does not come back on the new port, the previous settings are restored automatically. Other settings are in `/etc/casambi-bt-webui.env` (restart the service after editing it). |
 | Update | Admin → **SYSTEM** → **UPDATES**: **CHECK FOR UPDATES**, then **UPDATE NOW**. The Pi also checks once a day by itself. A failed update restores the previous version automatically. By hand: `cd /opt/casambi-bt-webui && git pull && ./deploy/install.sh` (also needed once on installs from before updates from the app existed). |
-| Back up | Admin → **SYSTEM** → **BACKUP AND RESTORE** → **DOWNLOAD BACKUP**: one file with all accounts, settings (including the Casambi network password), rooms, names, timers, scenes, switch rules, the HomeKit pairing, and the audit log, encrypted with a passphrase you choose. Keep the passphrase; it cannot be recovered. |
+| Back up | Admin → **SYSTEM** → **BACKUP AND RESTORE** → **DOWNLOAD BACKUP**: one file with all accounts, settings (including the Casambi network password), rooms, names, timers, scenes, switch rules, the HomeKit and Google Home (Matter) pairings, and the audit log, encrypted with a passphrase you choose. Keep the passphrase; it cannot be recovered. |
 | Restore (also on a new Pi) | On the new Pi, create a temporary admin in the setup screen, then Admin → **SYSTEM** → **BACKUP AND RESTORE** → **RESTORE BACKUP** with the file and its passphrase. Everyone signs in again with an account from the backup. |
 | Development without hardware | Set `CASAMBI_MOCK_MODE=true`, then run `pnpm dev`; mock fixtures are clearly marked development-only. |
+
+### Google Home: the Developer Console project
+
+Google Home adds an uncertified Matter device only when the Google account of the Google Home app has a matching
+integration in the Google Home Developer Console. It is free and takes a few minutes, once:
+
+1. Open <https://console.home.google.com> with the Google account you use in the Google Home app.
+2. Create a project (any name, for example "Casambi").
+3. Add a **Matter** integration. Choose the test vendor id **0xFFF1**, product id **0x8000**, and a bridge (or light)
+   device type. The labels in the console may differ slightly.
+4. On the Pi: Admin → **GOOGLE HOME / MATTER**, turn on **RUN THE MATTER BRIDGE**, and save. The vendor and product id
+   under **ADVANCED** must be the same as in the console.
+5. In the Google Home app: **+** → **Device** → **Matter device**, scan the QR code from the Admin page, accept the
+   warning about an uncertified device, and pick a room. Lamps of a bridge can land under "not in a room"; give them
+   a room in their settings.
+
+The Pi needs IPv6 (on by default on Raspberry Pi OS), and the Google Nest must be on the same network. Paired with an
+iPhone, keep **iPhone (Apple keychain)** in the list of connected apps. Backups carry the Matter pairing, so a restore,
+also on another Pi, keeps the bridge in Google Home.
 
 ### Troubleshooting `EACCES` during `pnpm build`
 
