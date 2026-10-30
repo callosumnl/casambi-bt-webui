@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { Link, useParams } from "wouter";
 import { AccountsPanel } from "@/components/AccountsPanel";
+import { AutoBackupPanel } from "@/components/AutoBackupPanel";
 import { ApiKeysPanel } from "@/components/ApiKeysPanel";
 import { AuditLogPanel } from "@/components/AuditLogPanel";
 import { AwayDateSetsPanel } from "@/components/AwayDateSetsPanel";
@@ -48,6 +49,6 @@ export default function Admin() {
     {section === "access" && <div className="admin-grid"><HudFrame className="form-panel"><AccountsPanel api={api} onNotice={notify} /></HudFrame><ApiKeysPanel api={api} onNotice={notify} /></div>}
     {section === "homekit" && <div className="admin-grid"><HomeKitPanel api={api} onNotice={notify} /><AccessoriesPanel api={api} onNotice={notify} app="Apple Home" title={t("IN APPLE HOME")} statusPath="/admin/homekit" savePath="/admin/homekit/accessories" hint={<p className="muted-copy">{t("A Casambi wall switch appears here after each of its buttons was pressed once while the Pi is connected; in the Home app you then choose what a tap or a hold of each button does.")}</p>} /></div>}
     {section === "google" && <div className="admin-grid"><MatterPanel api={api} onNotice={notify} /><AccessoriesPanel api={api} onNotice={notify} app="Google Home" title={t("IN GOOGLE HOME")} statusPath="/admin/matter" savePath="/admin/matter/accessories" hint={<p className="muted-copy">{t("A Casambi wall switch appears here after each of its buttons was pressed once while the Pi is connected (separately from HomeKit). In Google Home each button is then a starter for automations: press, long press, and release after a long press.")}</p>} /></div>}
-    {section === "system" && <div className="admin-grid"><NotificationsPanel api={api} onNotice={notify} /><UpdatePanel api={api} onNotice={notify} /><BackupPanel api={api} onNotice={notify} /><ServerSettingsPanel api={api} onNotice={notify} /><div className="admin-wide"><AuditLogPanel api={api} onNotice={notify} /></div></div>}
+    {section === "system" && <div className="admin-grid"><NotificationsPanel api={api} onNotice={notify} /><UpdatePanel api={api} onNotice={notify} /><BackupPanel api={api} onNotice={notify} /><AutoBackupPanel api={api} onNotice={notify} /><ServerSettingsPanel api={api} onNotice={notify} /><div className="admin-wide"><AuditLogPanel api={api} onNotice={notify} /></div></div>}
   </div>;
 }

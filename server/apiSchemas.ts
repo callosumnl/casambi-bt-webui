@@ -49,3 +49,18 @@ export const matterSettingsSchema = z.object({
   productId: z.number().int().min(1).max(0xffff).describe("Product id the bridge announces; must match the Developer Console integration (default 0x8000 = 32768)."),
 });
 export const matterAccessoriesSchema = z.object({ hidden: z.array(z.string().min(1).max(200)).max(1000).describe("Keys (from `accessories` in GET /admin/matter) of what Google Home should not show; everything else is shown. Separate from HomeKit's choice.") });
+const webdavUrlSchema = z.union([z.literal(""), z.null(), z.string().trim().max(2000).url().refine(url => /^https?:\/\//i.test(url), "The WebDAV folder must start with http:// or https://.")]);
+export const autoBackupSchema = z.object({
+  frequency: z.enum(["off", "daily", "weekly", "monthly"]).describe("How often to make a backup; \"off\" makes none automatically (one can still be made by hand)."),
+  time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/, "The time must be HH:MM.").describe("When, in the Pi's time zone (HH:MM)."),
+  weekday: z.number().int().min(0).max(6).default(0).describe("For weekly backups: 0 is Sunday."),
+  monthDay: z.number().int().min(1).max(28).default(1).describe("For monthly backups: the day of the month (1–28)."),
+  keep: z.number().int().min(1).max(60).describe("How many backups to keep, on the Pi and in the WebDAV folder each."),
+  toLocal: z.boolean().describe("Keep backups on the SD card (the data folder)."),
+  toWebdav: z.boolean().describe("Upload backups to the WebDAV folder."),
+  passphrase: z.string().min(10).max(500).optional().describe("Encrypts the backups; required once, then kept (encrypted) on the Pi. Leave out to keep the stored one."),
+  webdavUrl: webdavUrlSchema.describe("A WebDAV folder (NAS, Nextcloud) for a copy off the Pi; required with `toWebdav`."),
+  webdavUser: z.string().trim().max(200).nullable().optional(),
+  webdavPassword: z.string().max(500).optional().describe("Leave out to keep the stored one."),
+});
+export const webdavTestSchema = z.object({ webdavUrl: z.string().trim().max(2000).url().refine(url => /^https?:\/\//i.test(url), "The WebDAV folder must start with http:// or https://."), webdavUser: z.string().trim().max(200).nullable().optional(), webdavPassword: z.string().max(500).optional() });

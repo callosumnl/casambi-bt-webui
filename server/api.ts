@@ -2,7 +2,7 @@ import express, { NextFunction, Router, Request, Response } from "express";
 import { writeFileSync, rmSync } from "fs";
 import { join } from "path";
 import { randomBytes } from "crypto";
-import { openBackup, sealBackup } from "./backup";
+import { openBackup } from "./backup";
 import rateLimit from "express-rate-limit";
 import { z } from "zod";
 import { authenticate, authenticateEventTicket, issueEventTicket, issueToken, Principal, requireAuth } from "./auth";
@@ -21,8 +21,9 @@ import { Notifier } from "./notifications";
 import QRCode from "qrcode";
 import type { HomeKitBridge } from "./homekit/bridge";
 import type { MatterBridge } from "./matter/bridge";
+import { createBackup, type AutoBackup } from "./autoBackup";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
-import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema, autoBackupSchema, webdavTestSchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
@@ -30,7 +31,7 @@ import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSch
  * changes; tests replace all three. Without a `notifier` the notification routes answer with an empty list, and
  * without `homekit` or `matter` their routes refuse.
  */
-type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper; notifier?: Notifier; homekit?: HomeKitBridge; matter?: MatterBridge };
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper; notifier?: Notifier; homekit?: HomeKitBridge; matter?: MatterBridge; autoBackup?: AutoBackup };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 
 /** Wraps async routes in a stable JSON error response. */
@@ -98,7 +99,7 @@ function normalizeHolidayDates(dates: string[]): string[] { return Array.from(ne
 function assertAwayDateSet(id: number | null | undefined, store: LocalStore): AwayDateSet | null { if (id == null) return null; const set = store.getAwayDateSet(id); if (!set) throw new Error("Away-date set does not exist."); return set; }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
-export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory), notifier, homekit, matter }: Dependencies): Router {
+export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory), notifier, homekit, matter, autoBackup }: Dependencies): Router {
   const api = Router();
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
   // Password guessing gets its own, much tighter budget; successful sign-ins do not count against it.
@@ -286,6 +287,29 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
     await bridge.reset(principal(response).name);
     response.json(await matterStatus(bridge));
   }));
+  const requireAutoBackup = (): AutoBackup => { if (!autoBackup) throw new Error("Automatic backups cannot be used: they are not set up in this server."); return autoBackup; };
+  api.get("/admin/auto-backup", requireAuth(store, "admin"), route(async (_request, response) => { response.json(requireAutoBackup().status()); }));
+  api.put("/admin/auto-backup", requireAuth(store, "admin"), route(async (request, response) => {
+    const input = parsed(autoBackupSchema, request.body);
+    response.json(requireAutoBackup().update({ ...input, webdavUrl: input.webdavUrl || null, webdavUser: input.webdavUser ?? null }, principal(response).name));
+  }));
+  api.post("/admin/auto-backup/run", requireAuth(store, "admin"), route(async (_request, response) => {
+    const backups = requireAutoBackup();
+    const run = await backups.run(principal(response).name);
+    response.json({ run, status: backups.status() });
+  }));
+  api.post("/admin/auto-backup/test", requireAuth(store, "admin"), route(async (request, response) => {
+    const input = parsed(webdavTestSchema, request.body);
+    response.json(await requireAutoBackup().testWebdav({ webdavUrl: input.webdavUrl, webdavUser: input.webdavUser ?? null, webdavPassword: input.webdavPassword }));
+  }));
+  api.get("/admin/auto-backup/files/:name", requireAuth(store, "admin"), route(async (request, response) => {
+    const file = requireAutoBackup().file(String(request.params.name));
+    if (!file) throw new Error("That backup file does not exist.");
+    store.audit(principal(response).name, "backup.downloaded", { file: request.params.name });
+    response.setHeader("Content-Type", "application/json");
+    response.setHeader("Content-Disposition", `attachment; filename="${request.params.name}"`);
+    response.send(file);
+  }));
   api.get("/admin/update", requireAuth(store, "admin"), route(async (_request, response) => {
     response.json({ supported: updater.supported, running: await appVersion(probes), pending: { check: updater.pending("check"), apply: updater.pending("apply") }, status: updater.status() });
   }));
@@ -298,8 +322,7 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
   }
   api.post("/admin/backup", requireAuth(store, "admin"), route(async (request, response) => {
     const { passphrase } = parsed(backupCreateSchema, request.body);
-    const config = store.getCasambiConfig();
-    const file = await sealBackup({ database: store.exportDatabase(), secrets: { networkPassword: config.networkPassword, apiKey: config.apiKey }, homekit: homekit?.exportPairing() ?? null, matter: matter?.exportPairing() ?? null, appVersion: (await appVersion(probes)).version }, passphrase);
+    const file = await createBackup({ store, homekit, matter, appVersion: async () => (await appVersion(probes)).version }, passphrase);
     store.audit(principal(response).name, "backup.created", { bytes: file.length });
     response.setHeader("Content-Type", "application/json");
     response.setHeader("Content-Disposition", `attachment; filename="casambi-backup-${new Date().toISOString().slice(0, 10)}.json"`);
@@ -319,6 +342,8 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
     // The HomeKit settings came back with the database; its pairing comes from the backup, so Apple Home keeps the bridge.
     if (homekit) await homekit.restore(backup.homekit);
     if (matter) await matter.restore(backup.matter);
+    // The automatic backup settings came back with the database.
+    autoBackup?.schedule();
     // Accounts, timers, and settings changed underneath everything that was running.
     events.disconnectAll();
     scheduler.reload();
