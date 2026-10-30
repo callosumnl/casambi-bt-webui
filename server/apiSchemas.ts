@@ -64,3 +64,9 @@ export const autoBackupSchema = z.object({
   webdavPassword: z.string().max(500).optional().describe("Leave out to keep the stored one."),
 });
 export const webdavTestSchema = z.object({ webdavUrl: z.string().trim().max(2000).url().refine(url => /^https?:\/\//i.test(url), "The WebDAV folder must start with http:// or https://."), webdavUser: z.string().trim().max(200).nullable().optional(), webdavPassword: z.string().max(500).optional() });
+const kelvinSchema = z.number().int().min(1800).max(6500);
+export const daylightSchema = z.object({
+  roomIds: z.array(z.number().int().positive()).max(500).describe("Rooms whose lamps follow the day."),
+  warmKelvin: kelvinSchema.describe("At night: before sunrise and after sunset."),
+  coolKelvin: kelvinSchema.describe("At solar noon."),
+});

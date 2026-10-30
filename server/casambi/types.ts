@@ -69,7 +69,20 @@ export const operationSchema = z.enum([
   "set_slider",
   "set_xy",
   "activate_scene",
+  "wake_up",
 ]);
+
+/**
+ * A wake-up light: lamps start at the lowest level in warm white and rise to `level` while the colour temperature
+ * moves to cool white, over `minutes`. Lamps without colour temperature only rise in brightness.
+ */
+export const wakeUpSchema = z.object({
+  minutes: z.number().int().min(5).max(60),
+  level: z.number().int().min(1).max(255),
+  warmKelvin: z.number().int().min(1800).max(6500).default(2200),
+  coolKelvin: z.number().int().min(1800).max(6500).default(4000),
+});
+export type WakeUp = z.infer<typeof wakeUpSchema>;
 
 /** Validated command sent from REST, schedules, or the UI to Casambi. */
 export const controlRequestSchema = z.object({
@@ -99,6 +112,11 @@ export const controlRequestSchema = z.object({
   }
   if (value.operation === "set_xy" && (!Array.isArray(value.value) || value.value.length !== 2 || !value.value.every(item => typeof item === "number" && Number.isFinite(item) && item >= 0 && item <= 1))) {
     ctx.addIssue({ code: "custom", message: "XY colour must be an array of two numbers from 0 to 1.", path: ["value"] });
+  }
+  if (value.operation === "wake_up") {
+    const parsed = wakeUpSchema.safeParse(value.value);
+    if (!parsed.success) ctx.addIssue({ code: "custom", message: "A wake-up light needs minutes (5–60), a level (1–255), and colour temperatures from 1800 to 6500 K.", path: ["value"] });
+    if (value.fadeDurationMs) ctx.addIssue({ code: "custom", message: "A wake-up light has its own duration; fadeDurationMs cannot be used with it.", path: ["fadeDurationMs"] });
   }
   if (value.targetType !== "network" && (value.targetId === undefined || value.targetId === null)) {
     ctx.addIssue({ code: "custom", message: "A targetId is required for this target type.", path: ["targetId"] });

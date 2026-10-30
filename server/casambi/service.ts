@@ -1,8 +1,9 @@
 import { EventHub } from "../events";
 import { CasambiConfig, LightSceneRecord, LocalStore, SceneLamp, SceneScope } from "../store";
-import { controlRequestSchema, isLampUnit, type BridgeEvent, type ControlRequest, type NetworkSnapshot, type SwitchPress } from "./types";
+import { controlRequestSchema, isLampUnit, wakeUpSchema, type BridgeEvent, type UnitSnapshot, type WakeUp, type ControlRequest, type NetworkSnapshot, type SwitchPress } from "./types";
 import { JsonLineCasambiBridge, type WorkerState } from "./bridge";
 import { bucketBy, planTargets, type PlannedTarget } from "./commandPlan";
+import { kelvinRange } from "../lighting/model";
 
 /** Operations that set an absolute value, so a newer queued value can safely replace an unsent older one. */
 const COALESCIBLE_OPERATIONS = new Set(["set_level", "set_temperature", "set_color", "set_white", "set_vertical", "set_slider", "set_xy"]);
@@ -41,6 +42,8 @@ export class CasambiService {
   private wantConnected = false;
   /** Bumped by every control command; a fade stops once it is no longer the newest. */
   private fadeGeneration = 0;
+  /** The generation of the running wake-up light; it runs while that is still the newest command. */
+  private wakeUpGeneration: number | null = null;
   private connecting = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
   private reconnectAttempt = 0;
@@ -208,6 +211,7 @@ export class CasambiService {
     // A newer command takes over from a running fade. Taken before any await, so a fade that is still reading
     // the current levels cannot override a command that arrived after it.
     const generation = ++this.fadeGeneration;
+    if (command.operation === "wake_up") return this.startWakeUp(command, wakeUpSchema.parse(command.value), actor, generation);
     if (command.targetType === "local_scene") return this.applyLightScene(Number(command.targetId), actor, command.fadeDurationMs ?? 0, generation);
     if (command.fadeDurationMs && ["on", "off", "set_level"].includes(command.operation)) {
       await this.fadeToLevel(command, generation);
@@ -288,6 +292,81 @@ export class CasambiService {
       if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
     }
     this.lastSnapshot = await this.bridge.snapshot();
+  }
+
+  /** Whether a wake-up light is running (until it ends, or a newer command takes over). */
+  public wakeUpActive(): boolean { return this.wakeUpGeneration !== null && this.wakeUpGeneration === this.fadeGeneration; }
+
+  /**
+   * Sets the colour temperature of lamps that are on, without interrupting a running fade and without an audit entry
+   * per change: for the daylight rhythm, which adjusts every few minutes. Each lamp gets the kelvin clamped to its
+   * own range; returns what each lamp was sent.
+   */
+  public async adjustTemperature(unitIds: number[], kelvin: number): Promise<Map<number, number>> {
+    const units = new Map(this.lastSnapshot.units.map(unit => [unit.id, unit]));
+    const sent = new Map(unitIds.flatMap(unitId => { const unit = units.get(unitId); return unit ? [[unitId, clampKelvin(unit, kelvin)] as [number, number]] : []; }));
+    for (const bucket of bucketBy(sent, String)) await this.sendPlanned(planTargets(bucket.unitIds, this.lastSnapshot), { operation: "set_temperature", value: bucket.value });
+    if (sent.size) {
+      this.lastSnapshot = await this.bridge.snapshot();
+      this.publishState("network.snapshot", this.withMetadata(this.lastSnapshot));
+    }
+    return sent;
+  }
+
+  /**
+   * Starts a wake-up light and returns at once; it runs for minutes in the background. Every pass (at least 10 s apart,
+   * at most 120 per wake-up) raises the level along a curve that starts slowly, as eyes notice the first light most,
+   * and moves the colour temperature from warm to cool. Lamps that are already brighter are not dimmed. Any newer
+   * command, a switch press, HomeKit, or Google Home stops it.
+   */
+  private startWakeUp(command: ControlRequest, wakeUp: WakeUp, actor: string, generation: number): NetworkSnapshot {
+    const lamps = this.targetUnitIds(command, this.lastSnapshot).map(unitId => this.lastSnapshot.units.find(unit => unit.id === unitId)).filter((unit): unit is UnitSnapshot => Boolean(unit && isLampUnit(unit)));
+    if (lamps.length === 0) throw new Error("The control target has no assigned lamps.");
+    this.wakeUpGeneration = generation;
+    this.store.audit(actor, "lighting.control", { targetType: command.targetType, targetId: command.targetId ?? null, operation: "wake_up", minutes: wakeUp.minutes, level: wakeUp.level });
+    void this.runWakeUp(lamps, wakeUp, generation)
+      .then(finished => this.store.audit(actor, finished ? "lighting.wake_up_finished" : "lighting.wake_up_interrupted", { targetType: command.targetType, targetId: command.targetId ?? null }))
+      .catch(error => this.store.audit(actor, "lighting.wake_up_failed", { message: this.message(error) }))
+      .finally(() => { if (this.wakeUpGeneration === generation) this.wakeUpGeneration = null; });
+    return this.withMetadata(this.lastSnapshot);
+  }
+
+  /** The wake-up passes; true when it reached the end, false when a newer command took over. */
+  private async runWakeUp(lamps: UnitSnapshot[], wakeUp: WakeUp, generation: number): Promise<boolean> {
+    const durationMs = wakeUp.minutes * 60_000;
+    const passMs = Math.max(10_000, durationMs / 120);
+    const start = new Map(lamps.map(unit => [unit.id, unit.state.on ? unit.state.dimmer ?? 255 : 0]));
+    const white = lamps.filter(unit => unit.capabilities.some(capability => capability.type === "temperature"));
+    const sentLevel = new Map<number, number>();
+    const sentKelvin = new Map<number, number>();
+    const startedAt = Date.now();
+    for (;;) {
+      if (generation !== this.fadeGeneration) return false;
+      const passStartedAt = Date.now();
+      const fraction = Math.min(1, (passStartedAt - startedAt) / durationMs);
+      // Colour first, so a lamp that comes on starts warm instead of flashing its last colour.
+      const kelvin = Math.round(wakeUp.warmKelvin + (wakeUp.coolKelvin - wakeUp.warmKelvin) * fraction);
+      // Steps under 50 K are not visible; they wait for the next pass, except the last one.
+      const kelvins = new Map(white.map(unit => [unit.id, clampKelvin(unit, kelvin)] as [number, number]).filter(([unitId, value]) => { const previous = sentKelvin.get(unitId); return previous === undefined || Math.abs(previous - value) >= 50 || fraction >= 1 && previous !== value; }));
+      for (const bucket of bucketBy(kelvins, String)) {
+        if (generation !== this.fadeGeneration) return false;
+        await this.sendPlanned(planTargets(bucket.unitIds, this.lastSnapshot), { operation: "set_temperature", value: bucket.value });
+        bucket.unitIds.forEach(unitId => sentKelvin.set(unitId, bucket.value));
+      }
+      const level = Math.max(1, Math.round(wakeUp.level * fraction * fraction));
+      const levels = new Map(lamps.map(unit => [unit.id, Math.max(start.get(unit.id) ?? 0, level)] as [number, number]).filter(([unitId, value]) => value !== (sentLevel.get(unitId) ?? start.get(unitId))));
+      for (const bucket of bucketBy(levels, String)) {
+        if (generation !== this.fadeGeneration) return false;
+        await this.sendPlanned(planTargets(bucket.unitIds, this.lastSnapshot), { operation: "set_level", value: bucket.value });
+        bucket.unitIds.forEach(unitId => sentLevel.set(unitId, bucket.value));
+      }
+      if (fraction >= 1) break;
+      const wait = passMs - (Date.now() - passStartedAt);
+      if (wait > 0) await new Promise(resolve => setTimeout(resolve, wait));
+    }
+    this.lastSnapshot = await this.bridge.snapshot();
+    this.publishState("network.snapshot", this.withMetadata(this.lastSnapshot));
+    return true;
   }
 
   /** Saves the current setting of a group, room, or the whole network as a named scene. */
@@ -424,4 +503,10 @@ export class CasambiService {
   }
 
   private message(error: unknown): string { return error instanceof Error ? error.message : "Unknown error."; }
+}
+
+/** A colour temperature within what the lamp can show. */
+function clampKelvin(unit: UnitSnapshot, kelvin: number): number {
+  const range = kelvinRange(unit);
+  return range ? Math.round(Math.min(range.max, Math.max(range.min, kelvin))) : kelvin;
 }

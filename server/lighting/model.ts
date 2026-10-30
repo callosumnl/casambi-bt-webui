@@ -50,7 +50,7 @@ const capability = (unit: UnitSnapshot, type: string) => unit.capabilities.find(
 const isDimmable = (unit: UnitSnapshot) => Boolean(capability(unit, "dimmer"));
 const takesColor = (unit: UnitSnapshot) => Boolean(capability(unit, "rgb") || capability(unit, "xy"));
 /** A lamp's colour temperature range in kelvin; casambi-bt reports it on the control, with a common default. */
-function kelvinRange(unit: UnitSnapshot): { min: number; max: number } | null {
+export function kelvinRange(unit: UnitSnapshot): { min: number; max: number } | null {
   const control = capability(unit, "temperature");
   if (!control) return null;
   const min = control.min && control.min >= 1000 ? control.min : 2700;

@@ -422,3 +422,58 @@ describe("CasambiService light scenes", () => {
   });
 });
 
+
+describe("CasambiService wake-up light", () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const setup = async () => {
+    vi.useFakeTimers();
+    const database = store();
+    const bridge = new FakeBridge();
+    bridge.network.units[0].capabilities.push({ type: "temperature", min: 2000, max: 6500, readOnly: false });
+    const service = new CasambiService(database, bridge as never, new EventHub());
+    await service.snapshot();
+    return { database, bridge, service };
+  };
+  const wakeUp = { targetType: "network" as const, operation: "wake_up" as const, value: { minutes: 5, level: 255, warmKelvin: 2200, coolKelvin: 4000 } };
+
+  it("starts warm and dim, and ends bright and cool", async () => {
+    const { database, bridge, service } = await setup();
+    await service.control(wakeUp, "schedule:1");
+    expect(service.wakeUpActive()).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bridge.commands.slice(0, 2)).toEqual([expect.objectContaining({ operation: "set_temperature", value: 2200, targetType: "unit", targetId: 1 }), expect.objectContaining({ operation: "set_level", value: 1 })]);
+    await vi.advanceTimersByTimeAsync(5 * 60_000 + 20_000);
+    const levels = bridge.commands.filter(command => command.operation === "set_level").map(command => Number(command.value));
+    const kelvins = bridge.commands.filter(command => command.operation === "set_temperature").map(command => Number(command.value));
+    expect(levels.at(-1)).toBe(255);
+    expect(kelvins.at(-1)).toBe(4000);
+    // Rising, never falling, and slowly at first.
+    expect(levels).toEqual([...levels].sort((a, b) => a - b));
+    expect(levels[Math.floor(levels.length / 2)]).toBeLessThan(128);
+    expect(levels.length).toBeLessThanOrEqual(31);
+    expect(service.wakeUpActive()).toBe(false);
+    expect(database.recentAudit().map(entry => entry.action)).toContain("lighting.wake_up_finished");
+  });
+
+  it("stops when the lights are controlled, and keeps lamps that are already brighter", async () => {
+    const { database, bridge, service } = await setup();
+    Object.assign(bridge.network.units[1].state, { on: true, dimmer: 200 });
+    await service.snapshot();
+    await service.control(wakeUp, "schedule:1");
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(bridge.commands.filter(command => command.operation === "set_level" && (command.targetId === 2 || command.targetType === "network"))).toEqual([]);
+    await service.control({ targetType: "network", operation: "off" }, "switch");
+    const sent = bridge.commands.length;
+    await vi.advanceTimersByTimeAsync(5 * 60_000);
+    expect(bridge.commands.length).toBe(sent);
+    expect(service.wakeUpActive()).toBe(false);
+    expect(database.recentAudit().map(entry => entry.action)).toContain("lighting.wake_up_interrupted");
+  });
+
+  it("refuses targets without lamps and a bad value", async () => {
+    const { service } = await setup();
+    await expect(service.control({ targetType: "group", targetId: 9, operation: "wake_up", value: wakeUp.value }, "tester")).rejects.toThrow("no assigned lamps");
+    await expect(service.control({ ...wakeUp, value: { minutes: 2, level: 255 } }, "tester")).rejects.toThrow();
+    await expect(service.control({ ...wakeUp, fadeDurationMs: 1000 }, "tester")).rejects.toThrow();
+  });
+});
