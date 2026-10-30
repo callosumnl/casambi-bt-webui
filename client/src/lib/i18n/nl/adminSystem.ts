@@ -206,4 +206,6 @@ export const adminSystem: Record<string, string> = {
   "CASAMBI GROUPS": "CASAMBI-GROEPEN",
   "CASAMBI SCENES": "CASAMBI-SCÈNES",
   "SAVED SCENES": "OPGESLAGEN SCÈNES",
+  "WALL SWITCHES": "WANDSCHAKELAARS",
+  "A Casambi wall switch appears here after each of its buttons was pressed once while the Pi is connected; in the Home app you then choose what a tap or a hold of each button does.": "Een Casambi-wandschakelaar verschijnt hier nadat elke knop één keer is ingedrukt terwijl de Pi verbonden is; in de Woning-app kies je daarna wat een tik of vasthouden van elke knop doet.",
 };

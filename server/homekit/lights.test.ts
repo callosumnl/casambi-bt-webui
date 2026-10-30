@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ControlRequest } from "../casambi/types";
+import type { ControlRequest, SwitchPress } from "../casambi/types";
 import { LocalStore } from "../store";
 import { HomeKitLights, LightingSource } from "./lights";
 import { colourFixture, fixture } from "./testFixtures";
@@ -22,16 +22,18 @@ function newStore(): LocalStore {
 function fakeSource(snapshot: LightingSnapshot, options: { fail?: boolean } = {}) {
   const sent: ControlRequest[] = [];
   const listeners: Array<() => void> = [];
+  const presses: Array<(press: SwitchPress) => void> = [];
   const source: LightingSource & { snapshot: LightingSnapshot } = {
     snapshot,
     cachedSnapshot: () => source.snapshot,
     onStateChange: listener => { listeners.push(listener); },
+    onSwitchPress: listener => { presses.push(listener); },
     async control(command) {
       if (options.fail) throw new Error("Bluetooth is busy.");
       sent.push(command);
     },
   };
-  return { source, sent, changed: () => listeners.forEach(listener => listener()) };
+  return { source, sent, changed: () => listeners.forEach(listener => listener()), press: (press: Omit<SwitchPress, "raw">) => presses.forEach(listener => listener({ ...press, raw: {} })) };
 }
 
 function fakeHost() {
@@ -222,5 +224,33 @@ describe("HomeKit lights", () => {
     expect(keys(restarted)).toEqual(["group:net:7", "unit:uuid-1", "unit:uuid-2"]);
     again.setHidden([]);
     expect(keys(restarted)).toEqual(["group:net:7", "room:1", "unit:uuid-1", "unit:uuid-2", "unit:uuid-3"]);
+  });
+
+  it("learns a wall switch's buttons from presses and passes taps and holds on as HomeKit button events", () => {
+    const store = newStore(); const { source, press } = fakeSource(fixture()); const host = fakeHost();
+    const lights = lightsFor(store, source);
+    lights.attach(host);
+    expect(keys(host)).not.toContain("switch:uuid-4");
+    press({ unitId: 4, button: 1, trigger: "tap" });
+    const first = host.find("switch:uuid-4");
+    expect(first.category).toBe(hap.Categories.PROGRAMMABLE_SWITCH);
+    expect(store.auditSince(0, ["homekit.button_learned"])).toHaveLength(1);
+    press({ unitId: 4, button: 3, trigger: "hold" });
+    const remote = host.find("switch:uuid-4");
+    const button = (number: number) => remote.getServiceById(hap.Service.StatelessProgrammableSwitch, `button-${number}`)!;
+    expect(remote.services.filter(service => service.UUID === hap.Service.StatelessProgrammableSwitch.UUID)).toHaveLength(2);
+    expect(button(3).getCharacteristic(hap.Characteristic.ServiceLabelIndex).value).toBe(2);
+    press({ unitId: 4, button: 1, trigger: "tap" });
+    expect(button(1).getCharacteristic(hap.Characteristic.ProgrammableSwitchEvent).value).toBe(hap.Characteristic.ProgrammableSwitchEvent.SINGLE_PRESS);
+    press({ unitId: 4, button: 3, trigger: "hold" });
+    expect(button(3).getCharacteristic(hap.Characteristic.ProgrammableSwitchEvent).value).toBe(hap.Characteristic.ProgrammableSwitchEvent.LONG_PRESS);
+    // The release after a hold, and raw activity without a trigger, are not presses.
+    press({ unitId: 4, button: 5, trigger: "release_after_hold" });
+    press({ unitId: 4, button: 6, trigger: null });
+    expect(remote.services.filter(service => service.UUID === hap.Service.StatelessProgrammableSwitch.UUID)).toHaveLength(2);
+    // The learned buttons survive a restart, also while the network is still connecting.
+    const restarted = fakeHost();
+    lightsFor(store, fakeSource(fixture({ connected: false, network: null })).source).attach(restarted);
+    expect(restarted.find("switch:uuid-4").services.filter(service => service.UUID === hap.Service.StatelessProgrammableSwitch.UUID)).toHaveLength(2);
   });
 });

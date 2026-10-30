@@ -95,4 +95,11 @@ describe("HomeKit mapping", () => {
     expect(lightState({ kind: "scene", id: 5 }, fixture())).toMatchObject({ available: true, on: false });
     expect(lightState({ kind: "local_scene", id: 3 }, fixture({ connected: false }))).toMatchObject({ available: false });
   });
+
+  it("shows a wall switch with the buttons that were pressed, in order", () => {
+    const lights = describeLights(fixture(), [], { "uuid-4": [3, 1], "uuid-99": [1] });
+    expect(lights.filter(light => light.kind === "switch")).toEqual([{ key: "switch:uuid-4", kind: "switch", id: 4, name: "Lamp 4", dimmable: false, temperature: null, color: false, buttons: [1, 3] }]);
+    expect(lightState({ kind: "switch", id: 4 }, fixture())).toMatchObject({ available: true });
+    expect(lightState({ kind: "switch", id: 4 }, fixture({ connected: false }))).toMatchObject({ available: false });
+  });
 });

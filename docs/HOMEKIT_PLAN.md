@@ -1,6 +1,6 @@
 # HomeKit compatibility plan
 
-Status: phases 1 to 5 are implemented (bridge and pairing, lamps/groups/rooms, colour, scenes and choosing what HomeKit shows, backup of the pairing and the system check). Wall switches (phase 6) are still open; the Homebridge plugin was dropped.
+Status: all phases are implemented: bridge and pairing, lamps/groups/rooms, colour, scenes and choosing what HomeKit shows, backup of the pairing and the system check, and wall switches. The Homebridge plugin was dropped.
 
 ## Goal
 
@@ -164,7 +164,9 @@ New admin API (OpenAPI document and its sync test updated):
    (`homekit.hidden`; `PUT /admin/homekit/accessories`).
 5. **Operations (done):** backups carry the HomeKit settings and HAP's keys and pairings, so a restore (also on
    another Pi) keeps the bridge in Apple Home; the system check has a HomeKit line with advice.
-6. **Wall switches:** Casambi buttons as programmable switches for Home automations.
+6. **Wall switches (done):** a Casambi wall switch is a HomeKit remote with one stateless programmable switch per
+   button (tap → single press, hold → long press). Casambi does not report how many buttons a switch has, so each
+   button is learned the first time it is pressed (`homekit.buttons`, by the unit's Casambi UUID).
 
 ## Decisions
 
@@ -175,6 +177,6 @@ New admin API (OpenAPI document and its sync test updated):
 
 ## Open questions
 
-- Which button numbers and triggers do real Casambi switches report reliably enough for HomeKit automations? (Phase 6.)
+- Do real Casambi switches report every button reliably enough for HomeKit automations? Verify on hardware.
 - May the `casambi` service user publish through avahi's D-Bus API on Raspberry Pi OS? Verify on the Pi; HAP-NodeJS
   falls back to bonjour-hap if not.
