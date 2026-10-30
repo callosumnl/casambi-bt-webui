@@ -1,7 +1,7 @@
 import type { LocalStore } from "../store";
 import { rgbToHueSaturation, xyToRgb } from "../lighting/colour";
-import type { ControlRequest } from "../casambi/types";
-import { isScene, LightDescriptor, LightingSnapshot, lightState, lightUnitIds, LightWrite } from "../lighting/model";
+import type { ControlRequest, SwitchPress } from "../casambi/types";
+import { isScene, LightDescriptor, LightingSnapshot, lightState, lightUnitIds, LightWrite, switchKey } from "../lighting/model";
 import { LightRegistry, LightingSource, RegistryChange } from "../lighting/registry";
 import { WriteBatcher } from "../lighting/writes";
 import { DeviceFactory, DeviceState, fromMatterLevel, MatterDevice, toMatterLevel } from "./devices";
@@ -20,8 +20,8 @@ const newDevice = (descriptor: LightDescriptor): Device => ({ descriptor, device
 const toMatter = { hue: (degrees: number) => Math.round((degrees / 360) * 254), saturation: (percent: number) => Math.round((percent / 100) * 254) };
 const fromMatter = { hue: (value: number) => (value / 254) * 360, saturation: (value: number) => (value / 254) * 100 };
 
-/** Kinds the Matter bridge shows: lamps, Casambi groups, and rooms as lights, and scenes as switches. */
-const SUPPORTED = new Set<LightDescriptor["kind"]>(["unit", "group", "room", "scene", "local_scene"]);
+/** Kinds the Matter bridge shows: lamps, Casambi groups, and rooms as lights, scenes as switches, and wall switches as buttons. */
+const SUPPORTED = new Set<LightDescriptor["kind"]>(["unit", "group", "room", "scene", "local_scene", "switch"]);
 
 const unreachable = () => new Error("The Casambi network cannot be reached.");
 
@@ -48,6 +48,7 @@ export class MatterLights {
     });
     this.loadDevices();
     source.onStateChange(() => this.scheduleSync());
+    source.onSwitchPress?.(press => this.handlePress(press));
     this.resyncTimer = setInterval(() => this.scheduleSync(), 30_000);
     this.resyncTimer.unref();
   }
@@ -151,6 +152,22 @@ export class MatterLights {
     device.pushed = state;
   }
 
+  /**
+   * A wall switch press: a button Google Home does not know yet is learned (the switch appears or gets the button,
+   * with its own list, separate from HomeKit's); a known one is passed on as Matter switch events.
+   */
+  private handlePress(press: SwitchPress): void {
+    if (!press.trigger || press.unitId === null || press.button === null) return;
+    const unit = this.source.cachedSnapshot().units.find(item => item.id === press.unitId);
+    if (!unit) return;
+    // A release only ends a press; it never teaches a new button.
+    if (press.trigger !== "release_after_hold" && this.registry.learnButton(unit, press.button)) { this.scheduleSync(); return; }
+    const device = this.devices.get(`switch:${switchKey(unit)}`)?.device;
+    const button = press.button;
+    const trigger = press.trigger;
+    if (device?.press) void this.serialized(() => device.press!(button, trigger)).catch(() => undefined);
+  }
+
   /** Activates a scene, then switches its switch off again; a failure is audited and the switch goes off at once. */
   private activate(device: Device): void {
     const { kind, id } = device.descriptor;
@@ -173,6 +190,8 @@ export class MatterLights {
   private state(device: Device, snapshot: LightingSnapshot): DeviceState {
     const { descriptor } = device;
     const state = lightState(descriptor, snapshot);
+    // A wall switch has no state of its own, only whether it is reachable.
+    if (descriptor.kind === "switch") return { reachable: state.available, on: false, level: null, mired: null, hue: null, saturation: null, colorMode: null };
     // A scene switch is on only for the second after it activated its scene.
     if (isScene(descriptor)) return { reachable: state.available, on: this.options.now() < (device.sceneOnUntil ?? 0), level: null, mired: null, hue: null, saturation: null, colorMode: null };
     if (state.level !== null) device.lastLevel = toMatterLevel(state.level);

@@ -2,12 +2,16 @@ import { createHash } from "crypto";
 import { Endpoint } from "@matter/main";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
 import { ColorControlServer } from "@matter/main/behaviors/color-control";
+import { SwitchServer } from "@matter/main/behaviors/switch";
+import { GenericSwitchDevice } from "@matter/main/devices/generic-switch";
 import { ColorTemperatureLightDevice } from "@matter/main/devices/color-temperature-light";
 import { ExtendedColorLightDevice } from "@matter/main/devices/extended-color-light";
 import { DimmableLightDevice, DimmableLightRequirements } from "@matter/main/devices/dimmable-light";
 import { OnOffLightDevice } from "@matter/main/devices/on-off-light";
 import { OnOffPlugInUnitDevice } from "@matter/main/devices/on-off-plug-in-unit";
 import { isScene, type LightDescriptor } from "../lighting/model";
+import type { SwitchTrigger } from "../casambi/types";
+import { matterLabel } from "./identity";
 
 /**
  * A bridged device's state in Matter terms: `level` 1–254, `mired` the colour temperature, `hue` and `saturation`
@@ -30,6 +34,8 @@ export interface MatterDevice {
   push(state: DeviceState): Promise<void>;
   rename(name: string): Promise<void>;
   remove(): Promise<void>;
+  /** A wall switch button press, passed on as Matter switch events; wall switches only. */
+  press?(button: number, trigger: SwitchTrigger): Promise<void>;
 }
 export interface DeviceFactory {
   add(descriptor: LightDescriptor, initial: DeviceState, handlers: DeviceHandlers): Promise<MatterDevice>;
@@ -62,6 +68,58 @@ const ExtendedColorControlServer = ColorControlServer.with("HueSaturation", "Xy"
 const COLOR_MODE = { color: 0, temperature: 2 } as const;
 const XY_SCALE = 65536;
 
+/**
+ * A momentary switch with release and long-press events, as Google Home offers them as automation starters: press,
+ * long press, and long-press release. matter.js derives the events from the switch position: 1 is pressed, 0 released.
+ */
+const ButtonSwitchServer = SwitchServer.with("MomentarySwitch", "MomentarySwitchRelease", "MomentarySwitchLongPress");
+/** Casambi reports a hold once it decided it is one, so Matter's own long-press timer only needs to confirm it. */
+const LONG_PRESS_MS = 100;
+/** A hold whose release never arrives is released after this, so the button does not stay pressed. */
+const STUCK_HOLD_MS = 10_000;
+
+/**
+ * A Casambi wall switch: one bridged Generic Switch per learned button, named "<switch> 1", "<switch> 2", …. A tap is a
+ * short press, a hold a long press, and its release a long-press release.
+ */
+async function addWallSwitch(aggregator: Endpoint, descriptor: LightDescriptor, initial: DeviceState): Promise<MatterDevice> {
+  const buttons = new Map<number, Endpoint>();
+  const stuck = new Map<number, NodeJS.Timeout>();
+  const name = (base: string, index: number) => `${matterLabel(base, "Switch").slice(0, 28).trim()} ${index + 1}`;
+  const learned = descriptor.buttons ?? [];
+  for (let index = 0; index < learned.length; index += 1) {
+    const button = learned[index];
+    const endpoint = new Endpoint(GenericSwitchDevice.with(BridgedDeviceBasicInformationServer, ButtonSwitchServer) as never, {
+      id: `${endpointId(descriptor.key)}-b${button}`,
+      bridgedDeviceBasicInformation: { nodeLabel: name(descriptor.name, index), productName: KIND_PRODUCT.switch, productLabel: KIND_PRODUCT.switch, uniqueId: uniqueId(`${descriptor.key}#${button}`), reachable: initial.reachable },
+      switch: { numberOfPositions: 2, currentPosition: 0, longPressDelay: LONG_PRESS_MS },
+    } as never);
+    await aggregator.add(endpoint);
+    buttons.set(button, endpoint);
+  }
+  const position = (endpoint: Endpoint, value: number) => endpoint.set({ switch: { currentPosition: value } } as never);
+  const all = (work: (endpoint: Endpoint) => Promise<unknown>) => Promise.all(Array.from(buttons.values(), work)).then(() => undefined);
+  return {
+    push: state => all(endpoint => endpoint.set({ bridgedDeviceBasicInformation: { reachable: state.reachable } } as never)),
+    rename: base => all(async endpoint => { const index = Array.from(buttons.values()).indexOf(endpoint); await endpoint.set({ bridgedDeviceBasicInformation: { nodeLabel: name(base, index) } } as never); }),
+    remove: () => { stuck.forEach(timer => clearTimeout(timer)); return all(endpoint => endpoint.delete()); },
+    async press(button, trigger) {
+      const endpoint = buttons.get(button);
+      if (!endpoint) return;
+      clearTimeout(stuck.get(button));
+      if (trigger === "tap") { await position(endpoint, 1); await position(endpoint, 0); return; }
+      if (trigger === "hold") {
+        await position(endpoint, 1);
+        const timer = setTimeout(() => void position(endpoint, 0).catch(() => undefined), STUCK_HOLD_MS);
+        timer.unref();
+        stuck.set(button, timer);
+        return;
+      }
+      await position(endpoint, 0);
+    },
+  };
+}
+
 /** A change came from a controller (it has a fabric), not from the bridge pushing Casambi state. */
 const fromController = (context: unknown) => (context as { fabric?: unknown } | undefined)?.fabric !== undefined;
 
@@ -81,6 +139,7 @@ function colourAttributes(descriptor: LightDescriptor, state: DeviceState): Reco
 export function endpointFactory(aggregator: Endpoint): DeviceFactory {
   return {
     async add(descriptor, initial, handlers) {
+      if (descriptor.kind === "switch") return addWallSwitch(aggregator, descriptor, initial);
       const range = descriptor.temperature ?? { minMired: 140, maxMired: 500 };
       const type = isScene(descriptor) ? OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformationServer)
         : descriptor.color ? ExtendedColorLightDevice.with(BridgedDeviceBasicInformationServer, InstantLevelControlServer, ExtendedColorControlServer)
