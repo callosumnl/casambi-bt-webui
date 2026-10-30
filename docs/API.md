@@ -45,6 +45,11 @@ Errors return `{ "error": { "code", "message", "fields"? }, "requestId" }`: `401
 | `PUT` | `/admin/homekit` | admin | Body `{ enabled, name, port }` (port 1024–65535, not the web app's port). Saves and republishes; pairings are kept. Returns the new status. |
 | `PUT` | `/admin/homekit/accessories` | admin | Body `{ hidden }`: the keys (from `accessories` in `GET /admin/homekit`) of the lamps, groups, rooms, and scenes HomeKit should not show; everything else is shown. Hidden ones are removed from Apple Home at once. Returns the new status. |
 | `POST` | `/admin/homekit/reset` | admin | Removes every pairing and creates a new device id and setup code; Apple Home then sees a new bridge. Returns the new status. |
+| `GET` | `/admin/matter` | admin | The Matter bridge for Google Home: `{ enabled, name, port, vendorId, productId, state, error, commissioned, fabrics, pairingWindowUntil, manualPairingCode, qrPairingCode, qrSvg }`. `fabrics` lists the apps that added it (`{ index, owner }`); the setup code and QR code are there only while the bridge can be added. |
+| `PUT` | `/admin/matter` | admin | Body `{ enabled, name, port, vendorId, productId }` (name at most 32 characters; vendor and product id must match the Google Home Developer Console integration, default `0xFFF1` / `0x8000`). Restarts the bridge; pairings are kept. |
+| `POST` | `/admin/matter/pairing-window` | admin | Lets another Matter app add the already paired bridge with the same code for 15 minutes. |
+| `DELETE` | `/admin/matter/fabrics/:id` | admin | Removes one app's access (fabric index from `fabrics`). |
+| `POST` | `/admin/matter/reset` | admin | Removes every app and all Matter keys; the bridge can be added again with the same code. |
 | `GET` | `/admin/discovery` | admin | Scans nearby Casambi networks for 5 s: `[{ address, rssi }]`, strongest signal first (`rssi` in dBm, `null` when it could not be measured). |
 | `POST` | `/admin/connect`, `/admin/disconnect` | admin | Connects or disconnects the live Bluetooth bridge. |
 | `POST` | `/admin/rooms` | admin | Creates a local room with a default brightness. |

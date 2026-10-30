@@ -11,6 +11,8 @@ import { CasambiService } from "../casambi/service";
 import { EventHub } from "../events";
 import { HomeKitBridge, hapRuntime } from "../homekit/bridge";
 import { HomeKitLights } from "../homekit/lights";
+import { MatterBridge } from "../matter/bridge";
+import { matterRuntime } from "../matter/runtime";
 import { DurableScheduler } from "../scheduler";
 import { SetupCode } from "../setupCode";
 import { LocalStore } from "../store";
@@ -97,13 +99,16 @@ async function startServer() {
   const updater = new Updater(store.dataDirectory);
   const notifier = new Notifier(store, events, { connection: () => casambi.cachedSnapshot().connection, update: () => updater.status() });
   const homekit = new HomeKitBridge(store, hapRuntime(join(store.dataDirectory, "homekit")), undefined, new HomeKitLights(store, casambi));
-  app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler, setupCode, updater, notifier, homekit }));
+  // Google Home goes through Matter, fully separate from HomeKit: its own settings, identity, and storage folder.
+  const matter = new MatterBridge(store, matterRuntime(join(store.dataDirectory, "matter")));
+  app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler, setupCode, updater, notifier, homekit, matter }));
   app.use("/api/v1", apiErrorHandler);
   await casambi.initialize();
   scheduler.reload();
   notifier.start();
   // Not awaited: a HomeKit failure is reported in the Admin panel and must not delay or stop the web app.
   void homekit.start();
+  void matter.start();
   // development mode uses Vite, production mode uses static files
   if (process.env.NODE_ENV === "development") {
     await setupVite(app, server);
@@ -124,8 +129,8 @@ async function startServer() {
     console.log(`Server running on http://localhost:${port}/`);
   });
   // A signal handler replaces Node's default exit, so exit explicitly; open SSE streams would otherwise keep systemd waiting until SIGKILL.
-  // HomeKit gets two seconds to withdraw its mDNS announcement, so Apple Home does not keep trying a stale address.
-  const shutdown = () => { bridge.stop(); void Promise.race([homekit.stop(), new Promise(resolve => setTimeout(resolve, 2_000))]).finally(() => process.exit(0)); };
+  // HomeKit and Matter get two seconds to withdraw their mDNS announcements, so the apps do not keep trying a stale address.
+  const shutdown = () => { bridge.stop(); void Promise.race([Promise.all([homekit.stop(), matter.stop()]), new Promise(resolve => setTimeout(resolve, 2_000))]).finally(() => process.exit(0)); };
   process.once("SIGTERM", shutdown);
   process.once("SIGINT", shutdown);
 }

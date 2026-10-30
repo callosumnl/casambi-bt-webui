@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, homekitAccessoriesSchema, homekitSettingsSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
+  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, homekitAccessoriesSchema, homekitSettingsSchema, matterSettingsSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
   roomDefaultBrightnessSchema, roomRenameSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userUpdateSchema,
 } from "./apiSchemas";
 import { controlRequestSchema, groupSchema, networkSnapshotSchema, sceneSchema, unitSchema } from "./casambi/types";
@@ -94,6 +94,18 @@ const schemas: Record<string, JsonSchema> = {
   NotificationWebhook: fromZod(notificationWebhookSchema),
   HomeKitSettings: fromZod(homekitSettingsSchema),
   HomeKitAccessories: fromZod(homekitAccessoriesSchema),
+  MatterSettings: fromZod(matterSettingsSchema),
+  MatterStatus: object({
+    enabled: { type: "boolean" }, name: { type: "string" }, port: { type: "integer" }, vendorId: { type: "integer" }, productId: { type: "integer" },
+    state: { type: "string", enum: ["disabled", "starting", "running", "failed"] },
+    error: nullable({ type: "string", description: "Why the bridge could not start, for example a port in use." }),
+    commissioned: { type: "boolean", description: "Whether a Matter controller (Google Home) has added the bridge." },
+    fabrics: { type: "array", description: "The ecosystems that added the bridge.", items: object({ index: { type: "integer" }, owner: { type: "string", description: "Google Home, Apple Home, Amazon Alexa, SmartThings, or the fabric's label or vendor id." } }) },
+    pairingWindowUntil: nullable({ ...timestamp, description: "Until when another ecosystem can add the already paired bridge." }),
+    manualPairingCode: nullable({ type: "string", description: "The 11-digit setup code, while the bridge can be added." }),
+    qrPairingCode: nullable({ type: "string", description: "The MT: setup payload, while the bridge can be added." }),
+    qrSvg: nullable({ type: "string", description: "The setup payload as a QR code (SVG) for the Google Home app." }),
+  }),
   Notifications: object({
     notifications: { type: "array", description: "Newest first, at most 50: id, kind (connection.lost, connection.restored, timer.failed, timer.unusable, update.failed), severity (info, warning, error), title, message, createdAt, readAt.", items: { type: "object" } },
     unread: { type: "integer" },
@@ -220,6 +232,11 @@ const operations: Operation[] = [
   { method: "put", path: "/admin/homekit", tag: "Admin: bridge", summary: "Change the HomeKit bridge", description: "Turns the HomeKit bridge on or off, or changes its name or port, and republishes it. Pairings are kept.", access: "admin", body: "HomeKitSettings", bodyRequired: true, responses: { 200: { description: "Saved; the new status.", schema: "HomeKitStatus" }, 422: { description: "Invalid, or the port is the web app's port.", schema: "Error" } } },
   { method: "put", path: "/admin/homekit/accessories", tag: "Admin: bridge", summary: "Choose what HomeKit shows", description: "Hides the given lamps, groups, rooms, and scenes from HomeKit (removing them from Apple Home at once) and shows everything else.", access: "admin", body: "HomeKitAccessories", bodyRequired: true, responses: { 200: { description: "Saved; the new status.", schema: "HomeKitStatus" } } },
   { method: "post", path: "/admin/homekit/reset", tag: "Admin: bridge", summary: "Reset HomeKit pairing", description: "Removes every pairing and creates a new device id and setup code. Apple Home sees a new bridge: remove the old one there and add the bridge again.", access: "admin", responses: { 200: { description: "Reset; the new status.", schema: "HomeKitStatus" } } },
+  { method: "get", path: "/admin/matter", tag: "Admin: bridge", summary: "Matter bridge (Google Home)", description: "Settings, whether the bridge runs and is paired, the connected ecosystems, and the setup code while the bridge can be added.", access: "admin", responses: { 200: { description: "The Matter status.", schema: "MatterStatus" } } },
+  { method: "put", path: "/admin/matter", tag: "Admin: bridge", summary: "Change the Matter bridge", description: "Turns the Matter bridge on or off, or changes its name, port, vendor id, or product id, and restarts it. Pairings are kept.", access: "admin", body: "MatterSettings", bodyRequired: true, responses: { 200: { description: "Saved; the new status.", schema: "MatterStatus" }, 422: { description: "Invalid.", schema: "Error" } } },
+  { method: "post", path: "/admin/matter/pairing-window", tag: "Admin: bridge", summary: "Let another ecosystem add the bridge", description: "Opens a 15-minute window in which another Matter controller can add the already paired bridge with the setup code.", access: "admin", responses: { 200: { description: "Opened; the new status with the setup code.", schema: "MatterStatus" }, 422: { description: "Not running or not paired yet.", schema: "Error" } } },
+  { method: "delete", path: "/admin/matter/fabrics/{id}", tag: "Admin: bridge", summary: "Remove an ecosystem", description: "Removes one ecosystem's access (by fabric index from `fabrics`); the bridge disappears from that app.", access: "admin", responses: { 200: { description: "Removed; the new status.", schema: "MatterStatus" }, 404: { description: "No such connection.", schema: "Error" } } },
+  { method: "post", path: "/admin/matter/reset", tag: "Admin: bridge", summary: "Reset the Matter bridge", description: "Removes every ecosystem and all Matter keys. The bridge can then be added again with the same setup code.", access: "admin", responses: { 200: { description: "Reset; the new status.", schema: "MatterStatus" } } },
   { method: "get", path: "/admin/update", tag: "Admin: bridge", summary: "Update status", description: "Whether updates from the app are set up (`supported`), the running version, open requests, and what deploy/update.sh last reported: `state` (checking, available, up_to_date, updating, updated, rolling_back, rolled_back, failed), the current and latest commit, the new changes, and for an update the tail of its log.", access: "admin", responses: { 200: { description: "The update status.", schema: "UpdateStatus" } } },
   { method: "post", path: "/admin/update/check", tag: "Admin: bridge", summary: "Check for an update", description: "Asks the Pi to fetch from the checkout's upstream branch and report how far it is behind. Runs in the background; poll `GET /admin/update`.", access: "admin", responses: { 202: { description: "Requested.", schema: object({ requested: { type: "string" } }) }, 422: { description: "Updates from the app are not set up.", schema: "Error" } } },
   { method: "post", path: "/admin/update/apply", tag: "Admin: bridge", summary: "Update now", description: "Asks the Pi to fast-forward to its upstream branch and run deploy/install.sh, which restarts the service. If the update fails, the previous version is installed again. Runs in the background; poll `GET /admin/update`.", access: "admin", responses: { 202: { description: "Requested.", schema: object({ requested: { type: "string" } }) }, 422: { description: "Not set up, or an update is already running.", schema: "Error" } } },

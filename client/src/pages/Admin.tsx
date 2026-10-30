@@ -1,4 +1,4 @@
-import { Cable, Home, Lightbulb, MousePointerClick, Rocket, Server, ShieldCheck, Stethoscope, Users } from "lucide-react";
+import { Cable, Home, Lightbulb, MousePointerClick, Rocket, Server, ShieldCheck, Speaker, Stethoscope, Users } from "lucide-react";
 import { useEffect, useMemo, useRef } from "react";
 import { toast } from "sonner";
 import { Link, useParams } from "wouter";
@@ -12,6 +12,7 @@ import { DeviceMetadataPanel } from "@/components/DeviceMetadataPanel";
 import { HomeKitAccessoriesPanel } from "@/components/HomeKitAccessoriesPanel";
 import { HomeKitPanel } from "@/components/HomeKitPanel";
 import { HudFrame } from "@/components/HudFrame";
+import { MatterPanel } from "@/components/MatterPanel";
 import { NotificationsPanel } from "@/components/NotificationsPanel";
 import { RoomsPanel } from "@/components/RoomsPanel";
 import { ServerSettingsPanel } from "@/components/ServerSettingsPanel";
@@ -23,7 +24,7 @@ import { ADMIN_SECTIONS, adminSection, adminSectionLabel, adminSectionSummary, t
 import { t } from "@/lib/i18n";
 import { LocalApi } from "@/lib/localApi";
 
-const SECTION_ICONS: Record<AdminSection, typeof Cable> = { connection: Cable, rooms: Lightbulb, automation: MousePointerClick, access: Users, homekit: Home, system: Server };
+const SECTION_ICONS: Record<AdminSection, typeof Cable> = { connection: Cable, rooms: Lightbulb, automation: MousePointerClick, access: Users, homekit: Home, google: Speaker, system: Server };
 
 /** Admin-only configuration, split into sections so each page shows one subject. */
 export default function Admin() {
@@ -46,6 +47,7 @@ export default function Admin() {
     {section === "automation" && <div className="admin-grid"><SwitchRulesPanel api={api} onNotice={notify} /><div className="admin-stack"><AwayDateSetsPanel api={api} onNotice={notify} /><SolarLocationPanel api={api} onNotice={notify} /></div></div>}
     {section === "access" && <div className="admin-grid"><HudFrame className="form-panel"><AccountsPanel api={api} onNotice={notify} /></HudFrame><ApiKeysPanel api={api} onNotice={notify} /></div>}
     {section === "homekit" && <div className="admin-grid"><HomeKitPanel api={api} onNotice={notify} /><HomeKitAccessoriesPanel api={api} onNotice={notify} /></div>}
+    {section === "google" && <div className="admin-grid admin-grid-narrow"><MatterPanel api={api} onNotice={notify} /></div>}
     {section === "system" && <div className="admin-grid"><NotificationsPanel api={api} onNotice={notify} /><UpdatePanel api={api} onNotice={notify} /><BackupPanel api={api} onNotice={notify} /><ServerSettingsPanel api={api} onNotice={notify} /><div className="admin-wide"><AuditLogPanel api={api} onNotice={notify} /></div></div>}
   </div>;
 }

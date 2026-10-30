@@ -19,6 +19,10 @@ CASAMBI_CACHE_PATH=/var/lib/casambi-bt-webui/casambi-bt-store
 # ciao, resolved, or bonjour-hap. HomeKit itself is turned on in Admin -> HOMEKIT.
 # CASAMBI_HOMEKIT_ADVERTISER=avahi
 
+# Log level of the Matter bridge for Google Home (matter.js): warn by default. "info" or "debug" help when pairing
+# fails, but print the setup code to the service log. Matter itself is turned on in Admin -> GOOGLE HOME.
+# CASAMBI_MATTER_LOG_LEVEL=warn
+
 # Only when the WebGUI runs behind a reverse proxy (e.g. for HTTPS): trust its X-Forwarded-For header.
 # Leave unset otherwise, or any client could choose its own address and evade the rate limit.
 # CASAMBI_TRUST_PROXY=true

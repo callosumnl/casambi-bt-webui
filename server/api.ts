@@ -20,16 +20,17 @@ import { ServerSettingsHelper } from "./serverSettings";
 import { Notifier } from "./notifications";
 import QRCode from "qrcode";
 import type { HomeKitBridge } from "./homekit/bridge";
+import type { MatterBridge } from "./matter/bridge";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
-import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitAccessoriesSchema, homekitSettingsSchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitAccessoriesSchema, homekitSettingsSchema, matterSettingsSchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
  * `probes` read the system for the diagnostics, `updater` requests updates, and `serverSettings` requests env-file
  * changes; tests replace all three. Without a `notifier` the notification routes answer with an empty list, and
- * without `homekit` the HomeKit routes refuse.
+ * without `homekit` or `matter` their routes refuse.
  */
-type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper; notifier?: Notifier; homekit?: HomeKitBridge };
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper; notifier?: Notifier; homekit?: HomeKitBridge; matter?: MatterBridge };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 
 /** Wraps async routes in a stable JSON error response. */
@@ -93,7 +94,7 @@ function normalizeHolidayDates(dates: string[]): string[] { return Array.from(ne
 function assertAwayDateSet(id: number | null | undefined, store: LocalStore): AwayDateSet | null { if (id == null) return null; const set = store.getAwayDateSet(id); if (!set) throw new Error("Away-date set does not exist."); return set; }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
-export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory), notifier, homekit }: Dependencies): Router {
+export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory), notifier, homekit, matter }: Dependencies): Router {
   const api = Router();
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
   // Password guessing gets its own, much tighter budget; successful sign-ins do not count against it.
@@ -246,6 +247,33 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
     const bridge = requireHomekit();
     await bridge.resetPairing(principal(response).name);
     response.json(await homekitStatus(bridge));
+  }));
+  /** The Matter status with the setup code as a QR code (SVG) for the Google Home app, while pairing is possible. */
+  const matterStatus = async (bridge: MatterBridge) => {
+    const status = bridge.status();
+    return { ...status, qrSvg: status.qrPairingCode ? await QRCode.toString(status.qrPairingCode, { type: "svg", margin: 1 }) : null };
+  };
+  const requireMatter = (): MatterBridge => { if (!matter) throw new Error("Matter cannot be used: it is not set up in this server."); return matter; };
+  api.get("/admin/matter", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await matterStatus(requireMatter())); }));
+  api.put("/admin/matter", requireAuth(store, "admin"), route(async (request, response) => {
+    const bridge = requireMatter();
+    await bridge.update(parsed(matterSettingsSchema, request.body), principal(response).name);
+    response.json(await matterStatus(bridge));
+  }));
+  api.post("/admin/matter/pairing-window", requireAuth(store, "admin"), route(async (_request, response) => {
+    const bridge = requireMatter();
+    await bridge.openPairingWindow(principal(response).name);
+    response.json(await matterStatus(bridge));
+  }));
+  api.delete("/admin/matter/fabrics/:id", requireAuth(store, "admin"), route(async (request, response) => {
+    const bridge = requireMatter();
+    await bridge.removeFabric(Number(request.params.id), principal(response).name);
+    response.json(await matterStatus(bridge));
+  }));
+  api.post("/admin/matter/reset", requireAuth(store, "admin"), route(async (_request, response) => {
+    const bridge = requireMatter();
+    await bridge.reset(principal(response).name);
+    response.json(await matterStatus(bridge));
   }));
   api.get("/admin/update", requireAuth(store, "admin"), route(async (_request, response) => {
     response.json({ supported: updater.supported, running: await appVersion(probes), pending: { check: updater.pending("check"), apply: updater.pending("apply") }, status: updater.status() });

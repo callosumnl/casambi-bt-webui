@@ -1,6 +1,6 @@
 # Matter / Google Home plan
 
-Status: phase 0 (spike) succeeded on 2026-10-30, and phase 1 (shared lighting core) is done; phase 2 (the Matter bridge) is next.
+Status: phases 0 (spike), 1 (shared lighting core), and 2 (the Matter bridge with pairing and the Google Home tab) are done; phase 3 (lamps, groups, and rooms) is next.
 
 ## Goal
 
@@ -172,8 +172,10 @@ reacted, and how Google Home handled 60 lamps.
    planning, with each platform's naming rule passed in), colour conversions (`colour.ts`), the per-platform list of
    what is shown (`registry.ts`: settings under `<prefix>.lights`, `.hidden`, `.buttons`, removal rules), and write
    batching (`writes.ts`). `HomeKitLights` only builds HAP accessories on top; HomeKit behaves exactly as before.
-2. **Matter bridge:** settings, storage, commissioning codes with QR code, the MATTER tab, connected ecosystems,
-   pairing window, reset, audit.
+2. **Matter bridge (done):** `server/matter/` (`bridge.ts`, `runtime.ts`, `identity.ts`): settings under `matter.*`,
+   storage in `matter/` next to the database, setup code and QR code, Admin → GOOGLE HOME with the connected apps,
+   a 15-minute pairing window for another app, removing one app, reset, and audit. matter.js logs at "warn", so the
+   setup code never reaches the service log.
 3. **Lamps, groups and rooms:** on/off and dimming, state from the cache, `reachable`, write planning.
 4. **Colour:** colour temperature, hue/saturation, xy.
 5. **Scenes and choosing what Google Home shows.**
