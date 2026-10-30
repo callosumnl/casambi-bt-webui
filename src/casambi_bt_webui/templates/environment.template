@@ -15,6 +15,10 @@ CASAMBI_DB_PATH=/var/lib/casambi-bt-webui/casambi-bt-webui.db
 # Persistent upstream casambi-bt cache; installer creates this directory as casambi:casambi with mode 0700.
 CASAMBI_CACHE_PATH=/var/lib/casambi-bt-webui/casambi-bt-store
 
+# mDNS advertiser for the HomeKit bridge: avahi (default on Linux; uses the avahi-daemon the installer sets up),
+# ciao, resolved, or bonjour-hap. HomeKit itself is turned on in Admin -> HOMEKIT.
+# CASAMBI_HOMEKIT_ADVERTISER=avahi
+
 # Only when the WebGUI runs behind a reverse proxy (e.g. for HTTPS): trust its X-Forwarded-For header.
 # Leave unset otherwise, or any client could choose its own address and evade the rate limit.
 # CASAMBI_TRUST_PROXY=true
