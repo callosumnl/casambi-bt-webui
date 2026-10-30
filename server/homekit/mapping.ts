@@ -66,21 +66,26 @@ function unitHueSaturation(unit: UnitSnapshot): HueSaturation | null {
 }
 
 /**
- * The lights HomeKit should show for a connected network: every lamp, every Casambi group and every local room
- * with at least one lamp. Units are keyed by their Casambi UUID, groups by network and group id, rooms by their
- * local id.
+ * The lights HomeKit should show for a connected network: every lamp, every Casambi group, and every local room.
+ * Units are keyed by their Casambi UUID, groups by network and group id, rooms by their local id. Duplicates are
+ * left out, because Apple Home would show them twice: a group or room with a single lamp (the lamp itself is
+ * shown), and a room with exactly the lamps of a Casambi group, as the setup wizard creates them (the group is
+ * kept: it is switched with one Bluetooth command).
  */
 export function describeLights(snapshot: LightingSnapshot): LightDescriptor[] {
   const lampUnits = lamps(snapshot);
   const byId = new Map(lampUnits.map(unit => [unit.id, unit]));
   const units = lampUnits.map(unit => ({ key: `unit:${unit.uuid || unit.id}`, kind: "unit" as const, id: unit.id, name: sanitizeName(unit.name, FALLBACK_NAMES.unit), dimmable: isDimmable(unit), ...colourFeatures([unit]) }));
+  const lampSet = (members: UnitSnapshot[]) => members.map(unit => unit.id).sort((left, right) => left - right).join(",");
+  const groupLampSets = new Set<string>();
   const groups = snapshot.network ? snapshot.groups.flatMap(group => {
     const members = group.unitIds.map(id => byId.get(id)).filter((unit): unit is UnitSnapshot => Boolean(unit));
-    return members.length ? [{ key: `group:${snapshot.network!.id}:${group.id}`, kind: "group" as const, id: group.id, name: sanitizeName(group.name, FALLBACK_NAMES.group), dimmable: members.some(isDimmable), ...colourFeatures(members) }] : [];
+    if (members.length > 1) groupLampSets.add(lampSet(members));
+    return members.length > 1 ? [{ key: `group:${snapshot.network!.id}:${group.id}`, kind: "group" as const, id: group.id, name: sanitizeName(group.name, FALLBACK_NAMES.group), dimmable: members.some(isDimmable), ...colourFeatures(members) }] : [];
   }) : [];
   const rooms = snapshot.rooms.flatMap(room => {
     const members = lampUnits.filter(unit => unit.roomId === room.id);
-    return members.length ? [{ key: `room:${room.id}`, kind: "room" as const, id: room.id, name: sanitizeName(room.name, FALLBACK_NAMES.room), dimmable: members.some(isDimmable), ...colourFeatures(members) }] : [];
+    return members.length > 1 && !groupLampSets.has(lampSet(members)) ? [{ key: `room:${room.id}`, kind: "room" as const, id: room.id, name: sanitizeName(room.name, FALLBACK_NAMES.room), dimmable: members.some(isDimmable), ...colourFeatures(members) }] : [];
   });
   return [...units, ...groups, ...rooms];
 }

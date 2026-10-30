@@ -7,11 +7,11 @@ const unit = (id: number, options: { capabilities?: Array<{ type: string; min?: 
   state: { dimmer: options.dimmer === undefined ? 255 : options.dimmer, on: options.on ?? true, online: options.online ?? true, sensors: [] },
 });
 
-/** Lamps 1 and 2 dim and sit in room 1 and group 7, lamp 3 only switches, unit 4 is a wall switch in group 7. */
+/** Lamps 1 and 2 dim and form group 7, lamp 3 only switches; all three are in room 1, with wall switch 4 (also in group 7). */
 export function fixture(overrides: Partial<LightingSnapshot> = {}): LightingSnapshot {
   return {
     connected: true, network: { id: "net", name: "Home" },
-    units: [unit(1, { roomId: 1 }), unit(2, { roomId: 1, dimmer: 128 }), unit(3, { capabilities: [{ type: "onoff", readOnly: false }], dimmer: null, on: false }), unit(4, { capabilities: [{ type: "button", readOnly: true }], roomId: 1 })],
+    units: [unit(1, { roomId: 1 }), unit(2, { roomId: 1, dimmer: 128 }), unit(3, { capabilities: [{ type: "onoff", readOnly: false }], dimmer: null, on: false, roomId: 1 }), unit(4, { capabilities: [{ type: "button", readOnly: true }], roomId: 1 })],
     groups: [{ id: 7, name: "Eiland (keuken)", unitIds: [1, 2, 4] }, { id: 8, name: "Switches", unitIds: [4] }],
     rooms: [{ id: 1, name: "Woonkamer", sortOrder: 0, defaultBrightnessPercent: 100 }, { id: 2, name: "Empty", sortOrder: 1, defaultBrightnessPercent: 100 }],
     ...overrides,

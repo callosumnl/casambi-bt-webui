@@ -76,4 +76,13 @@ describe("HomeKit mapping", () => {
     expect(warm.slice(0, 1)).toEqual([{ targetType: "group", targetId: 21, operation: "set_temperature", value: 2700 }]);
     expect(warm[1]).toMatchObject({ targetType: "unit", targetId: 13, operation: "set_xy" });
   });
+
+  it("leaves out duplicates: single-lamp groups and rooms, and rooms with exactly a group's lamps", () => {
+    const snapshot = fixture({
+      groups: [{ id: 7, name: "Eiland", unitIds: [1, 2, 4] }, { id: 9, name: "Solo", unitIds: [3] }],
+      rooms: [{ id: 1, name: "Keuken", sortOrder: 0, defaultBrightnessPercent: 100 }, { id: 2, name: "Hal", sortOrder: 1, defaultBrightnessPercent: 100 }],
+    });
+    snapshot.units[2].roomId = 2;
+    expect(describeLights(snapshot).map(light => light.key)).toEqual(["unit:uuid-1", "unit:uuid-2", "unit:uuid-3", "group:net:7"]);
+  });
 });

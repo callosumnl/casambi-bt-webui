@@ -166,7 +166,8 @@ New admin API (OpenAPI document and its sync test updated):
 
 ## Decisions
 
-- Groups and rooms are exposed by default.
+- Groups and rooms are exposed by default, without duplicates: a group or room with one lamp, and a room with exactly
+  a Casambi group's lamps (as the setup wizard creates them), are left out.
 - Casambi's `on` restores the last brightness; no bookkeeping on our side.
 - Lamp control comes before wall switches.
 

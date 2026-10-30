@@ -94,7 +94,8 @@ describe("HomeKit lights", () => {
       characteristic(host.find("room:1"), hap.Characteristic.On).handleSetRequest(true),
       characteristic(host.find("room:1"), hap.Characteristic.Brightness).handleSetRequest(40),
     ]);
-    expect(sent).toEqual([{ targetType: "group", targetId: 7, operation: "set_level", value: 102 }]);
+    // Room 1 holds every lamp, so this is one network command.
+    expect(sent).toEqual([{ targetType: "network", targetId: null, operation: "set_level", value: 102 }]);
   });
 
   it("reports a failed command as No Response and audits it", async () => {
@@ -127,21 +128,24 @@ describe("HomeKit lights", () => {
     const store = newStore(); const { source } = fakeSource(fixture()); const host = fakeHost();
     const lights = lightsFor(store, source, () => now);
     lights.attach(host);
-    const snapshot = fixture({ rooms: [{ id: 2, name: "Empty", sortOrder: 1, defaultBrightnessPercent: 100 }] });
-    snapshot.units = snapshot.units.filter(unit => unit.id !== 3);
+    // Room 1 is deleted, lamps 1 and 3 move to the new room 2, and lamp 2 disappears, which leaves group 7 with
+    // one lamp: a duplicate of that lamp from then on.
+    const snapshot = fixture({ rooms: [{ id: 2, name: "Hal", sortOrder: 1, defaultBrightnessPercent: 100 }] });
+    snapshot.units = snapshot.units.filter(unit => unit.id !== 2);
     snapshot.units[0].name = "Leeslamp";
     snapshot.units[0].roomId = 2;
+    snapshot.units[1].roomId = 2;
     source.snapshot = snapshot;
     lights.sync();
     expect(keys(host)).toEqual(["group:net:7", "room:2", "unit:uuid-1", "unit:uuid-2", "unit:uuid-3"]);
     expect(bulb(host.find("unit:uuid-1")).getCharacteristic(hap.Characteristic.ConfiguredName).value).toBe("Leeslamp");
     now += 60_000;
     lights.sync();
-    expect(keys(host)).toEqual(["group:net:7", "room:2", "unit:uuid-1", "unit:uuid-2"]);
+    expect(keys(host)).toEqual(["room:2", "unit:uuid-1", "unit:uuid-3"]);
     // The list survives a restart.
     const restarted = fakeHost();
     lightsFor(store, fakeSource(fixture({ connected: false, network: null })).source).attach(restarted);
-    expect(keys(restarted)).toEqual(["group:net:7", "room:2", "unit:uuid-1", "unit:uuid-2"]);
+    expect(keys(restarted)).toEqual(["room:2", "unit:uuid-1", "unit:uuid-3"]);
   });
 
   it("adds colour temperature and colour where lamps take them, and sends the colour HomeKit picks", async () => {
@@ -163,5 +167,17 @@ describe("HomeKit lights", () => {
       bulb(mixed).getCharacteristic(hap.Characteristic.ColorTemperature).handleSetRequest(370),
     ]);
     expect(sent).toEqual([{ targetType: "unit", targetId: 12, operation: "set_temperature", value: 2703 }]);
+  });
+
+  it("removes a room at once when it becomes a duplicate of a Casambi group", () => {
+    const store = newStore(); const { source } = fakeSource(fixture()); const host = fakeHost();
+    const lights = lightsFor(store, source);
+    lights.attach(host);
+    expect(keys(host)).toContain("room:1");
+    // Lamp 3 leaves room 1, which then holds exactly the lamps of group 7.
+    const snapshot = fixture(); delete snapshot.units[2].roomId;
+    source.snapshot = snapshot;
+    lights.sync();
+    expect(keys(host)).toEqual(["group:net:7", "unit:uuid-1", "unit:uuid-2", "unit:uuid-3"]);
   });
 });

@@ -137,8 +137,9 @@ export class HomeKitLights {
     }
     for (const [key, light] of Array.from(this.lights.entries())) {
       if (fresh.has(key)) continue;
-      // A deleted room is gone for sure; a lamp or group may only be missing from one incomplete snapshot.
-      const gone = light.descriptor.kind === "room" && !roomIds.has(light.descriptor.id);
+      // A deleted room, or one left out as a duplicate (its lamps are known), is gone for sure; a lamp or group may
+      // only be missing from one incomplete snapshot.
+      const gone = light.descriptor.kind === "room" && (!roomIds.has(light.descriptor.id) || lightUnitIds(light.descriptor, snapshot).length > 0);
       light.missingSince ??= now;
       if (!gone && now - light.missingSince < this.options.removeAfterMs) continue;
       if (light.accessory) removed.push(light.accessory);
