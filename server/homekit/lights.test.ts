@@ -6,8 +6,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ControlRequest, SwitchPress } from "../casambi/types";
 import { LocalStore } from "../store";
 import { HomeKitLights, LightingSource } from "./lights";
-import { colourFixture, fixture } from "./testFixtures";
-import type { LightingSnapshot } from "./mapping";
+import { colourFixture, fixture } from "../lighting/testFixtures";
+import type { LightingSnapshot } from "../lighting/model";
 
 const folders: string[] = [];
 const closers: Array<() => void> = [];
@@ -65,6 +65,8 @@ describe("HomeKit lights", () => {
     const room = host.find("room:1");
     expect(room.UUID).toBe(hap.uuid.generate("casambi-bt-webui:room:1"));
     expect(bulb(room).getCharacteristic(hap.Characteristic.ConfiguredName).value).toBe("Woonkamer");
+    // HomeKit's naming rule: "Eiland (keuken)" loses the characters HomeKit does not allow.
+    expect(bulb(host.find("group:net:7")).getCharacteristic(hap.Characteristic.ConfiguredName).value).toBe("Eiland keuken");
     expect(await characteristic(room, hap.Characteristic.On).handleGetRequest()).toBe(true);
     expect(await characteristic(room, hap.Characteristic.Brightness).handleGetRequest()).toBe(75);
     expect(bulb(host.find("unit:uuid-3")).testCharacteristic(hap.Characteristic.Brightness)).toBe(false);

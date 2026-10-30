@@ -1,7 +1,7 @@
 import { t } from "@/lib/i18n";
 
 /** The Admin page's sections; each has its own address, /admin/<id>, so links and the back button work. */
-export const ADMIN_SECTIONS = ["connection", "rooms", "automation", "access", "homekit", "system"] as const;
+export const ADMIN_SECTIONS = ["connection", "rooms", "automation", "access", "homekit", "google", "system"] as const;
 export type AdminSection = (typeof ADMIN_SECTIONS)[number];
 
 /** The section for an address part; /admin and unknown parts open the connection. */
@@ -16,6 +16,7 @@ export function adminSectionLabel(section: AdminSection): string {
     case "automation": return t("AUTOMATION");
     case "access": return t("ACCESS");
     case "homekit": return t("HOMEKIT");
+    case "google": return t("GOOGLE HOME");
     case "system": return t("SYSTEM");
   }
 }
@@ -28,6 +29,7 @@ export function adminSectionSummary(section: AdminSection): string {
     case "automation": return t("Wall switch rules, away dates for timers, and the location for sunrise and sunset.");
     case "access": return t("Who can sign in, and keys for other apps that use the REST API.");
     case "homekit": return t("Control these lights and scenes from the Apple Home app and Siri, and choose what appears there.");
+    case "google": return t("Control these lights from Google Home and a Google Nest, through Matter; separate from HomeKit.");
     case "system": return t("Notifications, updates, backups, the web server, and the audit log.");
   }
 }

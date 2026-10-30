@@ -2,7 +2,6 @@ import { bucketBy, planTargets } from "../casambi/commandPlan";
 import { ControlRequest, isLampUnit, NetworkSnapshot, UnitSnapshot } from "../casambi/types";
 import type { RoomRecord } from "../store";
 import { HueSaturation, hueSaturationToRgb, kelvinToMired, miredRange, miredToHueSaturation, miredToKelvin, rgbToHueSaturation, rgbToXy, xyToRgb } from "./colour";
-import { sanitizeName } from "./identity";
 
 /** The snapshot HomeKit works from: units carry their local room (see CasambiService.withMetadata). */
 export type LightingSnapshot = Pick<NetworkSnapshot, "connected" | "network" | "groups"> & Partial<Pick<NetworkSnapshot, "scenes">> & {
@@ -17,11 +16,22 @@ export type LightingSnapshot = Pick<NetworkSnapshot, "connected" | "network" | "
  * temperature; `color` says a lamp takes RGB or XY colour.
  */
 export type LightDescriptor = { key: string; kind: "unit" | "group" | "room" | "scene" | "local_scene" | "switch"; id: number; name: string; dimmable: boolean; temperature: { minMired: number; maxMired: number } | null; color: boolean; buttons?: number[] };
-/** A light's state in HomeKit terms; `brightness` is 0–100 and null while off; colour values are null when unknown. */
-export type LightState = { available: boolean; on: boolean; brightness: number | null; mired: number | null; hue: number | null; saturation: number | null };
-/** What HomeKit asked for one light; On, Brightness, Hue, and Saturation arrive as separate writes and are merged. */
-export type LightWrite = { on?: boolean; brightness?: number; mired?: number; hue?: number; saturation?: number };
+/**
+ * A light's state: `brightness` is 0–100 and `level` the Casambi level 0–255 (both null while off), so each platform
+ * converts from the precision it needs; colour values are null when unknown.
+ */
+export type LightState = { available: boolean; on: boolean; brightness: number | null; level: number | null; mired: number | null; hue: number | null; saturation: number | null };
+/**
+ * What a platform asked for one light; On, Brightness, Hue, and Saturation arrive as separate writes and are merged.
+ * `level` is a Casambi level 0–255, for platforms with a finer scale than percent; it wins over `brightness`.
+ */
+export type LightWrite = { on?: boolean; brightness?: number; level?: number; mired?: number; hue?: number; saturation?: number };
 type ColorSource = "temperature" | "rgb" | "xy";
+
+/** Turns a Casambi or local name into one a smart home platform accepts; `fallback` when nothing is left. */
+export type NameRule = (name: string, fallback: string) => string;
+/** Collapsed whitespace, and the fallback for an empty name; platforms with stricter rules pass their own. */
+export const plainName: NameRule = (name, fallback) => name.trim().replace(/\s+/g, " ") || fallback;
 
 const FALLBACK_NAMES = { unit: "Lamp", group: "Group", room: "Room", scene: "Scene", switch: "Switch" } as const;
 const NO_COLOUR = { dimmable: false, temperature: null, color: false };
@@ -79,27 +89,27 @@ function unitHueSaturation(unit: UnitSnapshot): HueSaturation | null {
  * shown), and a room with exactly the lamps of a Casambi group, as the setup wizard creates them (the group is
  * kept: it is switched with one Bluetooth command).
  */
-export function describeLights(snapshot: LightingSnapshot, localScenes: Array<{ id: number; name: string }> = [], buttons: Record<string, number[]> = {}): LightDescriptor[] {
+export function describeLights(snapshot: LightingSnapshot, localScenes: Array<{ id: number; name: string }> = [], buttons: Record<string, number[]> = {}, nameOf: NameRule = plainName): LightDescriptor[] {
   const lampUnits = lamps(snapshot);
   const byId = new Map(lampUnits.map(unit => [unit.id, unit]));
-  const units = lampUnits.map(unit => ({ key: `unit:${unit.uuid || unit.id}`, kind: "unit" as const, id: unit.id, name: sanitizeName(unit.name, FALLBACK_NAMES.unit), dimmable: isDimmable(unit), ...colourFeatures([unit]) }));
+  const units = lampUnits.map(unit => ({ key: `unit:${unit.uuid || unit.id}`, kind: "unit" as const, id: unit.id, name: nameOf(unit.name, FALLBACK_NAMES.unit), dimmable: isDimmable(unit), ...colourFeatures([unit]) }));
   const lampSet = (members: UnitSnapshot[]) => members.map(unit => unit.id).sort((left, right) => left - right).join(",");
   const groupLampSets = new Set<string>();
   const groups = snapshot.network ? snapshot.groups.flatMap(group => {
     const members = group.unitIds.map(id => byId.get(id)).filter((unit): unit is UnitSnapshot => Boolean(unit));
     if (members.length > 1) groupLampSets.add(lampSet(members));
-    return members.length > 1 ? [{ key: `group:${snapshot.network!.id}:${group.id}`, kind: "group" as const, id: group.id, name: sanitizeName(group.name, FALLBACK_NAMES.group), dimmable: members.some(isDimmable), ...colourFeatures(members) }] : [];
+    return members.length > 1 ? [{ key: `group:${snapshot.network!.id}:${group.id}`, kind: "group" as const, id: group.id, name: nameOf(group.name, FALLBACK_NAMES.group), dimmable: members.some(isDimmable), ...colourFeatures(members) }] : [];
   }) : [];
   const rooms = snapshot.rooms.flatMap(room => {
     const members = lampUnits.filter(unit => unit.roomId === room.id);
-    return members.length > 1 && !groupLampSets.has(lampSet(members)) ? [{ key: `room:${room.id}`, kind: "room" as const, id: room.id, name: sanitizeName(room.name, FALLBACK_NAMES.room), dimmable: members.some(isDimmable), ...colourFeatures(members) }] : [];
+    return members.length > 1 && !groupLampSets.has(lampSet(members)) ? [{ key: `room:${room.id}`, kind: "room" as const, id: room.id, name: nameOf(room.name, FALLBACK_NAMES.room), dimmable: members.some(isDimmable), ...colourFeatures(members) }] : [];
   });
-  const scenes = snapshot.network ? (snapshot.scenes ?? []).map(scene => ({ key: `scene:${snapshot.network!.id}:${scene.id}`, kind: "scene" as const, id: scene.id, name: sanitizeName(scene.name, FALLBACK_NAMES.scene), ...NO_COLOUR })) : [];
-  const saved = localScenes.map(scene => ({ key: `local_scene:${scene.id}`, kind: "local_scene" as const, id: scene.id, name: sanitizeName(scene.name, FALLBACK_NAMES.scene), ...NO_COLOUR }));
+  const scenes = snapshot.network ? (snapshot.scenes ?? []).map(scene => ({ key: `scene:${snapshot.network!.id}:${scene.id}`, kind: "scene" as const, id: scene.id, name: nameOf(scene.name, FALLBACK_NAMES.scene), ...NO_COLOUR })) : [];
+  const saved = localScenes.map(scene => ({ key: `local_scene:${scene.id}`, kind: "local_scene" as const, id: scene.id, name: nameOf(scene.name, FALLBACK_NAMES.scene), ...NO_COLOUR }));
   // A wall switch appears once its buttons were pressed: Casambi does not report how many buttons a switch has.
   const switches = snapshot.units.flatMap(unit => {
     const pressed = buttons[switchKey(unit)];
-    return pressed?.length ? [{ key: `switch:${switchKey(unit)}`, kind: "switch" as const, id: unit.id, name: sanitizeName(unit.name, FALLBACK_NAMES.switch), ...NO_COLOUR, buttons: [...pressed].sort((left, right) => left - right) }] : [];
+    return pressed?.length ? [{ key: `switch:${switchKey(unit)}`, kind: "switch" as const, id: unit.id, name: nameOf(unit.name, FALLBACK_NAMES.switch), ...NO_COLOUR, buttons: [...pressed].sort((left, right) => left - right) }] : [];
   });
   return [...units, ...groups, ...rooms, ...scenes, ...saved, ...switches];
 }
@@ -124,20 +134,20 @@ export function lightUnitIds(light: Pick<LightDescriptor, "kind" | "id">, snapsh
  */
 export function lightState(light: Pick<LightDescriptor, "kind" | "id">, snapshot: LightingSnapshot): LightState {
   // A scene switch is always off (it only activates the scene) and works while the network is connected.
-  if (isScene(light)) return { available: snapshot.connected, on: false, brightness: null, mired: null, hue: null, saturation: null };
+  if (isScene(light)) return { available: snapshot.connected, on: false, brightness: null, level: null, mired: null, hue: null, saturation: null };
   // A wall switch has no state of its own; it is reachable while the network is connected and the unit online.
-  if (light.kind === "switch") return { available: snapshot.connected && snapshot.units.some(unit => unit.id === light.id && unit.state.online), on: false, brightness: null, mired: null, hue: null, saturation: null };
+  if (light.kind === "switch") return { available: snapshot.connected && snapshot.units.some(unit => unit.id === light.id && unit.state.online), on: false, brightness: null, level: null, mired: null, hue: null, saturation: null };
   const ids = new Set(lightUnitIds(light, snapshot));
   const members = snapshot.units.filter(unit => ids.has(unit.id) && unit.state.online);
-  if (!snapshot.connected || members.length === 0) return { available: false, on: false, brightness: null, mired: null, hue: null, saturation: null };
+  if (!snapshot.connected || members.length === 0) return { available: false, on: false, brightness: null, level: null, mired: null, hue: null, saturation: null };
   const lit = members.filter(unit => unit.state.on && (unit.state.dimmer ?? 255) > 0);
   const shown = lit.length ? lit : members;
   const temperatures = shown.filter(unit => capability(unit, "temperature") && unit.state.temperature).map(unit => kelvinToMired(unit.state.temperature!));
   const colour = shown.map(unitHueSaturation).find((value): value is HueSaturation => Boolean(value)) ?? null;
   const colourState = { mired: temperatures.length ? Math.round(temperatures.reduce((sum, value) => sum + value, 0) / temperatures.length) : null, hue: colour?.hue ?? null, saturation: colour?.saturation ?? null };
-  if (lit.length === 0) return { available: true, on: false, brightness: null, ...colourState };
+  if (lit.length === 0) return { available: true, on: false, brightness: null, level: null, ...colourState };
   const average = lit.reduce((sum, unit) => sum + (unit.state.dimmer ?? 255), 0) / lit.length;
-  return { available: true, on: true, brightness: levelToPercent(average), ...colourState };
+  return { available: true, on: true, brightness: levelToPercent(average), level: Math.max(1, Math.min(255, Math.round(average))), ...colourState };
 }
 
 /** The colour command a lamp gets for a write, in the form it takes; null when the write has no colour or the lamp cannot show it. */
@@ -170,7 +180,8 @@ export function planWrites(writes: Array<{ unitIds: number[]; write: LightWrite 
   const power = new Map<number, Command>();
   const colour = new Map<number, Command>();
   for (const { unitIds, write } of writes) {
-    const command = write.on === false || write.brightness === 0 ? { operation: "off" as const }
+    const command = write.on === false || write.brightness === 0 || write.level === 0 ? { operation: "off" as const }
+      : write.level !== undefined ? { operation: "set_level" as const, value: Math.max(1, Math.min(255, Math.round(write.level))) }
       : write.brightness !== undefined ? { operation: "set_level" as const, value: percentToLevel(write.brightness) }
       : write.on === true ? { operation: "on" as const } : null;
     for (const unitId of unitIds) {

@@ -1,14 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { describeLights, levelToPercent, lightState, percentToLevel, planWrites } from "./mapping";
+import { describeLights, levelToPercent, lightState, percentToLevel, planWrites } from "./model";
 import { colourFixture, fixture } from "./testFixtures";
 
-describe("HomeKit mapping", () => {
+describe("lighting model", () => {
   it("shows every lamp, every group and room with lamps, and no switches", () => {
     expect(describeLights(fixture())).toEqual([
       { key: "unit:uuid-1", kind: "unit", id: 1, name: "Lamp 1", dimmable: true, temperature: null, color: false },
       { key: "unit:uuid-2", kind: "unit", id: 2, name: "Lamp 2", dimmable: true, temperature: null, color: false },
       { key: "unit:uuid-3", kind: "unit", id: 3, name: "Lamp 3", dimmable: false, temperature: null, color: false },
-      { key: "group:net:7", kind: "group", id: 7, name: "Eiland keuken", dimmable: true, temperature: null, color: false },
+      { key: "group:net:7", kind: "group", id: 7, name: "Eiland (keuken)", dimmable: true, temperature: null, color: false },
       { key: "room:1", kind: "room", id: 1, name: "Woonkamer", dimmable: true, temperature: null, color: false },
     ]);
   });
@@ -89,7 +89,7 @@ describe("HomeKit mapping", () => {
   it("shows Casambi scenes and saved scenes as switches that work while connected", () => {
     const lights = describeLights(fixture({ scenes: [{ id: 5, name: "Avond!" }] }), [{ id: 3, name: "Lezen" }]);
     expect(lights.filter(light => light.kind === "scene" || light.kind === "local_scene")).toEqual([
-      { key: "scene:net:5", kind: "scene", id: 5, name: "Avond", dimmable: false, temperature: null, color: false },
+      { key: "scene:net:5", kind: "scene", id: 5, name: "Avond!", dimmable: false, temperature: null, color: false },
       { key: "local_scene:3", kind: "local_scene", id: 3, name: "Lezen", dimmable: false, temperature: null, color: false },
     ]);
     expect(lightState({ kind: "scene", id: 5 }, fixture())).toMatchObject({ available: true, on: false });
@@ -101,5 +101,12 @@ describe("HomeKit mapping", () => {
     expect(lights.filter(light => light.kind === "switch")).toEqual([{ key: "switch:uuid-4", kind: "switch", id: 4, name: "Lamp 4", dimmable: false, temperature: null, color: false, buttons: [1, 3] }]);
     expect(lightState({ kind: "switch", id: 4 }, fixture())).toMatchObject({ available: true });
     expect(lightState({ kind: "switch", id: 4 }, fixture({ connected: false }))).toMatchObject({ available: false });
+  });
+
+  it("applies the platform's naming rule, and falls back for an empty name", () => {
+    const shouting = describeLights(fixture(), [], {}, (name, fallback) => name.toUpperCase() || fallback);
+    expect(shouting.find(light => light.key === "group:net:7")?.name).toBe("EILAND (KEUKEN)");
+    const unnamed = fixture(); unnamed.units[0].name = "   ";
+    expect(describeLights(unnamed).find(light => light.key === "unit:uuid-1")?.name).toBe("Lamp");
   });
 });

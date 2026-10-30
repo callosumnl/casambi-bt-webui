@@ -41,3 +41,10 @@ export const homekitSettingsSchema = z.object({
   port: z.number().int().min(1024).max(65535).describe("TCP port of the HomeKit server; must differ from the web app's port."),
 });
 export const homekitAccessoriesSchema = z.object({ hidden: z.array(z.string().min(1).max(200)).max(1000).describe("Keys (from `accessories` in GET /admin/homekit) of what HomeKit should not show; everything else is shown.") });
+export const matterSettingsSchema = z.object({
+  enabled: z.boolean().describe("Run the Matter bridge for Google Home."),
+  name: z.string().trim().min(1).max(32).describe("The bridge's name in Google Home (at most 32 characters)."),
+  port: z.number().int().min(1024).max(65535).describe("UDP port of the Matter node; 5540 is the Matter default."),
+  vendorId: z.number().int().min(1).max(0xfffe).describe("Vendor id the bridge announces; must match the Google Home Developer Console integration (test vendor id 0xFFF1 = 65521)."),
+  productId: z.number().int().min(1).max(0xffff).describe("Product id the bridge announces; must match the Developer Console integration (default 0x8000 = 32768)."),
+});
