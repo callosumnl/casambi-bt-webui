@@ -43,7 +43,7 @@ export function BackupPanel({ api, onNotice }: { api: LocalApi; onNotice: (messa
   };
 
   return <HudFrame className="form-panel"><h3><Archive /> {t("BACKUP AND RESTORE")}</h3>
-    <p className="muted-copy">{t("One file with everything on this Pi: accounts, API keys, the Casambi settings (including the network password), rooms, names, timers, scenes, switch rules, and the audit log. It is encrypted with a passphrase you choose, so it can be restored on another Pi.")}</p>
+    <p className="muted-copy">{t("One file with everything on this Pi: accounts, API keys, the Casambi settings (including the network password), rooms, names, timers, scenes, switch rules, the HomeKit settings and pairing, and the audit log. It is encrypted with a passphrase you choose, so it can be restored on another Pi; Apple Home then keeps using the bridge.")}</p>
     <form onSubmit={event => void download(event)} className="admin-form">
       <div className="form-grid"><label>{t("PASSPHRASE")}<input type="password" value={passphrase} minLength={10} onChange={event => setPassphrase(event.target.value)} autoComplete="new-password" required /></label><label>{t("REPEAT PASSPHRASE")}<input type="password" value={confirmation} minLength={10} onChange={event => setConfirmation(event.target.value)} autoComplete="new-password" required /></label></div>
       <button className="neon-button" disabled={busy !== null || passphrase.length < 10}><Download /> {busy === "backup" ? t("PREPARING…") : t("DOWNLOAD BACKUP")}</button>

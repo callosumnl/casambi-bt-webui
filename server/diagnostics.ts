@@ -33,6 +33,8 @@ export type AppFacts = {
   configured: { networkAddress: boolean; networkPassword: boolean; location: boolean };
   solarTimers: number;
   port: string;
+  /** The HomeKit bridge's status; absent when the server runs without one. */
+  homekit?: { enabled: boolean; state: string; error: string | null; port: number; advertised: boolean; advertiser: string; pairings: number; lights: number; lightsNotShown: number };
 };
 
 /** Reads the system without privileges; each probe has a short timeout and returns null on any failure. */
@@ -187,9 +189,9 @@ export function evaluateChecks(system: SystemFacts, app: AppFacts): Check[] {
   }
 
   // The Casambi connection.
-  if (!app.configured.networkAddress || !app.configured.networkPassword) add({ id: "casambi-config", title: "Casambi network", status: "fail", detail: "No Casambi network is set up yet.", advice: "Under Admin, use Discover, enter the network password, and save." });
+  if (!app.configured.networkAddress || !app.configured.networkPassword) add({ id: "casambi-config", title: "Casambi network", status: "fail", detail: "No Casambi network is set up yet.", advice: "Under Admin → Connection, use Discover, enter the network password, and save." });
   else if (app.connection.phase === "connected") add({ id: "casambi-config", title: "Casambi network", status: "ok", detail: "Connected." });
-  else if (app.connection.phase === "failed" || app.connection.phase === "retrying") add({ id: "casambi-config", title: "Casambi network", status: app.connection.phase === "failed" ? "fail" : "warn", detail: `Not connected${app.connection.lastError ? `: ${app.connection.lastError}` : "."}`, advice: app.connection.phase === "retrying" ? "The service retries by itself; see the checks above for a likely cause." : "Check the network password, then use Connect under Admin." });
+  else if (app.connection.phase === "failed" || app.connection.phase === "retrying") add({ id: "casambi-config", title: "Casambi network", status: app.connection.phase === "failed" ? "fail" : "warn", detail: `Not connected${app.connection.lastError ? `: ${app.connection.lastError}` : "."}`, advice: app.connection.phase === "retrying" ? "The service retries by itself; see the checks above for a likely cause." : "Check the network password, then use Connect under Admin → Connection." });
   else add({ id: "casambi-config", title: "Casambi network", status: "info", detail: app.connection.phase === "connecting" ? "Connecting…" : "Not connected." });
 
   if (app.lastConnect) {
@@ -209,7 +211,19 @@ export function evaluateChecks(system: SystemFacts, app: AppFacts): Check[] {
   if (!system.clock) add({ id: "clock", title: "Clock", status: "info", detail: UNKNOWN });
   else if (system.clock.synchronized === false) add({ id: "clock", title: "Clock", status: "warn", detail: `The clock is not synchronized with a time server${system.clock.timezone ? ` (time zone ${system.clock.timezone})` : ""}; timers may run at the wrong time.`, advice: "Check the Pi's internet connection; it synchronizes automatically once online." });
   else add({ id: "clock", title: "Clock", status: "ok", detail: `Synchronized${system.clock.timezone ? `, time zone ${system.clock.timezone}` : ""}.` });
-  if (app.solarTimers > 0 && !app.configured.location) add({ id: "location", title: "Location", status: "warn", detail: `${app.solarTimers} sunrise/sunset timer${app.solarTimers === 1 ? "" : "s"} but no location is set.`, advice: "Enter the solar latitude and longitude under Admin." });
+  if (app.solarTimers > 0 && !app.configured.location) add({ id: "location", title: "Location", status: "warn", detail: `${app.solarTimers} sunrise/sunset timer${app.solarTimers === 1 ? "" : "s"} but no location is set.`, advice: "Enter the solar latitude and longitude under Admin → Automation." });
+
+  // HomeKit, when it is turned on.
+  const homekit = app.homekit;
+  if (homekit?.enabled) {
+    const accessories = `${homekit.lights} accessor${homekit.lights === 1 ? "y" : "ies"}`;
+    if (homekit.state === "failed") add({ id: "homekit", title: "HomeKit", status: "fail", detail: `The HomeKit bridge could not start: ${homekit.error ?? "unknown error"}`, advice: homekit.error?.includes("in use") ? "Choose another HomeKit port under Admin → HomeKit (Homebridge uses 51826)." : "Turn HomeKit off and on under Admin → HomeKit; the audit log (homekit.*) shows more." });
+    else if (homekit.state !== "published") add({ id: "homekit", title: "HomeKit", status: "info", detail: "Starting…" });
+    else if (!homekit.advertised) add({ id: "homekit", title: "HomeKit", status: "warn", detail: `Published on port ${homekit.port}, but not announced on the network (${homekit.advertiser}), so the Home app cannot find it.`, advice: "Check that avahi runs (sudo systemctl status avahi-daemon). If it does not help, set CASAMBI_HOMEKIT_ADVERTISER=ciao in /etc/casambi-bt-webui.env and restart the service." });
+    else if (homekit.lightsNotShown > 0) add({ id: "homekit", title: "HomeKit", status: "warn", detail: `${accessories} in HomeKit; ${homekit.lightsNotShown} more do not fit (HomeKit allows 149 per bridge).`, advice: "Hide what you do not need in Apple Home under Admin → HomeKit." });
+    else if (homekit.pairings === 0) add({ id: "homekit", title: "HomeKit", status: "info", detail: `Ready to pair on port ${homekit.port}, with ${accessories}.`, advice: "In the Home app choose Add Accessory and scan the code under Admin → HomeKit." });
+    else add({ id: "homekit", title: "HomeKit", status: "ok", detail: `Paired with ${homekit.pairings} Apple Home controller${homekit.pairings === 1 ? "" : "s"}; ${accessories}, announced via ${homekit.advertiser}.` });
+  }
 
   // The Pi itself.
   if (system.disk) {

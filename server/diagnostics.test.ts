@@ -108,7 +108,7 @@ describe("evaluateChecks", () => {
   it("asks to set up the Casambi network before anything else", () => {
     const checks = evaluateChecks({ bluetoothService: null, bluetoothBlocked: null, adapterPowered: null, wifi: null, ethernetUp: null, clock: null, disk: null, temperatureC: null, underVoltage: null, libraries: null, hostname: null, addresses: [] },
       { ...healthyApp, connection: { phase: "idle" }, lastConnect: null, bluetoothTiming: null, configured: { networkAddress: false, networkPassword: false, location: false } });
-    expect(status(checks, "casambi-config")).toMatchObject({ status: "fail", advice: "Under Admin, use Discover, enter the network password, and save." });
+    expect(status(checks, "casambi-config")).toMatchObject({ status: "fail", advice: "Under Admin → Connection, use Discover, enter the network password, and save." });
   });
 });
 
@@ -130,5 +130,17 @@ describe("diagnostics helpers", () => {
   it("warns about the default host name, which clashes between Pis", () => {
     const facts = { bluetoothService: null, bluetoothBlocked: null, adapterPowered: null, wifi: null, ethernetUp: null, clock: null, disk: null, temperatureC: null, underVoltage: null, libraries: null, hostname: "raspberrypi", addresses: [{ interface: "wlan0", ipv4: "10.0.0.7", mac: null }] };
     expect(status(evaluateChecks(facts, healthyApp), "address")).toMatchObject({ status: "warn", detail: expect.stringContaining("http://raspberrypi.local:3000 or http://10.0.0.7:3000 (Wi-Fi)"), advice: expect.stringContaining("sudo raspi-config → System Options → Hostname") });
+  });
+
+  it("reports the HomeKit bridge, with advice for a busy port and a missing announcement", () => {
+    const facts = { bluetoothService: null, bluetoothBlocked: null, adapterPowered: null, wifi: null, ethernetUp: null, clock: null, disk: null, temperatureC: null, underVoltage: null, libraries: null, hostname: null, addresses: [] };
+    const homekit = { enabled: true, state: "published", error: null, port: 51827, advertised: true, advertiser: "avahi", pairings: 2, lights: 12, lightsNotShown: 0 };
+    expect(status(evaluateChecks(facts, healthyApp), "homekit")).toBeUndefined();
+    expect(status(evaluateChecks(facts, { ...healthyApp, homekit: { ...homekit, enabled: false } }), "homekit")).toBeUndefined();
+    expect(status(evaluateChecks(facts, { ...healthyApp, homekit }), "homekit")).toMatchObject({ status: "ok", detail: "Paired with 2 Apple Home controllers; 12 accessories, announced via avahi." });
+    expect(status(evaluateChecks(facts, { ...healthyApp, homekit: { ...homekit, pairings: 0 } }), "homekit")).toMatchObject({ status: "info" });
+    expect(status(evaluateChecks(facts, { ...healthyApp, homekit: { ...homekit, advertised: false } }), "homekit")).toMatchObject({ status: "warn", advice: expect.stringContaining("CASAMBI_HOMEKIT_ADVERTISER=ciao") });
+    expect(status(evaluateChecks(facts, { ...healthyApp, homekit: { ...homekit, state: "failed", error: "Port 51827 is already in use." } }), "homekit")).toMatchObject({ status: "fail", advice: expect.stringContaining("another HomeKit port") });
+    expect(status(evaluateChecks(facts, { ...healthyApp, homekit: { ...homekit, lightsNotShown: 3 } }), "homekit")).toMatchObject({ status: "warn" });
   });
 });

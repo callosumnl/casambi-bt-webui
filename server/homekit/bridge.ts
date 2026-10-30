@@ -1,6 +1,7 @@
 import * as hap from "hap-nodejs";
 import { mkdirSync } from "fs";
 import net from "net";
+import type { HomeKitPairing } from "../backup";
 import type { LocalStore } from "../store";
 import type { AccessoryHost, CatalogEntry, HomeKitLights } from "./lights";
 import { generatePincode, generateSetupId, generateUsername, isValidPincode, isValidSetupId, isValidUsername, sanitizeName } from "./identity";
@@ -41,8 +42,15 @@ export interface HapRuntime {
   /** Whether HAP still has the keys for `username`; without them, controllers that paired with it cannot connect. */
   hasStoredIdentity(username: string): boolean;
   forgetIdentity(username: string): void;
+  /** HAP's stored keys, pairings, and accessory ids for `username`, for a backup; null when there are none. */
+  exportIdentity(username: string): Record<string, unknown> | null;
+  /** Stores what exportIdentity returned, on this or another Pi. */
+  importIdentity(username: string, entries: Record<string, unknown>): void;
   portAvailable(port: number): Promise<boolean>;
 }
+
+/** The storage keys HAP-NodeJS keeps a bridge's identity under (IdentifierCache is not exported; same scheme). */
+const identityKeys = (username: string) => [hap.AccessoryInfo.persistKey(username), `IdentifierCache.${username.replace(/:/g, "").toUpperCase()}.json`];
 
 /**
  * Avahi already runs on the Pi (deploy/install.sh sets it up for the web app), and a second mDNS responder next to it
@@ -86,6 +94,16 @@ export function hapRuntime(storagePath: string): HapRuntime {
     },
     hasStoredIdentity: username => hap.AccessoryInfo.load(username) !== null,
     forgetIdentity: username => hap.Accessory.cleanupAccessoryData(username),
+    // Through HAP-NodeJS's own storage, which keeps its items in memory: files written beside it would go unseen.
+    exportIdentity: username => {
+      const storage = hap.HAPStorage.storage();
+      const entries = Object.fromEntries(identityKeys(username).flatMap(key => { const value = storage.getItemSync(key) as unknown; return value ? [[key, value]] : []; }));
+      return entries[hap.AccessoryInfo.persistKey(username)] ? entries : null;
+    },
+    importIdentity: (username, entries) => {
+      const storage = hap.HAPStorage.storage();
+      for (const key of identityKeys(username)) if (entries[key]) storage.setItemSync(key, entries[key]);
+    },
     portAvailable: port => new Promise(resolve => {
       const probe = net.createServer();
       probe.once("error", () => resolve(false));
@@ -157,6 +175,32 @@ export class HomeKitBridge {
     this.lights.setHidden(keys);
     this.store.audit(actor, "homekit.accessories_changed", { hidden: keys.length });
     return this.status();
+  }
+
+  /** The pairing to put in a backup, so a restore keeps this bridge in Apple Home; null before the first publish. */
+  public exportPairing(): HomeKitPairing | null {
+    const { username } = this.identity();
+    const entries = this.runtime.hasStoredIdentity(username) ? this.runtime.exportIdentity(username) : null;
+    return entries ? { username, entries } : null;
+  }
+
+  /**
+   * After the database was restored: brings back the backup's pairing (if it has one for the restored device id),
+   * reloads the HomeKit lights, and republishes with the restored settings. Without a pairing the bridge starts as
+   * a new one in Apple Home.
+   */
+  public async restore(pairing: HomeKitPairing | null): Promise<void> {
+    await this.serialized(async () => {
+      await this.unpublish();
+      const { username } = this.identity();
+      if (pairing && pairing.username === username && isValidUsername(username)) {
+        const allowed = new Set(identityKeys(username));
+        const entries = Object.fromEntries(Object.entries(pairing.entries).filter(([key, value]) => allowed.has(key) && value && typeof value === "object"));
+        this.runtime.importIdentity(username, entries);
+      }
+      this.lights?.reload();
+      await this.publishIfEnabled();
+    });
   }
 
   /** Forgets every pairing and starts over with a new device id and setup code; Apple Home then sees a new bridge. */

@@ -91,6 +91,15 @@ export class HomeKitLights {
     this.sync();
   }
 
+  /** Reads the list of lights and the hidden keys again, after a restore replaced the database. */
+  public reload(): void {
+    this.attach(null);
+    this.lights.clear();
+    this.known.clear();
+    for (const descriptor of this.loadCache()) { this.lights.set(descriptor.key, newLight(descriptor)); this.known.set(descriptor.key, descriptor); }
+    this.hidden = new Set(this.loadHidden());
+  }
+
   /** Everything HomeKit can show, and whether it does; for the Admin panel. */
   public catalog(): CatalogEntry[] {
     return Array.from(this.known.values(), descriptor => ({ key: descriptor.key, kind: descriptor.kind, name: descriptor.name, shown: !this.hidden.has(descriptor.key) }));
