@@ -16,7 +16,7 @@ export type MatterInfo = {
   qrPairingCode: string | null;
   qrSvg: string | null;
   lights: number;
-  accessories: Array<{ key: string; kind: "unit" | "group" | "room" | "scene" | "local_scene"; name: string; shown: boolean }>;
+  accessories: Array<{ key: string; kind: "unit" | "group" | "room" | "scene" | "local_scene" | "switch"; name: string; shown: boolean }>;
 };
 
 /** An iPhone's own Matter fabric; the Google Home app on an iPhone adds the bridge through it. */

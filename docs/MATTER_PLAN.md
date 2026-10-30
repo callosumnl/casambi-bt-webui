@@ -1,6 +1,6 @@
 # Matter / Google Home plan
 
-Status: phases 0 (spike), 1 (shared lighting core), 2 (the Matter bridge with pairing and the Google Home tab), 3 (lamps, groups, and rooms), 4 (colour), 5 (scenes and choosing what Google Home shows), and 6 (backup, system check, instructions) are done; phase 7 (wall switches) is optional.
+Status: phases 0 (spike), 1 (shared lighting core), 2 (the Matter bridge with pairing and the Google Home tab), 3 (lamps, groups, and rooms), 4 (colour), 5 (scenes and choosing what Google Home shows), 6 (backup, system check, instructions), and 7 (wall switches) are done.
 
 ## Goal
 
@@ -193,7 +193,10 @@ reacted, and how Google Home handled 60 lamps.
    excepted), so a restore, also on another Pi, keeps the bridge in Google Home; the system check has a Google Home
    (Matter) line with advice for a busy port and missing IPv6; the Admin tab has a "How do I connect Google Home?"
    window with the five steps and links to the Developer Console and Google's help; the README has the same steps.
-7. **Optional, wall switches:** as Matter Generic Switch, if Google Home automations can use them.
+7. **Wall switches (done):** each learned button of a Casambi wall switch is a bridged Generic Switch (momentary,
+   with release and long press), which Google Home offers as an automation starter: a tap is press + short release, a
+   hold press + long press, and its release a long release. Buttons are learned from presses, separately from HomeKit
+   (`matter.buttons`); a hold whose release never arrives is released after 10 seconds.
 
 ## Decisions
 

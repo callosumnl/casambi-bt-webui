@@ -107,7 +107,7 @@ const schemas: Record<string, JsonSchema> = {
     qrPairingCode: nullable({ type: "string", description: "The MT: setup payload, while the bridge can be added." }),
     qrSvg: nullable({ type: "string", description: "The setup payload as a QR code (SVG) for the Google Home app." }),
     lights: { type: "integer", description: "Lamps, Casambi groups, rooms, and scenes the bridge shows." },
-    accessories: { type: "array", description: "Everything Google Home can show, as last seen on the connected network, and whether it does (separate from HomeKit's list).", items: object({ key: { type: "string" }, kind: { type: "string", enum: ["unit", "group", "room", "scene", "local_scene"] }, name: { type: "string" }, shown: { type: "boolean" } }) },
+    accessories: { type: "array", description: "Everything Google Home can show, as last seen on the connected network, and whether it does (separate from HomeKit's list).", items: object({ key: { type: "string" }, kind: { type: "string", enum: ["unit", "group", "room", "scene", "local_scene", "switch"] }, name: { type: "string" }, shown: { type: "boolean" } }) },
   }),
   Notifications: object({
     notifications: { type: "array", description: "Newest first, at most 50: id, kind (connection.lost, connection.restored, timer.failed, timer.unusable, update.failed), severity (info, warning, error), title, message, createdAt, readAt.", items: { type: "object" } },

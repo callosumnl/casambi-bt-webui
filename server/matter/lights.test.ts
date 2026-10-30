@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { ControlRequest } from "../casambi/types";
+import type { ControlRequest, SwitchPress, SwitchTrigger } from "../casambi/types";
 import type { LightDescriptor, LightingSnapshot } from "../lighting/model";
 import type { LightingSource } from "../lighting/registry";
 import { colourFixture, fixture } from "../lighting/testFixtures";
@@ -20,8 +20,11 @@ function newStore(): LocalStore {
 
 function fakeSource(snapshot: LightingSnapshot, options: { fail?: boolean } = {}) {
   const sent: ControlRequest[] = [];
-  const source: LightingSource & { snapshot: LightingSnapshot } = {
+  const presses: Array<(press: SwitchPress) => void> = [];
+  const source: LightingSource & { snapshot: LightingSnapshot; press: (press: Omit<SwitchPress, "raw">) => void } = {
     snapshot, cachedSnapshot: () => source.snapshot, onStateChange: () => undefined,
+    onSwitchPress: listener => { presses.push(listener); },
+    press: press => presses.forEach(listener => listener({ ...press, raw: {} })),
     control: async command => { if (options.fail) throw new Error("Bluetooth is busy."); sent.push(command); },
   };
   return { source, sent };
@@ -29,15 +32,16 @@ function fakeSource(snapshot: LightingSnapshot, options: { fail?: boolean } = {}
 
 /** Records the devices MatterLights creates, their pushed states, and lets a test send controller commands. */
 function fakeFactory() {
-  const devices = new Map<string, { descriptor: LightDescriptor; states: DeviceState[]; name: string; removed: boolean; handlers: DeviceHandlers }>();
+  const devices = new Map<string, { descriptor: LightDescriptor; states: DeviceState[]; name: string; removed: boolean; handlers: DeviceHandlers; presses: Array<[number, SwitchTrigger]> }>();
   const factory: DeviceFactory = {
     async add(descriptor, initial, handlers) {
-      const record = { descriptor, states: [initial], name: descriptor.name, removed: false, handlers };
+      const record = { descriptor, states: [initial], name: descriptor.name, removed: false, handlers, presses: [] as Array<[number, SwitchTrigger]> };
       devices.set(descriptor.key, record);
       return {
         push: async state => { record.states.push(state); },
         rename: async name => { record.name = name; },
         remove: async () => { record.removed = true; devices.delete(descriptor.key); },
+        press: async (button, trigger) => { record.presses.push([button, trigger]); },
       };
     },
   };
@@ -187,5 +191,26 @@ describe("Matter lights", () => {
     expect(store.appSetting("homekit.hidden")).toBeNull();
     await lights.setHidden([]);
     expect(devices.has("room:1")).toBe(true);
+  });
+
+  it("learns wall switch buttons from presses, separately from HomeKit, and passes presses on as switch events", async () => {
+    const store = newStore(); const { source } = fakeSource(fixture()); const { factory, devices } = fakeFactory();
+    const lights = lightsFor(store, source);
+    await lights.attach(factory);
+    expect(devices.has("switch:uuid-4")).toBe(false);
+    source.press({ unitId: 4, button: 1, trigger: "tap" });
+    // A release never teaches a button.
+    source.press({ unitId: 4, button: 9, trigger: "release_after_hold" });
+    await new Promise(resolve => setTimeout(resolve, 150));
+    expect(devices.get("switch:uuid-4")?.descriptor.buttons).toEqual([1]);
+    expect(store.auditSince(0, ["matter.button_learned"])).toHaveLength(1);
+    expect(store.appSetting("homekit.buttons")).toBeNull();
+    source.press({ unitId: 4, button: 1, trigger: "hold" });
+    source.press({ unitId: 4, button: 1, trigger: "release_after_hold" });
+    source.press({ unitId: 4, button: 1, trigger: "tap" });
+    source.press({ unitId: 4, button: 1, trigger: null });
+    await settle();
+    expect(devices.get("switch:uuid-4")!.presses).toEqual([[1, "hold"], [1, "release_after_hold"], [1, "tap"]]);
+    expect(lights.catalog().map(entry => entry.kind)).toContain("switch");
   });
 });
