@@ -52,7 +52,7 @@ export function describeHomeKit(info: HomeKitInfo): string {
 /** How many lamps, groups, rooms, and scenes HomeKit shows, or null while nothing is published. */
 export function describeHomeKitLights(info: HomeKitInfo): string | null {
   if (info.state !== "published") return null;
-  const shown = t("{count} accessories (lamps, groups, rooms, and scenes) in HomeKit.", { count: info.lights });
+  const shown = info.lights === 1 ? t("1 accessory in HomeKit.") : t("{count} accessories (lamps, groups, rooms, and scenes) in HomeKit.", { count: info.lights });
   return info.lightsNotShown ? `${shown} ${t("{count} more do not fit: HomeKit allows 149 per bridge.", { count: info.lightsNotShown })}` : shown;
 }
 

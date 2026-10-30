@@ -241,4 +241,9 @@ export const adminSystem: Record<string, string> = {
   "Paired with {owner}.": "Gekoppeld met {owner}.",
   "Paired with {count} apps.": "Gekoppeld met {count} apps.",
   "{count} lights (lamps, groups, and rooms) for Google Home.": "{count} lampen (lampen, groepen en ruimtes) voor Google Home.",
+  "iPhone (Apple keychain)": "iPhone (Apple-sleutelhanger)",
+  "1 light for Google Home.": "1 lamp voor Google Home.",
+  "1 accessory in HomeKit.": "1 accessoire in HomeKit.",
+  "Remove the iPhone's connection? If you added the bridge to Google Home with an iPhone, Google Home can lose it too. It costs nothing to keep.": "De koppeling van de iPhone verwijderen? Als je de brug met een iPhone aan Google Home hebt toegevoegd, kan Google Home hem dan ook kwijtraken. Laten staan kost niets.",
+  "The Google Home app on an iPhone adds the bridge through the iPhone's own Matter connection. Keep it: removing it, here or under Settings → General → Matter Accessories on the iPhone, can remove the bridge from Google Home too.": "De Google Home-app op een iPhone voegt de brug toe via de eigen Matter-koppeling van de iPhone. Laat die staan: verwijderen, hier of op de iPhone onder Instellingen → Algemeen → Matter-accessoires, kan de brug ook uit Google Home halen.",
 };

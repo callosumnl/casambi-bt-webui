@@ -100,7 +100,7 @@ const schemas: Record<string, JsonSchema> = {
     state: { type: "string", enum: ["disabled", "starting", "running", "failed"] },
     error: nullable({ type: "string", description: "Why the bridge could not start, for example a port in use." }),
     commissioned: { type: "boolean", description: "Whether a Matter controller (Google Home) has added the bridge." },
-    fabrics: { type: "array", description: "The ecosystems that added the bridge.", items: object({ index: { type: "integer" }, owner: { type: "string", description: "Google Home, Apple Home, Amazon Alexa, SmartThings, or the fabric's label or vendor id." } }) },
+    fabrics: { type: "array", description: "The ecosystems that added the bridge.", items: object({ index: { type: "integer" }, owner: { type: "string", description: "Google Home, Apple Home, iPhone (Apple keychain), Amazon Alexa, SmartThings, or the fabric's label or vendor id." }, vendorId: { type: "integer", description: "The fabric's root vendor id; 0x1384 is an iPhone's own Matter fabric, through which the Google Home app on an iPhone adds the bridge." } }) },
     pairingWindowUntil: nullable({ ...timestamp, description: "Until when another ecosystem can add the already paired bridge." }),
     manualPairingCode: nullable({ type: "string", description: "The 11-digit setup code, while the bridge can be added." }),
     qrPairingCode: nullable({ type: "string", description: "The MT: setup payload, while the bridge can be added." }),
