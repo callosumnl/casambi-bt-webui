@@ -22,8 +22,9 @@ import QRCode from "qrcode";
 import type { HomeKitBridge } from "./homekit/bridge";
 import type { MatterBridge } from "./matter/bridge";
 import { createBackup, type AutoBackup } from "./autoBackup";
+import type { Daylight } from "./daylight";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
-import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema, autoBackupSchema, webdavTestSchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema, autoBackupSchema, webdavTestSchema, daylightSchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
@@ -31,7 +32,7 @@ import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSch
  * changes; tests replace all three. Without a `notifier` the notification routes answer with an empty list, and
  * without `homekit` or `matter` their routes refuse.
  */
-type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper; notifier?: Notifier; homekit?: HomeKitBridge; matter?: MatterBridge; autoBackup?: AutoBackup };
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper; notifier?: Notifier; homekit?: HomeKitBridge; matter?: MatterBridge; autoBackup?: AutoBackup; daylight?: Daylight };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 
 /** Wraps async routes in a stable JSON error response. */
@@ -99,7 +100,7 @@ function normalizeHolidayDates(dates: string[]): string[] { return Array.from(ne
 function assertAwayDateSet(id: number | null | undefined, store: LocalStore): AwayDateSet | null { if (id == null) return null; const set = store.getAwayDateSet(id); if (!set) throw new Error("Away-date set does not exist."); return set; }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
-export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory), notifier, homekit, matter, autoBackup }: Dependencies): Router {
+export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory), notifier, homekit, matter, autoBackup, daylight }: Dependencies): Router {
   const api = Router();
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
   // Password guessing gets its own, much tighter budget; successful sign-ins do not count against it.
@@ -310,6 +311,10 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
     response.setHeader("Content-Disposition", `attachment; filename="${request.params.name}"`);
     response.send(file);
   }));
+  const requireDaylight = (): Daylight => { if (!daylight) throw new Error("The daylight rhythm cannot be used: it is not set up in this server."); return daylight; };
+  api.get("/admin/daylight", requireAuth(store, "admin"), route(async (_request, response) => { response.json(requireDaylight().status()); }));
+  api.put("/admin/daylight", requireAuth(store, "admin"), route(async (request, response) => { response.json(await requireDaylight().update(parsed(daylightSchema, request.body), principal(response).name)); }));
+  api.post("/admin/daylight/rooms/:id/resume", requireAuth(store, "admin"), route(async (request, response) => { response.json(await requireDaylight().resume(Number(request.params.id), principal(response).name)); }));
   api.get("/admin/update", requireAuth(store, "admin"), route(async (_request, response) => {
     response.json({ supported: updater.supported, running: await appVersion(probes), pending: { check: updater.pending("check"), apply: updater.pending("apply") }, status: updater.status() });
   }));

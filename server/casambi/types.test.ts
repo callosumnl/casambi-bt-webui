@@ -24,3 +24,12 @@ describe("saved scenes and lamp detection", () => {
   });
 });
 
+
+describe("wake-up light commands", () => {
+  it("need minutes, a level, and colour temperatures in range, and no scene target", () => {
+    expect(controlRequestSchema.parse({ targetType: "room", targetId: 2, operation: "wake_up", value: { minutes: 30, level: 255 } })).toMatchObject({ operation: "wake_up" });
+    expect(() => controlRequestSchema.parse({ targetType: "room", targetId: 2, operation: "wake_up", value: { minutes: 90, level: 255 } })).toThrow("A wake-up light needs");
+    expect(() => controlRequestSchema.parse({ targetType: "room", targetId: 2, operation: "wake_up", value: { minutes: 30, level: 255, warmKelvin: 1000 } })).toThrow("A wake-up light needs");
+    expect(() => controlRequestSchema.parse({ targetType: "scene", targetId: 2, operation: "wake_up", value: { minutes: 30, level: 255 } })).toThrow("Scenes can only be activated.");
+  });
+});

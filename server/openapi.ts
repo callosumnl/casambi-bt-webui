@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema, autoBackupSchema, webdavTestSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
+  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema, autoBackupSchema, webdavTestSchema, daylightSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
   roomDefaultBrightnessSchema, roomRenameSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userUpdateSchema,
 } from "./apiSchemas";
 import { controlRequestSchema, groupSchema, networkSnapshotSchema, sceneSchema, unitSchema } from "./casambi/types";
@@ -98,6 +98,13 @@ const schemas: Record<string, JsonSchema> = {
   MatterAccessories: fromZod(matterAccessoriesSchema),
   AutoBackupSettings: fromZod(autoBackupSchema),
   WebdavTest: fromZod(webdavTestSchema),
+  DaylightSettings: fromZod(daylightSchema),
+  DaylightStatus: object({
+    roomIds: { type: "array", items: { type: "integer" } }, warmKelvin: { type: "integer" }, coolKelvin: { type: "integer" },
+    hasLocation: { type: "boolean", description: "False until a sunrise and sunset location is set; the rhythm waits for it." },
+    kelvin: nullable({ type: "integer", description: "What the lamps should show now." }),
+    rooms: { type: "array", items: object({ id: { type: "integer" }, name: { type: "string" }, enabled: { type: "boolean" }, state: { type: "string", enum: ["on", "paused", "idle"], description: "on: following the day; paused: someone changed a lamp's colour, until the room is off; idle: off or not chosen." } }) },
+  }),
   AutoBackupStatus: object({
     frequency: { type: "string", enum: ["off", "daily", "weekly", "monthly"] }, time: { type: "string", description: "HH:MM, the Pi's time zone." },
     weekday: { type: "integer", description: "For weekly: 0 is Sunday." }, monthDay: { type: "integer", description: "For monthly: 1–28." }, keep: { type: "integer" },
@@ -274,6 +281,9 @@ const operations: Operation[] = [
   { method: "delete", path: "/admin/rooms/{id}", tag: "Admin: rooms and devices", summary: "Delete a room", description: "Refused while timers, switch rules, or scenes use it.", access: "admin", responses: { 204: noContent, 409: { description: "Still in use; the message names the users.", schema: "Error" } } },
   { method: "put", path: "/admin/devices/room", tag: "Admin: rooms and devices", summary: "Assign many units to a room", description: "Moves up to 1,000 units into one room, or out of every room with `roomId: null`, in one request. Custom names are kept.", access: "admin", body: "DeviceRooms", bodyRequired: true, responses: { 204: noContent, 422: { description: "Invalid input, or the room does not exist.", schema: "Error" } } },
   { method: "put", path: "/admin/devices/{id}/metadata", tag: "Admin: rooms and devices", summary: "Name a unit and assign its room", description: "Fields left out keep their value; an empty or null name restores the name from Casambi.", access: "admin", body: "DeviceMetadata", bodyRequired: true, responses: { 204: noContent } },
+  { method: "get", path: "/admin/daylight", tag: "Admin: rooms and devices", summary: "Daylight rhythm", description: "Which rooms follow the day, the colour temperatures, what the lamps should show now, and each room's state.", access: "admin", responses: { 200: { description: "The status.", schema: "DaylightStatus" } } },
+  { method: "put", path: "/admin/daylight", tag: "Admin: rooms and devices", summary: "Set up the daylight rhythm", description: "In these rooms, lamps with a colour temperature that are on move from `warmKelvin` at night to `coolKelvin` at solar noon, following the sun at the sunrise and sunset location. Someone changing a lamp's colour pauses the room until its lamps are off.", access: "admin", body: "DaylightSettings", bodyRequired: true, responses: { 200: { description: "Saved; the new status.", schema: "DaylightStatus" }, 422: { description: "Invalid.", schema: "Error" } } },
+  { method: "post", path: "/admin/daylight/rooms/{id}/resume", tag: "Admin: rooms and devices", summary: "Resume the daylight rhythm in a room", description: "A paused room follows the day again at once.", access: "admin", responses: { 200: { description: "The new status.", schema: "DaylightStatus" } } },
   { method: "get", path: "/admin/away-date-sets", tag: "Admin: rooms and devices", summary: "Away-date sets", access: "admin", responses: { 200: { description: "Sets.", schema: list("AwayDateSet") } } },
   { method: "post", path: "/admin/away-date-sets", tag: "Admin: rooms and devices", summary: "Create an away-date set", access: "admin", body: "AwayDateSetCreate", bodyRequired: true, responses: { 201: { description: "Created.", schema: "AwayDateSet" } } },
   { method: "patch", path: "/admin/away-date-sets/{id}", tag: "Admin: rooms and devices", summary: "Update an away-date set", access: "admin", body: "AwayDateSetUpdate", bodyRequired: true, responses: { 200: { description: "Updated.", schema: "AwayDateSet" } } },

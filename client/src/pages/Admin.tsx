@@ -18,6 +18,7 @@ import { NotificationsPanel } from "@/components/NotificationsPanel";
 import { RoomsPanel } from "@/components/RoomsPanel";
 import { ServerSettingsPanel } from "@/components/ServerSettingsPanel";
 import { SolarLocationPanel } from "@/components/SolarLocationPanel";
+import { DaylightPanel } from "@/components/DaylightPanel";
 import { SwitchRulesPanel } from "@/components/SwitchRulesPanel";
 import { UpdatePanel } from "@/components/UpdatePanel";
 import { useNetwork } from "@/hooks/useNetwork";
@@ -45,7 +46,7 @@ export default function Admin() {
     <p className="muted-copy admin-summary">{adminSectionSummary(section)}</p>
     {section === "connection" && <div className="admin-grid admin-grid-narrow"><CasambiLinkPanel api={api} connectionStatus={connection} refresh={refresh} /></div>}
     {section === "rooms" && <div className="admin-grid"><HudFrame className="form-panel"><RoomsPanel api={api} rooms={network?.rooms ?? []} onChanged={refresh} onNotice={notify} /></HudFrame><DeviceMetadataPanel api={api} network={network} refresh={() => refresh()} onNotice={notify} /></div>}
-    {section === "automation" && <div className="admin-grid"><SwitchRulesPanel api={api} onNotice={notify} /><div className="admin-stack"><AwayDateSetsPanel api={api} onNotice={notify} /><SolarLocationPanel api={api} onNotice={notify} /></div></div>}
+    {section === "automation" && <div className="admin-grid"><SwitchRulesPanel api={api} onNotice={notify} /><div className="admin-stack"><AwayDateSetsPanel api={api} onNotice={notify} /><SolarLocationPanel api={api} onNotice={notify} /><DaylightPanel api={api} onNotice={notify} /></div></div>}
     {section === "access" && <div className="admin-grid"><HudFrame className="form-panel"><AccountsPanel api={api} onNotice={notify} /></HudFrame><ApiKeysPanel api={api} onNotice={notify} /></div>}
     {section === "homekit" && <div className="admin-grid"><HomeKitPanel api={api} onNotice={notify} /><AccessoriesPanel api={api} onNotice={notify} app="Apple Home" title={t("IN APPLE HOME")} statusPath="/admin/homekit" savePath="/admin/homekit/accessories" hint={<p className="muted-copy">{t("A Casambi wall switch appears here after each of its buttons was pressed once while the Pi is connected; in the Home app you then choose what a tap or a hold of each button does.")}</p>} /></div>}
     {section === "google" && <div className="admin-grid"><MatterPanel api={api} onNotice={notify} /><AccessoriesPanel api={api} onNotice={notify} app="Google Home" title={t("IN GOOGLE HOME")} statusPath="/admin/matter" savePath="/admin/matter/accessories" hint={<p className="muted-copy">{t("A Casambi wall switch appears here after each of its buttons was pressed once while the Pi is connected (separately from HomeKit). In Google Home each button is then a starter for automations: press, long press, and release after a long press.")}</p>} /></div>}
