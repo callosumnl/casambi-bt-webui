@@ -1,42 +1,50 @@
-import { Activity, Cable, Check, Radio, RefreshCw, Rocket, RotateCcw, ShieldCheck, Stethoscope } from "lucide-react";
-import { Link } from "wouter";
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Cable, Home, Lightbulb, MousePointerClick, Rocket, Server, ShieldCheck, Stethoscope, Users } from "lucide-react";
+import { useEffect, useMemo, useRef } from "react";
+import { toast } from "sonner";
+import { Link, useParams } from "wouter";
 import { AccountsPanel } from "@/components/AccountsPanel";
 import { ApiKeysPanel } from "@/components/ApiKeysPanel";
-import { UpdatePanel } from "@/components/UpdatePanel";
+import { AuditLogPanel } from "@/components/AuditLogPanel";
+import { AwayDateSetsPanel } from "@/components/AwayDateSetsPanel";
 import { BackupPanel } from "@/components/BackupPanel";
-import { ServerSettingsPanel } from "@/components/ServerSettingsPanel";
-import { HomeKitPanel } from "@/components/HomeKitPanel";
-import { NotificationsPanel } from "@/components/NotificationsPanel";
+import { CasambiLinkPanel } from "@/components/CasambiLinkPanel";
 import { DeviceMetadataPanel } from "@/components/DeviceMetadataPanel";
-import { RoomsPanel } from "@/components/RoomsPanel";
-import { ConnectionStatusBar } from "@/components/ConnectionStatusBar";
+import { HomeKitPanel } from "@/components/HomeKitPanel";
 import { HudFrame } from "@/components/HudFrame";
+import { NotificationsPanel } from "@/components/NotificationsPanel";
+import { RoomsPanel } from "@/components/RoomsPanel";
+import { ServerSettingsPanel } from "@/components/ServerSettingsPanel";
+import { SolarLocationPanel } from "@/components/SolarLocationPanel";
+import { SwitchRulesPanel } from "@/components/SwitchRulesPanel";
+import { UpdatePanel } from "@/components/UpdatePanel";
 import { useNetwork } from "@/hooks/useNetwork";
-import { LocalApi } from "@/lib/localApi";
-import { describeWorkerState, WorkerState } from "@/lib/workerState";
+import { ADMIN_SECTIONS, adminSection, adminSectionLabel, adminSectionSummary, type AdminSection } from "@/lib/adminSections";
 import { t } from "@/lib/i18n";
+import { LocalApi } from "@/lib/localApi";
 
-type SafeConfig = { networkAddress: string | null; networkUuid: string | null; btAdapter: string | null; forceOffline: boolean; fastWrites: boolean; pollingEnabled: boolean; pollingIntervalSeconds: number; solarLatitude: number | null; solarLongitude: number | null; hasApiKey: boolean; hasNetworkPassword: boolean };
+const SECTION_ICONS: Record<AdminSection, typeof Cable> = { connection: Cable, rooms: Lightbulb, automation: MousePointerClick, access: Users, homekit: Home, system: Server };
 
-/** Admin-only configuration for the local bridge, rooms, appliance users, and API keys. */
+/** Admin-only configuration, split into sections so each page shows one subject. */
 export default function Admin() {
-  const api = useMemo(() => new LocalApi(), []); const { network, connection: connectionStatus, refresh } = useNetwork(); const [config, setConfig] = useState<SafeConfig | null>(null); const [notice, setNotice] = useState("");
-  const [connection, setConnection] = useState({ networkAddress: "", networkUuid: "", btAdapter: "", apiKey: "", networkPassword: "", forceOffline: false, fastWrites: false, pollingEnabled: false, pollingIntervalSeconds: 30, solarLatitude: "", solarLongitude: "" });
-  const [addressFilled, setAddressFilled] = useState(false); const [busyAction, setBusyAction] = useState<"connect" | "disconnect" | "discovery" | null>(null); const [workerAction, setWorkerAction] = useState<"state" | "restart" | null>(null); const addressFilledTimer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(addressFilledTimer.current), []);
-  /** Places the first discovered address in the form and briefly confirms it; saving still happens explicitly. */
-  const fillDiscoveredAddress = (found: Array<{ address: string }>) => { if (!found.length) { setNotice(t("Discovery found no Casambi network within range of the Raspberry Pi.")); return; } setConnection(current => ({ ...current, networkAddress: found[0].address })); setNotice(found.length > 1 ? t("Discovery found {count} networks ({addresses}); the first was filled in.", { count: found.length, addresses: found.map(device => device.address).join(", ") }) : ""); window.clearTimeout(addressFilledTimer.current); setAddressFilled(true); addressFilledTimer.current = window.setTimeout(() => setAddressFilled(false), 1_000); };
-  const load = async () => { try { const safe = await api.request<SafeConfig>("/admin/config"); setConfig(safe); setConnection(current => ({ ...current, networkAddress: safe.networkAddress || "", networkUuid: safe.networkUuid || "", btAdapter: safe.btAdapter || "", forceOffline: safe.forceOffline, fastWrites: safe.fastWrites, pollingEnabled: safe.pollingEnabled, pollingIntervalSeconds: safe.pollingIntervalSeconds, solarLatitude: safe.solarLatitude == null ? "" : String(safe.solarLatitude), solarLongitude: safe.solarLongitude == null ? "" : String(safe.solarLongitude) })); } catch (error) { setNotice(error instanceof Error ? error.message : t("Unable to load admin configuration.")); } };
-  useEffect(() => { void load(); }, []);
-  const saveConfig = async (event: FormEvent) => { event.preventDefault(); try { await api.request("/admin/config", { method: "PUT", body: JSON.stringify({ ...connection, networkAddress: connection.networkAddress.trim() || null, apiKey: connection.apiKey || undefined, networkPassword: connection.networkPassword || undefined, solarLatitude: connection.solarLatitude === "" ? null : Number(connection.solarLatitude), solarLongitude: connection.solarLongitude === "" ? null : Number(connection.solarLongitude) }) }); setNotice(t("Bridge and solar location settings saved.")); await load(); } catch (error) { setNotice(error instanceof Error ? error.message : t("Unable to save configuration.")); } };
-  const bridgeAction = async (action: "connect" | "disconnect" | "discovery") => { setBusyAction(action); try { const result = await api.request<unknown>(`/admin/${action}`, { method: action === "discovery" ? "GET" : "POST" }); if (action === "discovery") fillDiscoveredAddress(result as Array<{ address: string }>); else setNotice(action === "connect" ? t("Bridge connect command accepted.") : t("Bridge disconnect command accepted.")); await refresh(); } catch (error) { setNotice(error instanceof Error ? error.message : t("Bridge operation failed.")); } finally { setBusyAction(null); } };
-  // Worker controls stay usable while a bridge action is running: that is when a stuck worker needs checking.
-  const showWorkerState = async () => { setWorkerAction("state"); try { setNotice(describeWorkerState(await api.request<WorkerState>("/admin/worker"))); } catch (error) { setNotice(error instanceof Error ? error.message : t("Unable to read the worker state.")); } finally { setWorkerAction(null); } };
-  const restartWorker = async () => {
-    if (!window.confirm(t("Restart the Casambi Bluetooth worker? Lights keep their current state, but control is unavailable until it reconnects, usually within a minute."))) return;
-    setWorkerAction("restart");
-    try { await api.request<WorkerState>("/admin/worker/restart", { method: "POST" }); setNotice(t("Worker restart requested. It reconnects automatically; the status above shows the progress.")); } catch (error) { setNotice(error instanceof Error ? error.message : t("Unable to restart the worker.")); } finally { setWorkerAction(null); }
-  };
-  return <div className="admin-page"><div className="section-heading"><div><p className="eyebrow"><ShieldCheck /> {t("ADMINISTRATOR")}</p><h2>{t("BRIDGE")} <em>//</em> {t("CONFIGURATION")}</h2></div><div className="button-pair"><Link href="/setup" className="outline-button"><Rocket /> {t("SETUP WIZARD")}</Link><Link href="/diagnostics" className="outline-button"><Stethoscope /> {t("SYSTEM CHECK")}</Link><button className="outline-button" onClick={() => void load()}><RefreshCw /> {t("REFRESH")}</button></div></div>{notice && <p className="form-notice">{notice}</p>}<div className="admin-grid"><HudFrame className="form-panel"><h3><Cable /> {t("CASAMBI LINK")}</h3><form onSubmit={saveConfig} className="admin-form"><label>{t("NETWORK BLE ADDRESS")}<input className={addressFilled ? "just-filled" : undefined} value={connection.networkAddress} onChange={event => setConnection({ ...connection, networkAddress: event.target.value })} placeholder="AA:BB:CC:DD:EE:FF" /></label>{addressFilled && <p className="field-confirm" aria-hidden="true"><Check /> {t("ADDRESS FILLED IN FROM DISCOVERY")}</p>}<p className="muted-copy">{t("Enter the 12-digit address from Discover. Colons are optional; the bridge standardizes it before connecting.")}</p><label>{t("NETWORK UUID (OPTIONAL METADATA)")}<input value={connection.networkUuid} onChange={event => setConnection({ ...connection, networkUuid: event.target.value })} /></label><label>{t("NETWORK PASSWORD")}<input type="password" value={connection.networkPassword} onChange={event => setConnection({ ...connection, networkPassword: event.target.value })} placeholder={config?.hasNetworkPassword ? t("Stored securely") : t("Required by casambi-bt")} /></label><label>{t("CASAMBI API KEY (OPTIONAL)")}<input type="password" value={connection.apiKey} onChange={event => setConnection({ ...connection, apiKey: event.target.value })} placeholder={config?.hasApiKey ? t("Stored securely") : t("For network records")} /></label><label>{t("BLUETOOTH ADAPTER")}<input value={connection.btAdapter} onChange={event => setConnection({ ...connection, btAdapter: event.target.value })} placeholder="hci0" /></label><div className="form-grid"><label>{t("SOLAR LATITUDE")}<input type="number" min="-90" max="90" step="0.0001" value={connection.solarLatitude} onChange={event => setConnection({ ...connection, solarLatitude: event.target.value })} placeholder={t("e.g. {value}", { value: "52.3676" })} /></label><label>{t("SOLAR LONGITUDE")}<input type="number" min="-180" max="180" step="0.0001" value={connection.solarLongitude} onChange={event => setConnection({ ...connection, solarLongitude: event.target.value })} placeholder={t("e.g. {value}", { value: "4.9041" })} /></label></div><p className="muted-copy">{t("Used locally to calculate sunrise and sunset timers. No location service is contacted.")}</p><div className="form-grid"><label className="checkbox-row"><input type="checkbox" checked={connection.forceOffline} onChange={event => setConnection({ ...connection, forceOffline: event.target.checked })} /> {t("FORCE OFFLINE DATA")}</label><label className="checkbox-row"><input type="checkbox" checked={connection.pollingEnabled} onChange={event => setConnection({ ...connection, pollingEnabled: event.target.checked })} /> {t("ENABLE STATUS POLLING")}</label></div><label className="checkbox-row"><input type="checkbox" checked={connection.fastWrites} onChange={event => setConnection({ ...connection, fastWrites: event.target.checked })} /> {t("FAST BLUETOOTH WRITES (EXPERIMENTAL)")}</label><p className="muted-copy">{t("Sends commands without waiting for the lamp's acknowledgement. Takes effect when saved, without reconnecting. Compare the send times under WORKER STATE, and turn it off again if lamps miss commands.")}</p><label>{t("POLLING INTERVAL (SECONDS)")}<input type="number" min="5" max="3600" disabled={!connection.pollingEnabled} value={connection.pollingIntervalSeconds} onChange={event => setConnection({ ...connection, pollingIntervalSeconds: Number(event.target.value) })} /></label><button className="neon-button">{t("SAVE ENCRYPTED SETTINGS")}</button></form><ConnectionStatusBar status={connectionStatus} /><div className="button-pair"><button className="outline-button" disabled={busyAction !== null} onClick={() => void bridgeAction("discovery")}><Radio /> {busyAction === "discovery" ? t("SCANNING…") : t("DISCOVER")}</button><button className="outline-button" disabled={busyAction !== null} onClick={() => void bridgeAction("connect")}>{busyAction === "connect" ? t("CONNECTING…") : t("CONNECT")}</button><button className="outline-button danger" disabled={busyAction !== null} onClick={() => void bridgeAction("disconnect")}>{busyAction === "disconnect" ? t("DISCONNECTING…") : t("DISCONNECT")}</button><button className="outline-button" disabled={workerAction !== null} onClick={() => void showWorkerState()}><Activity /> {workerAction === "state" ? t("CHECKING…") : t("WORKER STATE")}</button><button className="outline-button danger" disabled={workerAction !== null} onClick={() => void restartWorker()}><RotateCcw /> {workerAction === "restart" ? t("RESTARTING…") : t("RESTART WORKER")}</button></div>{addressFilled && <p className="field-confirm" role="status"><Check /> {t("{address} FILLED INTO NETWORK BLE ADDRESS — SAVE TO USE IT", { address: connection.networkAddress })}</p>}</HudFrame><HudFrame className="form-panel"><RoomsPanel api={api} rooms={network?.rooms ?? []} onChanged={refresh} onNotice={setNotice} /><AccountsPanel api={api} onNotice={setNotice} /></HudFrame><NotificationsPanel api={api} onNotice={setNotice} /><UpdatePanel api={api} onNotice={setNotice} /><BackupPanel api={api} onNotice={setNotice} /><ServerSettingsPanel api={api} onNotice={setNotice} /><HomeKitPanel api={api} onNotice={setNotice} /><ApiKeysPanel api={api} onNotice={setNotice} /><DeviceMetadataPanel api={api} network={network} refresh={() => refresh()} onNotice={setNotice} /></div></div>;
+  const api = useMemo(() => new LocalApi(), []);
+  const { network, connection, refresh } = useNetwork();
+  const section = adminSection(useParams<{ section?: string }>().section);
+  const notify = (message: string) => { toast(message); };
+  // On a phone the tabs scroll sideways; keep the open one in view.
+  const tabs = useRef<HTMLElement>(null);
+  useEffect(() => { tabs.current?.querySelector(".admin-tab.active")?.scrollIntoView({ block: "nearest", inline: "nearest" }); }, [section]);
+  return <div className="admin-page">
+    <div className="section-heading"><div><p className="eyebrow"><ShieldCheck /> {t("ADMINISTRATOR")}</p><h2>{t("BRIDGE")} <em>//</em> {t("CONFIGURATION")}</h2></div>
+      <div className="button-pair"><Link href="/setup" className="outline-button"><Rocket /> {t("SETUP WIZARD")}</Link><Link href="/diagnostics" className="outline-button"><Stethoscope /> {t("SYSTEM CHECK")}</Link></div></div>
+    <nav ref={tabs} className="admin-tabs" aria-label={t("Admin sections")}>
+      {ADMIN_SECTIONS.map(id => { const Icon = SECTION_ICONS[id]; return <Link key={id} href={`/admin/${id}`} className={`admin-tab ${id === section ? "active" : ""}`} aria-current={id === section ? "page" : undefined}><Icon /> {adminSectionLabel(id)}</Link>; })}
+    </nav>
+    <p className="muted-copy admin-summary">{adminSectionSummary(section)}</p>
+    {section === "connection" && <div className="admin-grid admin-grid-narrow"><CasambiLinkPanel api={api} connectionStatus={connection} refresh={refresh} /></div>}
+    {section === "rooms" && <div className="admin-grid"><HudFrame className="form-panel"><RoomsPanel api={api} rooms={network?.rooms ?? []} onChanged={refresh} onNotice={notify} /></HudFrame><DeviceMetadataPanel api={api} network={network} refresh={() => refresh()} onNotice={notify} /></div>}
+    {section === "automation" && <div className="admin-grid"><SwitchRulesPanel api={api} onNotice={notify} /><div className="admin-stack"><AwayDateSetsPanel api={api} onNotice={notify} /><SolarLocationPanel api={api} onNotice={notify} /></div></div>}
+    {section === "access" && <div className="admin-grid"><HudFrame className="form-panel"><AccountsPanel api={api} onNotice={notify} /></HudFrame><ApiKeysPanel api={api} onNotice={notify} /></div>}
+    {section === "homekit" && <div className="admin-grid admin-grid-narrow"><HomeKitPanel api={api} onNotice={notify} /></div>}
+    {section === "system" && <div className="admin-grid"><NotificationsPanel api={api} onNotice={notify} /><UpdatePanel api={api} onNotice={notify} /><BackupPanel api={api} onNotice={notify} /><ServerSettingsPanel api={api} onNotice={notify} /><div className="admin-wide"><AuditLogPanel api={api} onNotice={notify} /></div></div>}
+  </div>;
 }

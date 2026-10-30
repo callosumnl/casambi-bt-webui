@@ -31,7 +31,7 @@ export function AccountsPanel({ api, onNotice }: Props) {
     void run(() => api.request(`/admin/users/${user.id}`, { method: "DELETE" }), t("{name} deleted.", { name: user.username }));
   };
 
-  return <section className="accounts-panel"><h3 className="subheading"><Users /> {t("LOCAL ACCOUNTS")}</h3>
+  return <section className="accounts-panel"><h3><Users /> {t("LOCAL ACCOUNTS")}</h3>
     <div className="away-set-list">{users.map(user => <article key={user.id}>
       <div><strong>{user.username}{user.id === myId ? ` ${t("(you)")}` : ""}</strong><small>{t("since {date}", { date: new Date(user.createdAt).toLocaleDateString() })}</small></div>
       <div className="away-set-actions">

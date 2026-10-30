@@ -4,7 +4,7 @@ import ErrorBoundary from "./components/ErrorBoundary";
 import { AppShell } from "./components/AppShell";
 import { ThemeProvider } from "./contexts/ThemeContext";
 import { clearSession, getActiveSession, Session, SESSION_EXPIRED_EVENT, tokenExpiresAt } from "./lib/localApi";
-import AdminEnhanced from "./pages/AdminEnhanced";
+import Admin from "./pages/Admin";
 import ApiDocs from "./pages/ApiDocs";
 import Diagnostics from "./pages/Diagnostics";
 import Setup from "./pages/Setup";
@@ -31,7 +31,7 @@ function App() {
     return () => { window.removeEventListener(SESSION_EXPIRED_EVENT, expire); window.clearTimeout(timer); };
   }, [session]);
   if (!session) return <ThemeProvider defaultTheme="dark"><Login onAuthenticated={setSession} /><Toaster /></ThemeProvider>;
-  return <ThemeProvider defaultTheme="dark"><ErrorBoundary><AppShell role={session.user.role} username={session.user.username} onLogout={logout}><Switch><Route path="/" component={Dashboard} /><Route path="/schedules" component={Schedules} />{session.user.role === "admin" && <Route path="/admin" component={AdminEnhanced} />}{session.user.role === "admin" && <Route path="/api" component={ApiDocs} />}{session.user.role === "admin" && <Route path="/diagnostics" component={Diagnostics} />}{session.user.role === "admin" && <Route path="/setup" component={Setup} />}<Route component={NotFound} /></Switch></AppShell><Toaster /></ErrorBoundary></ThemeProvider>;
+  return <ThemeProvider defaultTheme="dark"><ErrorBoundary><AppShell role={session.user.role} username={session.user.username} onLogout={logout}><Switch><Route path="/" component={Dashboard} /><Route path="/schedules" component={Schedules} />{session.user.role === "admin" && <Route path="/admin/:section?" component={Admin} />}{session.user.role === "admin" && <Route path="/api" component={ApiDocs} />}{session.user.role === "admin" && <Route path="/diagnostics" component={Diagnostics} />}{session.user.role === "admin" && <Route path="/setup" component={Setup} />}<Route component={NotFound} /></Switch></AppShell><Toaster /></ErrorBoundary></ThemeProvider>;
 }
 
 export default App;

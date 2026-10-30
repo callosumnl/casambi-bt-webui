@@ -24,7 +24,7 @@ export default function ApiDocs() {
     <div className="section-heading"><div><p className="eyebrow"><BookOpen /> REST API // OPENAPI 3.1</p><h2>API <em>//</em> {t("REFERENCE")}</h2></div><a className="outline-button" href="/api/v1/openapi.json" download="casambi-bt-webgui-openapi.json"><Download /> OPENAPI.JSON</a></div>
     <section className="api-intro">
       <p>{t("Base URL")} <code>{baseUrl}</code>. {t("Every route below is also described in")} <a href="/api/v1/openapi.json">openapi.json</a>{t(", which tools such as Postman, Insomnia, or Swagger UI can import.")}</p>
-      <p>{t("Authenticate with an API key in the")} <code>X-API-Key</code> {t("header (create one under")} <Link href="/admin">{t("Admin → REST API keys")}</Link>{t("), or with")} <code>Authorization: Bearer &lt;token&gt;</code> {t("using the token from")} <code>POST /auth/login</code> {t("(valid 8 hours). Brightness levels are 0–255.")}</p>
+      <p>{t("Authenticate with an API key in the")} <code>X-API-Key</code> {t("header (create one under")} <Link href="/admin/access">{t("Admin → REST API keys")}</Link>{t("), or with")} <code>Authorization: Bearer &lt;token&gt;</code> {t("using the token from")} <code>POST /auth/login</code> {t("(valid 8 hours). Brightness levels are 0–255.")}</p>
     </section>
     {error && <p className="live-warning">{error}</p>}
     {!document && !error && <p className="muted-copy">{t("Loading the API description…")}</p>}

@@ -17,7 +17,7 @@ export function AppShell({ role, username, onLogout, children }: { role: Role; u
   return <div className="app-shell">
     <aside className="side-rail">
       <div className="brand-mark"><span>CB</span><small>Casambi BT<br />WebGUI</small></div>
-      <nav>{items.map(item => <Link key={item.href} href={item.href} className={`rail-link ${location === item.href ? "active" : ""} ${"desktopOnly" in item && item.desktopOnly ? "desktop-only" : ""}`}><item.icon /><span>{item.label}</span></Link>)}</nav>
+      <nav>{items.map(item => <Link key={item.href} href={item.href} className={`rail-link ${location === item.href || (item.href === "/admin" && location.startsWith("/admin/")) ? "active" : ""} ${"desktopOnly" in item && item.desktopOnly ? "desktop-only" : ""}`}><item.icon /><span>{item.label}</span></Link>)}</nav>
       <div className="rail-bottom"><div className="identity"><ShieldCheck /><div><strong>{username}</strong><small>{role}</small></div></div><button className="icon-button" onClick={onLogout} aria-label={t("Sign out")}><LogOut /></button></div>
     </aside>
     <main className="main-stage"><header className="topbar"><div><p className="eyebrow"><Activity /> {t("LIVE LIGHTING CONTROL")}</p><h1>Casambi BT <em>WebGUI</em></h1></div><div className="topbar-status"><LanguageSwitch />{role === "admin" && <NotificationBell />}<div className="system-pulse"><span /> {t("RASPBERRY PI // LOCAL")}</div></div></header>{children}</main>

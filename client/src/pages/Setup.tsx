@@ -41,7 +41,7 @@ function CheckStep({ api, onNext }: { api: LocalApi; onNext: () => void }) {
     {error && <p className="live-warning"><AlertTriangle /> {error}</p>}
     {report && (problems.length === 0 ? <p className="setup-ok"><CheckCircle2 /> {t("Bluetooth, the clock, and the Pi itself look fine.")}</p>
       : <><p className="muted-copy">{t("These points can make the Casambi connection slow or unreliable. You can continue, but fixing them first saves trouble later.")}</p><ul className="check-list">{problems.map(check => <li key={check.id} className={`check ${check.status}`}><AlertTriangle aria-hidden="true" /><div><strong>{check.title}</strong><p>{check.detail}</p>{check.advice && <p className="check-advice">{check.advice}</p>}</div></li>)}</ul></>)}
-    <p className="muted-copy">{t("Moving from another Pi? Restore its backup under Admin → BACKUP AND RESTORE instead of setting everything up again.")}</p>
+    <p className="muted-copy">{t("Moving from another Pi? Restore its backup under Admin → SYSTEM → BACKUP AND RESTORE instead of setting everything up again.")}</p>
     <div className="button-pair"><button className="neon-button" disabled={!report && !error} onClick={onNext}>{problems.length ? t("CONTINUE ANYWAY") : t("CONTINUE")} <ArrowRight /></button><Link href="/diagnostics" className="outline-button">{t("OPEN FULL SYSTEM CHECK")}</Link></div>
   </HudFrame>;
 }
