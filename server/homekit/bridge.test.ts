@@ -162,5 +162,6 @@ describe("HomeKit admin API", () => {
   it("refuses when the server has no HomeKit bridge", async () => {
     const instance = app(false); const auth = await signIn(instance);
     await request(instance).get("/api/v1/admin/homekit").set(auth).expect(422);
+    await request(instance).put("/api/v1/admin/homekit/accessories").set(auth).send({ hidden: [] }).expect(422);
   });
 });

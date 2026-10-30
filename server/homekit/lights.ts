@@ -1,7 +1,7 @@
 import * as hap from "hap-nodejs";
 import type { ControlRequest } from "../casambi/types";
 import type { LocalStore } from "../store";
-import { describeLights, LightDescriptor, LightingSnapshot, lightState, LightState, lightUnitIds, LightWrite, planWrites } from "./mapping";
+import { describeLights, isScene, LightDescriptor, LightingSnapshot, lightState, LightState, lightUnitIds, LightWrite, planWrites } from "./mapping";
 
 /** Where HomeKit lights read state and send commands; CasambiService in the app. */
 export interface LightingSource {
@@ -19,7 +19,14 @@ export interface AccessoryHost {
 /** HomeKit allows 150 accessories per bridge, the bridge itself included. */
 export const MAX_LIGHTS = 149;
 const CACHE_KEY = "homekit.lights";
-const KIND_MODEL = { unit: "Casambi lamp", group: "Casambi group", room: "Room" } as const;
+/** Keys of lamps, groups, rooms, and scenes an administrator chose not to show in HomeKit. */
+const HIDDEN_KEY = "homekit.hidden";
+const KIND_MODEL = { unit: "Casambi lamp", group: "Casambi group", room: "Room", scene: "Casambi scene", local_scene: "Saved scene" } as const;
+/** How long a scene switch stays on in Apple Home after it activated its scene. */
+const SCENE_SWITCH_MS = 1_000;
+
+/** One entry in the Admin panel's list of what HomeKit can show. */
+export type CatalogEntry = { key: string; kind: LightDescriptor["kind"]; name: string; shown: boolean };
 
 type Options = {
   /** How long writes are collected before they are sent, so On + Brightness and a whole Home room become one batch. */
@@ -31,7 +38,7 @@ type Options = {
   now: () => number;
 };
 /** `last` holds the values HomeKit shows while a light is off or a value is unknown, so its controls do not jump. */
-type Light = { descriptor: LightDescriptor; missingSince: number | null; accessory: hap.Accessory | null; pushed: LightState | null; last: { brightness: number; mired: number; hue: number; saturation: number } };
+type Light = { descriptor: LightDescriptor; missingSince: number | null; accessory: hap.Accessory | null; pushed: LightState | null; last: { brightness: number; mired: number; hue: number; saturation: number }; sceneOnUntil?: number };
 const newLight = (descriptor: LightDescriptor): Light => ({
   descriptor, missingSince: null, accessory: null, pushed: null,
   last: { brightness: 100, mired: descriptor.temperature ? Math.round((descriptor.temperature.minMired + descriptor.temperature.maxMired) / 2) : 300, hue: 0, saturation: 0 },
@@ -40,13 +47,18 @@ const newLight = (descriptor: LightDescriptor): Light => ({
 const communicationFailure = () => new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
 
 /**
- * The HomeKit lights for lamps, Casambi groups, and rooms. Reads answer from the cached snapshot and never wait for
- * Bluetooth; writes are collected for a moment and sent as planned Casambi commands. The list of lights is kept in
- * the settings table, so after a restart, or while the network is disconnected, Apple Home still finds every light
- * (showing "No Response") instead of deleting it together with its room and automations.
+ * The HomeKit accessories: lights for lamps, Casambi groups, and rooms, and switches for scenes. Reads answer from
+ * the cached snapshot and never wait for Bluetooth; light writes are collected for a moment and sent as planned
+ * Casambi commands; a scene switch activates its scene and turns itself off again. The list is kept in the settings
+ * table, so after a restart, or while the network is disconnected, Apple Home still finds every accessory (showing
+ * "No Response") instead of deleting it together with its room and automations. An administrator can hide any of
+ * them.
  */
 export class HomeKitLights {
   private readonly lights = new Map<string, Light>();
+  /** Everything HomeKit could show, hidden or not, as last seen on a connected network. */
+  private readonly known = new Map<string, LightDescriptor>();
+  private hidden: Set<string>;
   private host: AccessoryHost | null = null;
   private skipped = 0;
   private pending = new Map<string, LightWrite>();
@@ -57,7 +69,8 @@ export class HomeKitLights {
   private sending: Promise<void> = Promise.resolve();
 
   public constructor(private readonly store: LocalStore, private readonly source: LightingSource, private readonly options: Options = { flushMs: 75, removeAfterMs: 10 * 60_000, writeTimeoutMs: 5_000, now: Date.now }) {
-    for (const descriptor of this.loadCache()) this.lights.set(descriptor.key, newLight(descriptor));
+    for (const descriptor of this.loadCache()) { this.lights.set(descriptor.key, newLight(descriptor)); this.known.set(descriptor.key, descriptor); }
+    this.hidden = new Set(this.loadHidden());
     source.onStateChange(() => this.scheduleSync());
     // Room and name changes in the Admin panel do not reach the live state; pick them up within half a minute.
     this.resyncTimer = setInterval(() => this.scheduleSync(), 30_000);
@@ -75,6 +88,35 @@ export class HomeKitLights {
     if (!host) return;
     const accessories = Array.from(this.lights.values()).flatMap(light => this.build(light));
     if (accessories.length) host.addAccessories(accessories);
+    this.sync();
+  }
+
+  /** Everything HomeKit can show, and whether it does; for the Admin panel. */
+  public catalog(): CatalogEntry[] {
+    return Array.from(this.known.values(), descriptor => ({ key: descriptor.key, kind: descriptor.kind, name: descriptor.name, shown: !this.hidden.has(descriptor.key) }));
+  }
+
+  /** Hides these keys from HomeKit and shows everything else; hidden accessories are removed at once. */
+  public setHidden(keys: string[]): void {
+    this.hidden = new Set(keys);
+    this.store.setAppSetting(HIDDEN_KEY, JSON.stringify(Array.from(this.hidden)));
+    const removed: hap.Accessory[] = [];
+    const added: hap.Accessory[] = [];
+    for (const [key, light] of Array.from(this.lights.entries())) {
+      if (!this.hidden.has(key)) continue;
+      if (light.accessory) removed.push(light.accessory);
+      this.lights.delete(key);
+    }
+    // Shown again: known from an earlier connected sync, so it can come back while the network is disconnected too.
+    for (const descriptor of Array.from(this.known.values())) {
+      if (this.hidden.has(descriptor.key) || this.lights.has(descriptor.key)) continue;
+      const light = newLight(descriptor);
+      this.lights.set(descriptor.key, light);
+      if (this.host) added.push(...this.build(light));
+    }
+    if (this.host && removed.length) this.host.removeAccessories(removed);
+    if (this.host && added.length) this.host.addAccessories(added);
+    this.saveCache();
     this.sync();
   }
 
@@ -105,8 +147,13 @@ export class HomeKitLights {
 
   private reconcile(snapshot: LightingSnapshot): void {
     const now = this.options.now();
-    const fresh = new Map(describeLights(snapshot).map(descriptor => [descriptor.key, descriptor]));
+    const localScenes = this.store.listLightScenes();
+    const all = describeLights(snapshot, localScenes);
+    this.known.clear();
+    for (const descriptor of all) this.known.set(descriptor.key, descriptor);
+    const fresh = new Map(all.filter(descriptor => !this.hidden.has(descriptor.key)).map(descriptor => [descriptor.key, descriptor]));
     const roomIds = new Set(snapshot.rooms.map(room => room.id));
+    const localSceneIds = new Set(localScenes.map(scene => scene.id));
     let changed = false;
     const added: hap.Accessory[] = [];
     const removed: hap.Accessory[] = [];
@@ -131,15 +178,17 @@ export class HomeKitLights {
         changed = true;
       } else if (light.descriptor.name !== descriptor.name) {
         light.descriptor = descriptor;
-        light.accessory?.getService(hap.Service.Lightbulb)?.updateCharacteristic(hap.Characteristic.ConfiguredName, descriptor.name);
+        this.serviceOf(light)?.updateCharacteristic(hap.Characteristic.ConfiguredName, descriptor.name);
         changed = true;
       }
     }
     for (const [key, light] of Array.from(this.lights.entries())) {
       if (fresh.has(key)) continue;
-      // A deleted room, or one left out as a duplicate (its lamps are known), is gone for sure; a lamp or group may
-      // only be missing from one incomplete snapshot.
-      const gone = light.descriptor.kind === "room" && (!roomIds.has(light.descriptor.id) || lightUnitIds(light.descriptor, snapshot).length > 0);
+      // Hidden, a deleted room or saved scene, or a room left out as a duplicate (its lamps are known): gone for sure.
+      // A lamp, group, or Casambi scene may only be missing from one incomplete snapshot.
+      const gone = this.hidden.has(key)
+        || (light.descriptor.kind === "room" && (!roomIds.has(light.descriptor.id) || lightUnitIds(light.descriptor, snapshot).length > 0))
+        || (light.descriptor.kind === "local_scene" && !localSceneIds.has(light.descriptor.id));
       light.missingSince ??= now;
       if (!gone && now - light.missingSince < this.options.removeAfterMs) continue;
       if (light.accessory) removed.push(light.accessory);
@@ -156,11 +205,22 @@ export class HomeKitLights {
     if (Array.from(this.lights.values()).filter(other => other.accessory).length >= MAX_LIGHTS) { this.skipped += 1; return []; }
     const { key, name, kind, dimmable, temperature, color } = light.descriptor;
     const accessory = new hap.Accessory(name, hap.uuid.generate(`casambi-bt-webui:${key}`));
-    accessory.category = hap.Categories.LIGHTBULB;
+    accessory.category = isScene(light.descriptor) ? hap.Categories.SWITCH : hap.Categories.LIGHTBULB;
     accessory.getService(hap.Service.AccessoryInformation)!
       .setCharacteristic(hap.Characteristic.Manufacturer, "Casambi BT WebGUI")
       .setCharacteristic(hap.Characteristic.Model, KIND_MODEL[kind])
       .setCharacteristic(hap.Characteristic.SerialNumber, key);
+    if (isScene(light.descriptor)) {
+      // A momentary switch, as Homebridge plugins expose scenes: switching it on activates the scene.
+      const sceneSwitch = accessory.addService(hap.Service.Switch, name);
+      sceneSwitch.addOptionalCharacteristic(hap.Characteristic.ConfiguredName);
+      sceneSwitch.setCharacteristic(hap.Characteristic.ConfiguredName, name);
+      sceneSwitch.getCharacteristic(hap.Characteristic.On)
+        .onGet(() => { this.read(light); return this.options.now() < (light.sceneOnUntil ?? 0); })
+        .onSet(value => (value ? this.activate(light) : undefined));
+      light.accessory = accessory;
+      return [accessory];
+    }
     const service = accessory.addService(hap.Service.Lightbulb, name);
     service.addOptionalCharacteristic(hap.Characteristic.ConfiguredName);
     service.setCharacteristic(hap.Characteristic.ConfiguredName, name);
@@ -210,6 +270,27 @@ export class HomeKitLights {
     return range ? Math.max(range.minMired, Math.min(range.maxMired, mired)) : mired;
   }
 
+  private serviceOf(light: Light): hap.Service | undefined {
+    return light.accessory?.getService(isScene(light.descriptor) ? hap.Service.Switch : hap.Service.Lightbulb);
+  }
+
+  /** Activates a scene, then turns its switch off again; a failure answers "No Response" and is audited. */
+  private async activate(light: Light): Promise<void> {
+    if (!this.source.cachedSnapshot().connected) throw communicationFailure();
+    const command = { targetType: light.descriptor.kind, targetId: light.descriptor.id, operation: "activate_scene" } as ControlRequest;
+    light.sceneOnUntil = this.options.now() + SCENE_SWITCH_MS;
+    const reset = setTimeout(() => this.serviceOf(light)?.updateCharacteristic(hap.Characteristic.On, false), SCENE_SWITCH_MS);
+    reset.unref();
+    let timer: NodeJS.Timeout | undefined;
+    const timeout = new Promise<void>(resolve => { timer = setTimeout(resolve, this.options.writeTimeoutMs); timer.unref(); });
+    try {
+      await Promise.race([this.source.control(command, "homekit"), timeout]);
+    } catch (error) {
+      this.store.audit("homekit", "homekit.control_failed", { message: error instanceof Error ? error.message : "Unknown error." });
+      throw communicationFailure();
+    } finally { clearTimeout(timer); }
+  }
+
   /** The characteristics a light has besides On. */
   private valueCharacteristics(light: Light) {
     return [
@@ -221,7 +302,7 @@ export class HomeKitLights {
 
   /** Pushes a light's state to HomeKit when it changed, or "No Response" while it is unreachable. */
   private push(light: Light, snapshot: LightingSnapshot): void {
-    const service = light.accessory?.getService(hap.Service.Lightbulb);
+    const service = this.serviceOf(light);
     if (!service) return;
     const state = lightState(light.descriptor, snapshot);
     const previous = light.pushed;
@@ -290,8 +371,15 @@ export class HomeKitLights {
       const cached = JSON.parse(this.store.appSetting(CACHE_KEY) || "[]") as unknown;
       if (!Array.isArray(cached)) return [];
       // Lights cached before colour support have no colour fields; they get them at the next connected sync.
-      return cached.filter(item => Boolean(item) && typeof item.key === "string" && typeof item.name === "string" && ["unit", "group", "room"].includes(item.kind) && typeof item.id === "number" && typeof item.dimmable === "boolean")
+      return cached.filter(item => Boolean(item) && typeof item.key === "string" && typeof item.name === "string" && ["unit", "group", "room", "scene", "local_scene"].includes(item.kind) && typeof item.id === "number" && typeof item.dimmable === "boolean")
         .map(item => ({ ...item, temperature: item.temperature ?? null, color: item.color === true }) as LightDescriptor);
+    } catch { return []; }
+  }
+
+  private loadHidden(): string[] {
+    try {
+      const hidden = JSON.parse(this.store.appSetting(HIDDEN_KEY) || "[]") as unknown;
+      return Array.isArray(hidden) ? hidden.filter((key): key is string => typeof key === "string") : [];
     } catch { return []; }
   }
 

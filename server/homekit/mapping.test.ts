@@ -85,4 +85,14 @@ describe("HomeKit mapping", () => {
     snapshot.units[2].roomId = 2;
     expect(describeLights(snapshot).map(light => light.key)).toEqual(["unit:uuid-1", "unit:uuid-2", "unit:uuid-3", "group:net:7"]);
   });
+
+  it("shows Casambi scenes and saved scenes as switches that work while connected", () => {
+    const lights = describeLights(fixture({ scenes: [{ id: 5, name: "Avond!" }] }), [{ id: 3, name: "Lezen" }]);
+    expect(lights.filter(light => light.kind === "scene" || light.kind === "local_scene")).toEqual([
+      { key: "scene:net:5", kind: "scene", id: 5, name: "Avond", dimmable: false, temperature: null, color: false },
+      { key: "local_scene:3", kind: "local_scene", id: 3, name: "Lezen", dimmable: false, temperature: null, color: false },
+    ]);
+    expect(lightState({ kind: "scene", id: 5 }, fixture())).toMatchObject({ available: true, on: false });
+    expect(lightState({ kind: "local_scene", id: 3 }, fixture({ connected: false }))).toMatchObject({ available: false });
+  });
 });

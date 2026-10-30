@@ -187,7 +187,7 @@ export const admin: Record<string, string> = {
   "Rooms, lamp names, and which lamps belong to which room.": "Ruimtes, lampnamen en welke lampen bij welke ruimte horen.",
   "Wall switch rules, away dates for timers, and the location for sunrise and sunset.": "Regels voor wandschakelaars, afwezigheidsdagen voor timers en de locatie voor zonsopgang en zonsondergang.",
   "Who can sign in, and keys for other apps that use the REST API.": "Wie kan inloggen, en sleutels voor andere apps die de REST API gebruiken.",
-  "Control these lights from the Apple Home app and Siri.": "Bedien deze lampen vanuit de Apple Woning-app en met Siri.",
+  "Control these lights and scenes from the Apple Home app and Siri, and choose what appears there.": "Bedien deze lampen en scènes vanuit de Apple Woning-app en met Siri, en kies wat daar verschijnt.",
   "Notifications, updates, backups, the web server, and the audit log.": "Meldingen, updates, back-ups, de webserver en het auditlog.",
   "Bridge settings saved.": "Brug-instellingen opgeslagen.",
   "ADVANCED": "GEAVANCEERD",

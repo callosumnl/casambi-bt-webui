@@ -27,7 +27,7 @@ export function adminSectionSummary(section: AdminSection): string {
     case "rooms": return t("Rooms, lamp names, and which lamps belong to which room.");
     case "automation": return t("Wall switch rules, away dates for timers, and the location for sunrise and sunset.");
     case "access": return t("Who can sign in, and keys for other apps that use the REST API.");
-    case "homekit": return t("Control these lights from the Apple Home app and Siri.");
+    case "homekit": return t("Control these lights and scenes from the Apple Home app and Siri, and choose what appears there.");
     case "system": return t("Notifications, updates, backups, the web server, and the audit log.");
   }
 }

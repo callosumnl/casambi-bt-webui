@@ -180,4 +180,47 @@ describe("HomeKit lights", () => {
     lights.sync();
     expect(keys(host)).toEqual(["group:net:7", "unit:uuid-1", "unit:uuid-2", "unit:uuid-3"]);
   });
+
+  it("activates a scene from its switch, which turns itself off again", async () => {
+    const store = newStore(); const { source, sent } = fakeSource(fixture({ scenes: [{ id: 5, name: "Avond" }] })); const host = fakeHost();
+    const saved = store.createLightScene("Lezen", { type: "network", id: null }, [{ unitId: 1, level: 200, temperature: null }]);
+    lightsFor(store, source).attach(host);
+    const casambiScene = host.find("scene:net:5");
+    expect(casambiScene.category).toBe(hap.Categories.SWITCH);
+    const on = casambiScene.getService(hap.Service.Switch)!.getCharacteristic(hap.Characteristic.On);
+    await on.handleSetRequest(true);
+    expect(sent).toEqual([{ targetType: "scene", targetId: 5, operation: "activate_scene" }]);
+    expect(await on.handleGetRequest()).toBe(true);
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+    expect(on.value).toBe(false);
+    expect(await on.handleGetRequest()).toBe(false);
+    await host.find(`local_scene:${saved.id}`).getService(hap.Service.Switch)!.getCharacteristic(hap.Characteristic.On).handleSetRequest(true);
+    expect(sent[1]).toEqual({ targetType: "local_scene", targetId: saved.id, operation: "activate_scene" });
+  });
+
+  it("removes a deleted saved scene at once", () => {
+    const store = newStore(); const { source } = fakeSource(fixture()); const host = fakeHost();
+    const saved = store.createLightScene("Lezen", { type: "network", id: null }, []);
+    const lights = lightsFor(store, source);
+    lights.attach(host);
+    expect(keys(host)).toContain(`local_scene:${saved.id}`);
+    store.deleteLightScene(saved.id);
+    lights.sync();
+    expect(keys(host)).not.toContain(`local_scene:${saved.id}`);
+  });
+
+  it("hides what an administrator unticks, also after a restart, and shows it again", () => {
+    const store = newStore(); const { source } = fakeSource(fixture()); const host = fakeHost();
+    const lights = lightsFor(store, source);
+    lights.attach(host);
+    lights.setHidden(["unit:uuid-3", "room:1"]);
+    expect(keys(host)).toEqual(["group:net:7", "unit:uuid-1", "unit:uuid-2"]);
+    expect(lights.catalog()).toEqual(expect.arrayContaining([{ key: "unit:uuid-3", kind: "unit", name: "Lamp 3", shown: false }, { key: "unit:uuid-1", kind: "unit", name: "Lamp 1", shown: true }]));
+    const restarted = fakeHost();
+    const again = lightsFor(store, fakeSource(fixture()).source);
+    again.attach(restarted);
+    expect(keys(restarted)).toEqual(["group:net:7", "unit:uuid-1", "unit:uuid-2"]);
+    again.setHidden([]);
+    expect(keys(restarted)).toEqual(["group:net:7", "room:1", "unit:uuid-1", "unit:uuid-2", "unit:uuid-3"]);
+  });
 });

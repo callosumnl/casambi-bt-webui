@@ -40,3 +40,4 @@ export const homekitSettingsSchema = z.object({
   name: z.string().trim().min(1).max(64).describe("The bridge's name in Apple Home. Characters HomeKit does not allow are removed."),
   port: z.number().int().min(1024).max(65535).describe("TCP port of the HomeKit server; must differ from the web app's port."),
 });
+export const homekitAccessoriesSchema = z.object({ hidden: z.array(z.string().min(1).max(200)).max(1000).describe("Keys (from `accessories` in GET /admin/homekit) of what HomeKit should not show; everything else is shown.") });
