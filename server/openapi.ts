@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
+  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, homekitSettingsSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
   roomDefaultBrightnessSchema, roomRenameSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userUpdateSchema,
 } from "./apiSchemas";
 import { controlRequestSchema, groupSchema, networkSnapshotSchema, sceneSchema, unitSchema } from "./casambi/types";
@@ -92,6 +92,7 @@ const schemas: Record<string, JsonSchema> = {
   BackupCreate: fromZod(backupCreateSchema),
   ServerSettingsUpdate: fromZod(serverSettingsSchema),
   NotificationWebhook: fromZod(notificationWebhookSchema),
+  HomeKitSettings: fromZod(homekitSettingsSchema),
   Notifications: object({
     notifications: { type: "array", description: "Newest first, at most 50: id, kind (connection.lost, connection.restored, timer.failed, timer.unusable, update.failed), severity (info, warning, error), title, message, createdAt, readAt.", items: { type: "object" } },
     unread: { type: "integer" },
@@ -103,6 +104,17 @@ const schemas: Record<string, JsonSchema> = {
     port: { type: "integer" }, trustProxy: { type: "boolean" }, pending: { type: "boolean" },
     status: { type: "object", description: "What deploy/apply-settings.sh last reported: state (applying, applied, rolled_back, failed), message, at." },
     readOnly: { type: "object", description: "Settings that can only be changed in /etc/casambi-bt-webui.env." },
+  }),
+  HomeKitStatus: object({
+    enabled: { type: "boolean" }, name: { type: "string" }, port: { type: "integer" },
+    state: { type: "string", enum: ["disabled", "starting", "published", "failed"] },
+    error: nullable({ type: "string", description: "Why publishing failed, for example a port in use." }),
+    advertised: { type: "boolean", description: "Whether the bridge is announced on the network (mDNS), so the Home app can find it." },
+    advertiser: { type: "string", description: "The mDNS advertiser: avahi on Linux, ciao elsewhere, or CASAMBI_HOMEKIT_ADVERTISER." },
+    pincode: { type: "string", description: "The HomeKit setup code (123-45-678)." },
+    setupUri: nullable({ type: "string", description: "X-HM:// setup payload, while published." }),
+    qrSvg: nullable({ type: "string", description: "The setup payload as a QR code (SVG) for the Home app, while published." }),
+    pairings: { type: "integer", description: "Number of paired Apple Home controllers." },
   }),
   BackupFile: { type: "string", contentMediaType: "application/octet-stream", description: "A backup file as downloaded from POST /admin/backup." },
   DiscoveredNetwork: object({ address: { type: "string", description: "BLE address of a Casambi network endpoint in range." }, rssi: nullable({ type: "integer", description: "Signal strength in dBm (closer to 0 is stronger); null when the scan could not measure it." }) }),
@@ -200,6 +212,9 @@ const operations: Operation[] = [
   { method: "post", path: "/admin/notifications/test", tag: "Admin: bridge", summary: "Send a test notification to the webhook", access: "admin", responses: { 200: { description: "What the webhook answered.", schema: "WebhookTest" }, 422: { description: "No webhook URL is set.", schema: "Error" } } },
   { method: "get", path: "/admin/server-settings", tag: "Admin: bridge", summary: "Server settings", description: "The port and reverse-proxy setting this process runs with, the read-only settings from /etc/casambi-bt-webui.env, and the last change's result.", access: "admin", responses: { 200: { description: "The server settings.", schema: "ServerSettings" } } },
   { method: "put", path: "/admin/server-settings", tag: "Admin: bridge", summary: "Change the port or reverse-proxy setting", description: "Asks the Pi to write the settings to /etc/casambi-bt-webui.env and restart. If the app does not answer on the new port within a minute, the previous settings are restored. After a port change, open the app on the new port (and sign in again there).", access: "admin", body: "ServerSettingsUpdate", bodyRequired: true, responses: { 202: { description: "Requested.", schema: object({ requested: ref("ServerSettingsUpdate") }) }, 422: { description: "Not set up, invalid, or a change is still being applied.", schema: "Error" } } },
+  { method: "get", path: "/admin/homekit", tag: "Admin: bridge", summary: "HomeKit bridge", description: "Settings, whether the bridge is published and announced, the setup code and QR code, and the number of pairings.", access: "admin", responses: { 200: { description: "The HomeKit status.", schema: "HomeKitStatus" } } },
+  { method: "put", path: "/admin/homekit", tag: "Admin: bridge", summary: "Change the HomeKit bridge", description: "Turns the HomeKit bridge on or off, or changes its name or port, and republishes it. Pairings are kept.", access: "admin", body: "HomeKitSettings", bodyRequired: true, responses: { 200: { description: "Saved; the new status.", schema: "HomeKitStatus" }, 422: { description: "Invalid, or the port is the web app's port.", schema: "Error" } } },
+  { method: "post", path: "/admin/homekit/reset", tag: "Admin: bridge", summary: "Reset HomeKit pairing", description: "Removes every pairing and creates a new device id and setup code. Apple Home sees a new bridge: remove the old one there and add the bridge again.", access: "admin", responses: { 200: { description: "Reset; the new status.", schema: "HomeKitStatus" } } },
   { method: "get", path: "/admin/update", tag: "Admin: bridge", summary: "Update status", description: "Whether updates from the app are set up (`supported`), the running version, open requests, and what deploy/update.sh last reported: `state` (checking, available, up_to_date, updating, updated, rolling_back, rolled_back, failed), the current and latest commit, the new changes, and for an update the tail of its log.", access: "admin", responses: { 200: { description: "The update status.", schema: "UpdateStatus" } } },
   { method: "post", path: "/admin/update/check", tag: "Admin: bridge", summary: "Check for an update", description: "Asks the Pi to fetch from the checkout's upstream branch and report how far it is behind. Runs in the background; poll `GET /admin/update`.", access: "admin", responses: { 202: { description: "Requested.", schema: object({ requested: { type: "string" } }) }, 422: { description: "Updates from the app are not set up.", schema: "Error" } } },
   { method: "post", path: "/admin/update/apply", tag: "Admin: bridge", summary: "Update now", description: "Asks the Pi to fast-forward to its upstream branch and run deploy/install.sh, which restarts the service. If the update fails, the previous version is installed again. Runs in the background; poll `GET /admin/update`.", access: "admin", responses: { 202: { description: "Requested.", schema: object({ requested: { type: "string" } }) }, 422: { description: "Not set up, or an update is already running.", schema: "Error" } } },

@@ -18,15 +18,18 @@ import { SetupCode } from "./setupCode";
 import { Updater, UpdateMode } from "./updates";
 import { ServerSettingsHelper } from "./serverSettings";
 import { Notifier } from "./notifications";
+import QRCode from "qrcode";
+import type { HomeKitBridge } from "./homekit/bridge";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
-import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitSettingsSchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
  * `probes` read the system for the diagnostics, `updater` requests updates, and `serverSettings` requests env-file
- * changes; tests replace all three. Without a `notifier` the notification routes answer with an empty list.
+ * changes; tests replace all three. Without a `notifier` the notification routes answer with an empty list, and
+ * without `homekit` the HomeKit routes refuse.
  */
-type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper; notifier?: Notifier };
+type Dependencies = { store: LocalStore; service: CasambiService; events: EventHub; scheduler: DurableScheduler; setupCode?: SetupCode; probes?: Probes; updater?: Updater; serverSettings?: ServerSettingsHelper; notifier?: Notifier; homekit?: HomeKitBridge };
 type AsyncRoute = (request: Request, response: Response) => Promise<void>;
 
 /** Wraps async routes in a stable JSON error response. */
@@ -90,7 +93,7 @@ function normalizeHolidayDates(dates: string[]): string[] { return Array.from(ne
 function assertAwayDateSet(id: number | null | undefined, store: LocalStore): AwayDateSet | null { if (id == null) return null; const set = store.getAwayDateSet(id); if (!set) throw new Error("Away-date set does not exist."); return set; }
 
 /** Registers the complete versioned Raspberry Pi REST API. */
-export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory), notifier }: Dependencies): Router {
+export function createCasambiApi({ store, service, events, scheduler, setupCode, probes = systemProbes, updater = new Updater(store.dataDirectory), serverSettings = new ServerSettingsHelper(store.dataDirectory), notifier, homekit }: Dependencies): Router {
   const api = Router();
   api.use(rateLimit({ windowMs: 60_000, limit: 240, standardHeaders: "draft-8", legacyHeaders: false }));
   // Password guessing gets its own, much tighter budget; successful sign-ins do not count against it.
@@ -219,6 +222,23 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
     serverSettings.request(input);
     store.audit(principal(response).name, "server_settings.requested", input);
     response.status(202).json({ requested: input });
+  }));
+  /** The status with the setup code as a QR code (SVG), which the Home app can scan. */
+  const homekitStatus = async (bridge: HomeKitBridge) => {
+    const status = bridge.status();
+    return { ...status, qrSvg: status.setupUri ? await QRCode.toString(status.setupUri, { type: "svg", margin: 1 }) : null };
+  };
+  const requireHomekit = (): HomeKitBridge => { if (!homekit) throw new Error("HomeKit cannot be used: it is not set up in this server."); return homekit; };
+  api.get("/admin/homekit", requireAuth(store, "admin"), route(async (_request, response) => { response.json(await homekitStatus(requireHomekit())); }));
+  api.put("/admin/homekit", requireAuth(store, "admin"), route(async (request, response) => {
+    const bridge = requireHomekit();
+    await bridge.update(parsed(homekitSettingsSchema, request.body), principal(response).name);
+    response.json(await homekitStatus(bridge));
+  }));
+  api.post("/admin/homekit/reset", requireAuth(store, "admin"), route(async (_request, response) => {
+    const bridge = requireHomekit();
+    await bridge.resetPairing(principal(response).name);
+    response.json(await homekitStatus(bridge));
   }));
   api.get("/admin/update", requireAuth(store, "admin"), route(async (_request, response) => {
     response.json({ supported: updater.supported, running: await appVersion(probes), pending: { check: updater.pending("check"), apply: updater.pending("apply") }, status: updater.status() });
