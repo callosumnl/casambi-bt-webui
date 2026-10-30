@@ -61,6 +61,10 @@ describe("lighting model", () => {
     expect(lightState({ kind: "unit", id: 11 }, snapshot).saturation).toBeLessThan(30);
     expect(lightState({ kind: "unit", id: 12 }, snapshot)).toMatchObject({ hue: 0, saturation: 100 });
     expect(lightState({ kind: "unit", id: 13 }, snapshot)).toMatchObject({ on: false, saturation: 0 });
+    // Which colour each shows: white for lamp 11 (and the group, whose first colour lamp is 11), red for lamp 12.
+    expect(lightState({ kind: "unit", id: 11 }, snapshot).colorMode).toBe("temperature");
+    expect(lightState({ kind: "unit", id: 12 }, snapshot).colorMode).toBe("color");
+    expect(lightState({ kind: "group", id: 20 }, snapshot).colorMode).toBe("temperature");
   });
 
   it("sends each lamp a colour in the form it takes, before switching it on", () => {

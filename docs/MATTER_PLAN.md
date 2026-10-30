@@ -1,6 +1,6 @@
 # Matter / Google Home plan
 
-Status: phases 0 (spike), 1 (shared lighting core), 2 (the Matter bridge with pairing and the Google Home tab), and 3 (lamps, groups, and rooms) are done; phase 4 (colour) is next.
+Status: phases 0 (spike), 1 (shared lighting core), 2 (the Matter bridge with pairing and the Google Home tab), 3 (lamps, groups, and rooms), and 4 (colour) are done; phase 5 (scenes and choosing what Google Home shows) is next.
 
 ## Goal
 
@@ -181,7 +181,10 @@ reacted, and how Google Home handled 60 lamps.
    (`reachable` false while Bluetooth is down or a lamp is offline); Google Home's commands go through the shared write
    batcher as actor `matter` (on + level merged, group commands), with the Casambi level 0–255 passed through instead
    of whole percents; level transitions are instant, so one command per change reaches Casambi.
-4. **Colour:** colour temperature, hue/saturation, xy.
+4. **Colour (done):** a white lamp is a Color Temperature Light (its kelvin range as mired), a colour lamp an Extended
+   Color Light with hue/saturation, xy, and colour temperature; Matter's colour mode follows what the lamp shows (the
+   shared light state now says so). Colour commands go through the shared planner, so each lamp gets kelvin, RGB, or
+   xy, and colour transitions are instant (matter.js's default).
 5. **Scenes and choosing what Google Home shows.**
 6. **Operations:** Matter storage in backups, system check line, README with the Google Developer Console steps.
 7. **Optional, wall switches:** as Matter Generic Switch, if Google Home automations can use them.

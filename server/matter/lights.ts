@@ -1,15 +1,23 @@
 import type { LocalStore } from "../store";
-import { LightDescriptor, LightingSnapshot, lightState, lightUnitIds } from "../lighting/model";
+import { rgbToHueSaturation, xyToRgb } from "../lighting/colour";
+import { LightDescriptor, LightingSnapshot, lightState, lightUnitIds, LightWrite } from "../lighting/model";
 import { LightRegistry, LightingSource, RegistryChange } from "../lighting/registry";
 import { WriteBatcher } from "../lighting/writes";
 import { DeviceFactory, DeviceState, fromMatterLevel, MatterDevice, toMatterLevel } from "./devices";
 import { matterLabel } from "./identity";
 
 type Options = { flushMs: number; removeAfterMs: number; writeTimeoutMs: number; now: () => number };
-/** `lastLevel` is the Matter level shown while a light is off, so Google Home keeps its slider where it was. */
-type Device = { descriptor: LightDescriptor; device: MatterDevice | null; pushed: DeviceState | null; lastLevel: number };
+/**
+ * `lastLevel` is the Matter level shown while a light is off, so Google Home keeps its slider where it was; `colour`
+ * the last hue (0–360) and saturation (0–100), for a command that changes only one of them.
+ */
+type Device = { descriptor: LightDescriptor; device: MatterDevice | null; pushed: DeviceState | null; lastLevel: number; colour: { hue: number; saturation: number } };
+const newDevice = (descriptor: LightDescriptor): Device => ({ descriptor, device: null, pushed: null, lastLevel: 254, colour: { hue: 0, saturation: 0 } });
+/** Matter hue and saturation are 0–254; the shared model uses degrees and percent. */
+const toMatter = { hue: (degrees: number) => Math.round((degrees / 360) * 254), saturation: (percent: number) => Math.round((percent / 100) * 254) };
+const fromMatter = { hue: (value: number) => (value / 254) * 360, saturation: (value: number) => (value / 254) * 100 };
 
-/** Kinds the Matter bridge shows so far: lamps, Casambi groups, and rooms. */
+/** Kinds the Matter bridge shows so far: lamps, Casambi groups, and rooms, with on/off, level, and colour. */
 const SUPPORTED = new Set<LightDescriptor["kind"]>(["unit", "group", "room"]);
 
 const unreachable = () => new Error("The Casambi network cannot be reached.");
@@ -33,7 +41,7 @@ export class MatterLights {
     this.writes = new WriteBatcher(store, source, {
       actor: "matter", flushMs: options.flushMs, writeTimeoutMs: options.writeTimeoutMs, failure: unreachable,
       unitIds: (key, snapshot) => { const device = this.devices.get(key); return device ? lightUnitIds(device.descriptor, snapshot) : null; },
-      currentColour: () => ({ hue: 0, saturation: 0 }),
+      currentColour: key => this.devices.get(key)?.colour ?? { hue: 0, saturation: 0 },
     });
     this.loadDevices();
     source.onStateChange(() => this.scheduleSync());
@@ -79,7 +87,7 @@ export class MatterLights {
 
   private loadDevices(): void {
     this.devices.clear();
-    for (const descriptor of this.registry.entries()) if (SUPPORTED.has(descriptor.kind)) this.devices.set(descriptor.key, { descriptor, device: null, pushed: null, lastLevel: 254 });
+    for (const descriptor of this.registry.entries()) if (SUPPORTED.has(descriptor.kind)) this.devices.set(descriptor.key, newDevice(descriptor));
   }
 
   private async syncNow(): Promise<void> {
@@ -97,7 +105,7 @@ export class MatterLights {
     }
     for (const descriptor of supported(change.rebuilt)) {
       // A device type that changed (a lamp that started to dim) needs a new endpoint; it gets the same endpoint id.
-      const device = this.devices.get(descriptor.key) ?? { descriptor, device: null, pushed: null, lastLevel: 254 };
+      const device = this.devices.get(descriptor.key) ?? newDevice(descriptor);
       this.devices.set(descriptor.key, device);
       await device.device?.remove();
       device.descriptor = descriptor;
@@ -112,7 +120,7 @@ export class MatterLights {
       await device.device?.rename(descriptor.name);
     }
     for (const descriptor of supported(change.added)) {
-      const device: Device = { descriptor, device: null, pushed: null, lastLevel: 254 };
+      const device = newDevice(descriptor);
       this.devices.set(descriptor.key, device);
       await this.build(device);
     }
@@ -125,26 +133,39 @@ export class MatterLights {
     device.device = await this.factory.add(device.descriptor, state, {
       onOn: on => this.write(key, { on }),
       onLevel: level => this.write(key, { level: fromMatterLevel(level) }),
+      onMired: mired => this.write(key, { mired }),
+      onHueSaturation: colour => this.write(key, { ...(colour.hue !== undefined ? { hue: fromMatter.hue(colour.hue) } : {}), ...(colour.saturation !== undefined ? { saturation: fromMatter.saturation(colour.saturation) } : {}) }),
+      onXy: (x, y) => this.write(key, rgbToHueSaturation(xyToRgb([x, y]))),
     });
     device.pushed = state;
   }
 
   /** A command from Google Home; a failure is audited by the batcher and corrected by the next state push. */
-  private write(key: string, write: { on?: boolean; level?: number }): void {
+  private write(key: string, write: LightWrite): void {
     try { void this.writes.write(key, write).catch(() => this.scheduleSync()); } catch { this.scheduleSync(); }
   }
 
   private state(device: Device, snapshot: LightingSnapshot): DeviceState {
-    const state = lightState(device.descriptor, snapshot);
+    const { descriptor } = device;
+    const state = lightState(descriptor, snapshot);
     if (state.level !== null) device.lastLevel = toMatterLevel(state.level);
-    return { reachable: state.available, on: state.on, level: device.descriptor.dimmable ? device.lastLevel : null };
+    if (state.hue !== null && state.saturation !== null) device.colour = { hue: state.hue, saturation: state.saturation };
+    const range = descriptor.temperature;
+    const leveled = descriptor.dimmable || descriptor.color || Boolean(range);
+    return {
+      reachable: state.available, on: state.on, level: leveled ? device.lastLevel : null,
+      mired: state.mired !== null && range ? Math.max(range.minMired, Math.min(range.maxMired, state.mired)) : null,
+      hue: descriptor.color && state.hue !== null ? toMatter.hue(state.hue) : null,
+      saturation: descriptor.color && state.saturation !== null ? toMatter.saturation(state.saturation) : null,
+      colorMode: descriptor.color || range ? state.colorMode : null,
+    };
   }
 
   private async push(device: Device, snapshot: LightingSnapshot): Promise<void> {
     if (!device.device) return;
     const state = this.state(device, snapshot);
     const previous = device.pushed;
-    if (previous && previous.reachable === state.reachable && previous.on === state.on && previous.level === state.level) return;
+    if (previous && JSON.stringify(previous) === JSON.stringify(state)) return;
     device.pushed = state;
     await device.device.push(state);
   }
