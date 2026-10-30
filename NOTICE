@@ -11,5 +11,10 @@ It controls Casambi lighting through the casambi-bt library
 Apache License, Version 2.0. casambi-bt is installed as a dependency and is not
 included in this repository.
 
+The HomeKit bridge uses HAP-NodeJS (https://github.com/homebridge/HAP-NodeJS), which is
+licensed separately under the Apache License, Version 2.0, and is installed as a dependency.
+This project is not affiliated with, endorsed by, or certified by Apple; "HomeKit" and
+"Apple Home" are trademarks of Apple Inc.
+
 "Casambi" is a trademark of Casambi Technologies. This project is independent
 and is not affiliated with, endorsed by, or supported by Casambi Technologies.

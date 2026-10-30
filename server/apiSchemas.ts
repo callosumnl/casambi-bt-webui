@@ -35,3 +35,8 @@ export const apiKeyCreateSchema = z.object({ label: z.string().trim().min(1).max
 export const backupCreateSchema = z.object({ passphrase: z.string().min(10).max(256).describe("Protects the backup; needed to restore it. At least 10 characters.") });
 export const serverSettingsSchema = z.object({ port: z.number().int().min(1024).max(65535), trustProxy: z.boolean().describe("Trust X-Forwarded-For from a reverse proxy (for example for HTTPS). Only with a proxy in front: otherwise any client could pick its own address and evade the rate limit.") });
 export const notificationWebhookSchema = z.object({ url: z.union([z.literal(""), z.null(), z.string().trim().max(2000).url().refine(url => /^https?:\/\//i.test(url), "The webhook URL must start with http:// or https://.")]).describe("Where notifications are POSTed as JSON; empty or null turns the webhook off.") });
+export const homekitSettingsSchema = z.object({
+  enabled: z.boolean().describe("Publish this Pi as a HomeKit bridge."),
+  name: z.string().trim().min(1).max(64).describe("The bridge's name in Apple Home. Characters HomeKit does not allow are removed."),
+  port: z.number().int().min(1024).max(65535).describe("TCP port of the HomeKit server; must differ from the web app's port."),
+});
