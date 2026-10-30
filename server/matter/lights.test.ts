@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ControlRequest } from "../casambi/types";
 import type { LightDescriptor, LightingSnapshot } from "../lighting/model";
 import type { LightingSource } from "../lighting/registry";
-import { fixture } from "../lighting/testFixtures";
+import { colourFixture, fixture } from "../lighting/testFixtures";
 import { LocalStore } from "../store";
 import { DeviceFactory, DeviceHandlers, DeviceState, fromMatterLevel, toMatterLevel } from "./devices";
 import { MatterLights } from "./lights";
@@ -68,9 +68,9 @@ describe("Matter lights", () => {
     expect(lights.status()).toEqual({ lights: 5 });
     // Matter keeps the room's name as it is; HomeKit drops the brackets.
     expect(devices.get("group:net:7")!.name).toBe("Eiland (keuken)");
-    expect(last("unit:uuid-1")).toEqual({ reachable: true, on: true, level: 254 });
-    expect(last("unit:uuid-2")).toEqual({ reachable: true, on: true, level: 127 });
-    expect(last("unit:uuid-3")).toEqual({ reachable: true, on: false, level: null });
+    expect(last("unit:uuid-1")).toMatchObject({ reachable: true, on: true, level: 254 });
+    expect(last("unit:uuid-2")).toMatchObject({ reachable: true, on: true, level: 127 });
+    expect(last("unit:uuid-3")).toMatchObject({ reachable: true, on: false, level: null });
     expect(lights.catalog().map(entry => entry.kind)).not.toContain("scene");
   });
 
@@ -98,10 +98,10 @@ describe("Matter lights", () => {
     expect(devices.get("unit:uuid-1")!.states).toHaveLength(pushes); // nothing changed, nothing pushed
     source.snapshot = fixture(); source.snapshot.units[0].state.dimmer = 51;
     await lights.sync();
-    expect(last("unit:uuid-1")).toEqual({ reachable: true, on: true, level: 51 });
+    expect(last("unit:uuid-1")).toMatchObject({ reachable: true, on: true, level: 51 });
     source.snapshot = fixture(); source.snapshot.units[0].state.on = false;
     await lights.sync();
-    expect(last("unit:uuid-1")).toEqual({ reachable: true, on: false, level: 51 });
+    expect(last("unit:uuid-1")).toMatchObject({ reachable: true, on: false, level: 51 });
     source.snapshot = fixture({ connected: false });
     await lights.sync();
     expect(last("unit:uuid-1")).toMatchObject({ reachable: false });
@@ -125,5 +125,33 @@ describe("Matter lights", () => {
     await lightsFor(store, fakeSource(fixture({ connected: false, network: null })).source).attach(restarted.factory);
     expect(restarted.devices.has("unit:uuid-1")).toBe(true);
     expect(restarted.last("unit:uuid-1")).toMatchObject({ reachable: false });
+  });
+
+  it("shows white lamps with a colour temperature and colour lamps with colour, in the mode each shows", async () => {
+    const store = newStore(); const { source } = fakeSource(colourFixture()); const { factory, devices, last } = fakeFactory();
+    await lightsFor(store, source).attach(factory);
+    expect(devices.get("unit:uuid-11")!.descriptor).toMatchObject({ temperature: { minMired: 154, maxMired: 370 }, color: false });
+    expect(last("unit:uuid-11")).toMatchObject({ mired: 250, hue: null, colorMode: "temperature" });
+    // Lamp 12 shows red: hue 0, full saturation (254 in Matter).
+    expect(last("unit:uuid-12")).toMatchObject({ hue: 0, saturation: 254, colorMode: "color" });
+  });
+
+  it("sends colour temperature, hue and saturation, and xy from Google Home in the form each lamp takes", async () => {
+    const store = newStore(); const { source, sent } = fakeSource(colourFixture()); const { factory, devices } = fakeFactory();
+    await lightsFor(store, source).attach(factory);
+    devices.get("unit:uuid-11")!.handlers.onMired(370);
+    await settle();
+    expect(sent).toEqual([{ targetType: "unit", targetId: 11, operation: "set_temperature", value: 2703 }]);
+    sent.length = 0;
+    // Hue and saturation arrive as two changes of one command; they become one colour.
+    devices.get("unit:uuid-12")!.handlers.onHueSaturation({ hue: 169 });
+    devices.get("unit:uuid-12")!.handlers.onHueSaturation({ saturation: 254 });
+    await settle();
+    expect(sent).toEqual([{ targetType: "unit", targetId: 12, operation: "set_color", value: [0, 2, 255] }]);
+    sent.length = 0;
+    devices.get("unit:uuid-13")!.handlers.onXy(0.64, 0.33);
+    await settle();
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatchObject({ targetType: "unit", targetId: 13, operation: "set_xy" });
   });
 });

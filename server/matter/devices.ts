@@ -1,14 +1,28 @@
 import { createHash } from "crypto";
 import { Endpoint } from "@matter/main";
 import { BridgedDeviceBasicInformationServer } from "@matter/main/behaviors/bridged-device-basic-information";
+import { ColorControlServer } from "@matter/main/behaviors/color-control";
+import { ColorTemperatureLightDevice } from "@matter/main/devices/color-temperature-light";
+import { ExtendedColorLightDevice } from "@matter/main/devices/extended-color-light";
 import { DimmableLightDevice, DimmableLightRequirements } from "@matter/main/devices/dimmable-light";
 import { OnOffLightDevice } from "@matter/main/devices/on-off-light";
 import type { LightDescriptor } from "../lighting/model";
 
-/** A bridged device's state in Matter terms: `level` is 1–254, null when unknown. */
-export type DeviceState = { reachable: boolean; on: boolean; level: number | null };
+/**
+ * A bridged device's state in Matter terms: `level` 1–254, `mired` the colour temperature, `hue` and `saturation`
+ * 0–254, `colorMode` which of them the light shows; null when unknown or not supported.
+ */
+export type DeviceState = { reachable: boolean; on: boolean; level: number | null; mired: number | null; hue: number | null; saturation: number | null; colorMode: "temperature" | "color" | null };
 /** What a controller (Google Home) asked for; only commands from a controller arrive here, never our own updates. */
-export type DeviceHandlers = { onOn: (on: boolean) => void; onLevel: (level: number) => void };
+export type DeviceHandlers = {
+  onOn: (on: boolean) => void;
+  onLevel: (level: number) => void;
+  onMired: (mired: number) => void;
+  /** Hue and saturation in Matter units (0–254); one of them may be missing when only the other changed. */
+  onHueSaturation: (colour: { hue?: number; saturation?: number }) => void;
+  /** CIE xy, 0–1. */
+  onXy: (x: number, y: number) => void;
+};
 
 /** One bridged device, as far as MatterLights uses it; tests replace it. */
 export interface MatterDevice {
@@ -41,33 +55,71 @@ class InstantLevelControlServer extends DimmableLightRequirements.LevelControlSe
   }
 }
 
+/** Hue, saturation, xy, and colour temperature for colour lamps; Matter's Extended Color Light needs xy and colour temperature. */
+const ExtendedColorControlServer = ColorControlServer.with("HueSaturation", "Xy", "ColorTemperature").alter({ attributes: { remainingTime: { optional: false } } });
+/** Matter's colour modes: 0 hue and saturation, 1 xy, 2 colour temperature. */
+const COLOR_MODE = { color: 0, temperature: 2 } as const;
+const XY_SCALE = 65536;
+
 /** A change came from a controller (it has a fabric), not from the bridge pushing Casambi state. */
 const fromController = (context: unknown) => (context as { fabric?: unknown } | undefined)?.fabric !== undefined;
 
-/** Bridged lights on the Matter node's aggregator endpoint: On/Off Light, or Dimmable Light when a lamp dims. */
+/** The ColorControl attributes for a state; only the ones of the light's mode, so the other keeps its last value. */
+function colourAttributes(descriptor: LightDescriptor, state: DeviceState): Record<string, number> {
+  const attributes: Record<string, number> = {};
+  if (state.colorMode === "temperature" && state.mired !== null) Object.assign(attributes, { colorTemperatureMireds: state.mired, colorMode: COLOR_MODE.temperature, enhancedColorMode: COLOR_MODE.temperature });
+  if (state.colorMode === "color" && descriptor.color && state.hue !== null && state.saturation !== null) Object.assign(attributes, { currentHue: state.hue, currentSaturation: state.saturation, colorMode: COLOR_MODE.color, enhancedColorMode: COLOR_MODE.color });
+  return attributes;
+}
+
+/**
+ * Bridged lights on the Matter node's aggregator endpoint: Extended Color Light for colour lamps, Color Temperature
+ * Light for white lamps, Dimmable Light, or On/Off Light.
+ */
 export function endpointFactory(aggregator: Endpoint): DeviceFactory {
   return {
     async add(descriptor, initial, handlers) {
-      const type = descriptor.dimmable
-        ? DimmableLightDevice.with(BridgedDeviceBasicInformationServer, InstantLevelControlServer)
+      const range = descriptor.temperature ?? { minMired: 140, maxMired: 500 };
+      const type = descriptor.color ? ExtendedColorLightDevice.with(BridgedDeviceBasicInformationServer, InstantLevelControlServer, ExtendedColorControlServer)
+        : descriptor.temperature ? ColorTemperatureLightDevice.with(BridgedDeviceBasicInformationServer, InstantLevelControlServer)
+        : descriptor.dimmable ? DimmableLightDevice.with(BridgedDeviceBasicInformationServer, InstantLevelControlServer)
         : OnOffLightDevice.with(BridgedDeviceBasicInformationServer);
+      const leveled = descriptor.dimmable || descriptor.color || Boolean(descriptor.temperature);
+      const coloured = descriptor.color || Boolean(descriptor.temperature);
+      const mired = initial.mired ?? Math.round((range.minMired + range.maxMired) / 2);
       const endpoint = new Endpoint(type as typeof OnOffLightDevice, {
         id: endpointId(descriptor.key),
         bridgedDeviceBasicInformation: { nodeLabel: descriptor.name, productName: KIND_PRODUCT[descriptor.kind], productLabel: KIND_PRODUCT[descriptor.kind], uniqueId: uniqueId(descriptor.key), reachable: initial.reachable },
         onOff: { onOff: initial.on },
-        ...(descriptor.dimmable ? { levelControl: { currentLevel: initial.level ?? 254, minLevel: 1, maxLevel: 254 } } : {}),
+        ...(leveled ? { levelControl: { currentLevel: initial.level ?? 254, minLevel: 1, maxLevel: 254 } } : {}),
+        ...(coloured ? { colorControl: {
+          colorTempPhysicalMinMireds: range.minMired, colorTempPhysicalMaxMireds: range.maxMired, coupleColorTempToLevelMinMireds: range.minMired,
+          colorTemperatureMireds: mired, colorMode: COLOR_MODE.temperature, enhancedColorMode: COLOR_MODE.temperature,
+          ...(descriptor.color ? { currentHue: initial.hue ?? 0, currentSaturation: initial.saturation ?? 0, currentX: 20543, currentY: 21561 } : {}),
+          ...colourAttributes(descriptor, initial),
+        } } : {}),
       } as never);
       await aggregator.add(endpoint);
+      type Listener<T> = { on(listener: (value: T, old: T, context: unknown) => void): void };
       const events = endpoint.events as unknown as {
-        onOff: { onOff$Changed: { on(listener: (value: boolean, old: boolean, context: unknown) => void): void } };
-        levelControl?: { currentLevel$Changed: { on(listener: (value: number | null, old: number | null, context: unknown) => void): void } };
+        onOff: { onOff$Changed: Listener<boolean> };
+        levelControl?: { currentLevel$Changed: Listener<number | null> };
+        colorControl?: { colorTemperatureMireds$Changed: Listener<number>; currentHue$Changed?: Listener<number>; currentSaturation$Changed?: Listener<number>; currentX$Changed?: Listener<number>; currentY$Changed?: Listener<number> };
       };
       events.onOff.onOff$Changed.on((value, _old, context) => { if (fromController(context)) handlers.onOn(value); });
       events.levelControl?.currentLevel$Changed.on((value, _old, context) => { if (value !== null && fromController(context)) handlers.onLevel(value); });
+      events.colorControl?.colorTemperatureMireds$Changed.on((value, _old, context) => { if (fromController(context)) handlers.onMired(value); });
+      events.colorControl?.currentHue$Changed?.on((value, _old, context) => { if (fromController(context)) handlers.onHueSaturation({ hue: value }); });
+      events.colorControl?.currentSaturation$Changed?.on((value, _old, context) => { if (fromController(context)) handlers.onHueSaturation({ saturation: value }); });
+      // X and Y arrive as two changes of one command; the state already holds both when either one fires.
+      const xy = () => { const state = (endpoint.state as unknown as { colorControl: { currentX: number; currentY: number } }).colorControl; handlers.onXy(state.currentX / XY_SCALE, state.currentY / XY_SCALE); };
+      events.colorControl?.currentX$Changed?.on((_value, _old, context) => { if (fromController(context)) xy(); });
+      events.colorControl?.currentY$Changed?.on((_value, _old, context) => { if (fromController(context)) xy(); });
       return {
         push: state => endpoint.set({
           bridgedDeviceBasicInformation: { reachable: state.reachable }, onOff: { onOff: state.on },
-          ...(descriptor.dimmable && state.level !== null ? { levelControl: { currentLevel: state.level } } : {}),
+          ...(leveled && state.level !== null ? { levelControl: { currentLevel: state.level } } : {}),
+          ...(coloured && Object.keys(colourAttributes(descriptor, state)).length ? { colorControl: colourAttributes(descriptor, state) } : {}),
         } as never),
         rename: name => endpoint.set({ bridgedDeviceBasicInformation: { nodeLabel: name } } as never),
         remove: () => endpoint.delete(),
