@@ -21,7 +21,7 @@ import { Notifier } from "./notifications";
 import QRCode from "qrcode";
 import type { HomeKitBridge } from "./homekit/bridge";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
-import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitSettingsSchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitAccessoriesSchema, homekitSettingsSchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
@@ -233,6 +233,11 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
   api.put("/admin/homekit", requireAuth(store, "admin"), route(async (request, response) => {
     const bridge = requireHomekit();
     await bridge.update(parsed(homekitSettingsSchema, request.body), principal(response).name);
+    response.json(await homekitStatus(bridge));
+  }));
+  api.put("/admin/homekit/accessories", requireAuth(store, "admin"), route(async (request, response) => {
+    const bridge = requireHomekit();
+    bridge.setHidden(parsed(homekitAccessoriesSchema, request.body).hidden, principal(response).name);
     response.json(await homekitStatus(bridge));
   }));
   api.post("/admin/homekit/reset", requireAuth(store, "admin"), route(async (_request, response) => {

@@ -1,6 +1,6 @@
 # HomeKit compatibility plan
 
-Status: phases 1 (bridge, pairing, admin panel), 2 (lamps, groups and rooms) and 3 (colour) are implemented; scenes are next.
+Status: phases 1 (bridge, pairing, admin panel), 2 (lamps, groups and rooms), 3 (colour) and 4 (scenes, choosing what HomeKit shows) are implemented; operations (backup of pairings, system check) are next.
 
 ## Goal
 
@@ -159,7 +159,9 @@ New admin API (OpenAPI document and its sync test updated):
 3. **Colour (done):** ColorTemperature in mired within each lamp's kelvin range, Hue and Saturation for RGB and XY
    lamps (`server/homekit/colour.ts`); groups and rooms get what any of their lamps supports. The worker now reports
    which colour source a lamp shows, so a lamp with both white and colour is drawn right in Apple Home.
-4. **Scenes:** momentary scene switches (network and local scenes); exposure toggles.
+4. **Scenes (done):** Casambi scenes and scenes saved on the Pi as momentary switches (on for a second, then off
+   again), and Admin → HomeKit → IN APPLE HOME to choose which lamps, groups, rooms, and scenes HomeKit shows
+   (`homekit.hidden`; `PUT /admin/homekit/accessories`).
 5. **Operations:** backup/restore of pairing, system check line, Dutch strings for new texts.
 6. **Wall switches:** Casambi buttons as programmable switches for Home automations.
 7. **Optional Homebridge plugin:** for existing Homebridge users, reusing `mapping.ts` over REST + SSE with an API key.

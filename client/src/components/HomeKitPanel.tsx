@@ -41,7 +41,7 @@ export function HomeKitPanel({ api, onNotice }: { api: LocalApi; onNotice: (mess
   return <HudFrame className="form-panel"><h3><Home /> {t("HOMEKIT")}</h3>
     {!info && <p className="muted-copy">{t("Loading…")}</p>}
     {info && <>
-      <p className="muted-copy">{t("Makes this Pi a bridge in the Apple Home app, like Homebridge: every lamp, Casambi group, and room becomes a light there. Everyone in that Home can then switch these lights. The Home app calls it an uncertified accessory; that is expected.")}</p>
+      <p className="muted-copy">{t("Makes this Pi a bridge in the Apple Home app, like Homebridge: lamps, Casambi groups, and rooms become lights there, and scenes become switches. Everyone in that Home can then switch these lights. The Home app calls it an uncertified accessory; that is expected.")}</p>
       <form onSubmit={event => void save(event)} className="admin-form">
         <label className="checkbox-row"><input type="checkbox" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })} disabled={busy} /> {t("PUBLISH AS HOMEKIT BRIDGE")}</label>
         <div className="form-grid">

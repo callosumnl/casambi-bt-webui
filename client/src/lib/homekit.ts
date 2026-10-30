@@ -15,7 +15,28 @@ export type HomeKitInfo = {
   pairings: number;
   lights: number;
   lightsNotShown: number;
+  accessories: HomeKitAccessory[];
 };
+
+/** One lamp, group, room, or scene HomeKit can show. */
+export type HomeKitAccessory = { key: string; kind: "unit" | "group" | "room" | "scene" | "local_scene"; name: string; shown: boolean };
+const KIND_ORDER: HomeKitAccessory["kind"][] = ["unit", "group", "room", "scene", "local_scene"];
+
+export function accessoryKindLabel(kind: HomeKitAccessory["kind"]): string {
+  switch (kind) {
+    case "unit": return t("LAMPS");
+    case "group": return t("CASAMBI GROUPS");
+    case "room": return t("ROOMS");
+    case "scene": return t("CASAMBI SCENES");
+    case "local_scene": return t("SAVED SCENES");
+  }
+}
+
+/** The accessories by kind, in a fixed order, each sorted by name; kinds without entries are left out. */
+export function groupAccessories(accessories: HomeKitAccessory[]): Array<{ kind: HomeKitAccessory["kind"]; entries: HomeKitAccessory[] }> {
+  return KIND_ORDER.map(kind => ({ kind, entries: accessories.filter(entry => entry.kind === kind).sort((left, right) => left.name.localeCompare(right.name)) }))
+    .filter(group => group.entries.length > 0);
+}
 
 /** The panel's status line. */
 export function describeHomeKit(info: HomeKitInfo): string {
@@ -27,10 +48,10 @@ export function describeHomeKit(info: HomeKitInfo): string {
   return info.pairings === 1 ? t("Paired with Apple Home.") : t("Paired with Apple Home ({count} controllers).", { count: info.pairings });
 }
 
-/** How many lamps, groups, and rooms HomeKit shows, or null while nothing is published. */
+/** How many lamps, groups, rooms, and scenes HomeKit shows, or null while nothing is published. */
 export function describeHomeKitLights(info: HomeKitInfo): string | null {
   if (info.state !== "published") return null;
-  const shown = t("{count} lights (lamps, groups, and rooms) in HomeKit.", { count: info.lights });
+  const shown = t("{count} accessories (lamps, groups, rooms, and scenes) in HomeKit.", { count: info.lights });
   return info.lightsNotShown ? `${shown} ${t("{count} more do not fit: HomeKit allows 149 per bridge.", { count: info.lightsNotShown })}` : shown;
 }
 

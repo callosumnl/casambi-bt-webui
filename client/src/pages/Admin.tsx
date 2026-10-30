@@ -9,6 +9,7 @@ import { AwayDateSetsPanel } from "@/components/AwayDateSetsPanel";
 import { BackupPanel } from "@/components/BackupPanel";
 import { CasambiLinkPanel } from "@/components/CasambiLinkPanel";
 import { DeviceMetadataPanel } from "@/components/DeviceMetadataPanel";
+import { HomeKitAccessoriesPanel } from "@/components/HomeKitAccessoriesPanel";
 import { HomeKitPanel } from "@/components/HomeKitPanel";
 import { HudFrame } from "@/components/HudFrame";
 import { NotificationsPanel } from "@/components/NotificationsPanel";
@@ -44,7 +45,7 @@ export default function Admin() {
     {section === "rooms" && <div className="admin-grid"><HudFrame className="form-panel"><RoomsPanel api={api} rooms={network?.rooms ?? []} onChanged={refresh} onNotice={notify} /></HudFrame><DeviceMetadataPanel api={api} network={network} refresh={() => refresh()} onNotice={notify} /></div>}
     {section === "automation" && <div className="admin-grid"><SwitchRulesPanel api={api} onNotice={notify} /><div className="admin-stack"><AwayDateSetsPanel api={api} onNotice={notify} /><SolarLocationPanel api={api} onNotice={notify} /></div></div>}
     {section === "access" && <div className="admin-grid"><HudFrame className="form-panel"><AccountsPanel api={api} onNotice={notify} /></HudFrame><ApiKeysPanel api={api} onNotice={notify} /></div>}
-    {section === "homekit" && <div className="admin-grid admin-grid-narrow"><HomeKitPanel api={api} onNotice={notify} /></div>}
+    {section === "homekit" && <div className="admin-grid"><HomeKitPanel api={api} onNotice={notify} /><HomeKitAccessoriesPanel api={api} onNotice={notify} /></div>}
     {section === "system" && <div className="admin-grid"><NotificationsPanel api={api} onNotice={notify} /><UpdatePanel api={api} onNotice={notify} /><BackupPanel api={api} onNotice={notify} /><ServerSettingsPanel api={api} onNotice={notify} /><div className="admin-wide"><AuditLogPanel api={api} onNotice={notify} /></div></div>}
   </div>;
 }

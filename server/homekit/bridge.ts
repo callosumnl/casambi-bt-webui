@@ -2,7 +2,7 @@ import * as hap from "hap-nodejs";
 import { mkdirSync } from "fs";
 import net from "net";
 import type { LocalStore } from "../store";
-import type { AccessoryHost, HomeKitLights } from "./lights";
+import type { AccessoryHost, CatalogEntry, HomeKitLights } from "./lights";
 import { generatePincode, generateSetupId, generateUsername, isValidPincode, isValidSetupId, isValidUsername, sanitizeName } from "./identity";
 
 export const DEFAULT_HOMEKIT_NAME = "Casambi-bt-webui";
@@ -15,8 +15,10 @@ export type HomeKitState = "disabled" | "starting" | "published" | "failed";
 export type HomeKitStatus = HomeKitSettings & {
   state: HomeKitState; error: string | null; advertised: boolean; advertiser: string;
   pincode: string; setupUri: string | null; pairings: number;
-  /** Lights shown in HomeKit, and how many did not fit on the bridge (HomeKit allows 149). */
+  /** Accessories shown in HomeKit (lights and scene switches), and how many did not fit on the bridge (HomeKit allows 149). */
   lights: number; lightsNotShown: number;
+  /** Everything HomeKit can show, and whether it does. */
+  accessories: CatalogEntry[];
 };
 
 type Identity = { username: string; pincode: string; setupId: string };
@@ -127,6 +129,7 @@ export class HomeKitBridge {
       ...this.settings(), state: this.state, error: this.error, advertised: this.advertised, advertiser: this.options.advertiser,
       pincode: identity.pincode, setupUri: this.state === "published" ? this.host?.setupUri() ?? null : null, pairings: this.host?.pairings() ?? 0,
       ...(() => { const lights = this.lights?.status() ?? { lights: 0, notShown: 0 }; return { lights: lights.lights, lightsNotShown: lights.notShown }; })(),
+      accessories: this.lights?.catalog() ?? [],
     };
   }
 
@@ -145,6 +148,14 @@ export class HomeKitBridge {
     this.store.setAppSetting("homekit.port", String(settings.port));
     this.store.audit(actor, "homekit.settings_changed", settings);
     await this.serialized(async () => { await this.unpublish(); await this.publishIfEnabled(); });
+    return this.status();
+  }
+
+  /** Shows everything in HomeKit except these keys (lamps, groups, rooms, scenes). */
+  public setHidden(keys: string[], actor: string): HomeKitStatus {
+    if (!this.lights) throw new Error("HomeKit cannot show accessories: it is not set up in this server.");
+    this.lights.setHidden(keys);
+    this.store.audit(actor, "homekit.accessories_changed", { hidden: keys.length });
     return this.status();
   }
 
