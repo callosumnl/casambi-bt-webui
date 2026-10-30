@@ -1,0 +1,103 @@
+import { Activity, Cable, Check, Radio, RotateCcw } from "lucide-react";
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { ConnectionStatusBar } from "@/components/ConnectionStatusBar";
+import { HudFrame } from "@/components/HudFrame";
+import type { useNetwork } from "@/hooks/useNetwork";
+import { t } from "@/lib/i18n";
+import { LocalApi } from "@/lib/localApi";
+import { describeWorkerState, WorkerState } from "@/lib/workerState";
+
+type SafeConfig = { networkAddress: string | null; networkUuid: string | null; btAdapter: string | null; forceOffline: boolean; fastWrites: boolean; pollingEnabled: boolean; pollingIntervalSeconds: number; hasApiKey: boolean; hasNetworkPassword: boolean };
+type Props = { api: LocalApi; connectionStatus: ReturnType<typeof useNetwork>["connection"]; refresh: () => Promise<unknown> };
+
+/**
+ * The Casambi network address and password, connect and disconnect, and discovery. Settings most installations never
+ * change (UUID, API key, adapter, polling, write mode) and the Bluetooth worker controls sit under ADVANCED.
+ */
+export function CasambiLinkPanel({ api, connectionStatus, refresh }: Props) {
+  const [config, setConfig] = useState<SafeConfig | null>(null);
+  const [notice, setNotice] = useState("");
+  const [connection, setConnection] = useState({ networkAddress: "", networkUuid: "", btAdapter: "", apiKey: "", networkPassword: "", forceOffline: false, fastWrites: false, pollingEnabled: false, pollingIntervalSeconds: 30 });
+  const [addressFilled, setAddressFilled] = useState(false);
+  const [busyAction, setBusyAction] = useState<"connect" | "disconnect" | "discovery" | null>(null);
+  const [workerAction, setWorkerAction] = useState<"state" | "restart" | null>(null);
+  const addressFilledTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(addressFilledTimer.current), []);
+
+  /** Places the first discovered address in the form and briefly confirms it; saving still happens explicitly. */
+  const fillDiscoveredAddress = (found: Array<{ address: string }>) => {
+    if (!found.length) { setNotice(t("Discovery found no Casambi network within range of the Raspberry Pi.")); return; }
+    setConnection(current => ({ ...current, networkAddress: found[0].address }));
+    setNotice(found.length > 1 ? t("Discovery found {count} networks ({addresses}); the first was filled in.", { count: found.length, addresses: found.map(device => device.address).join(", ") }) : "");
+    window.clearTimeout(addressFilledTimer.current);
+    setAddressFilled(true);
+    addressFilledTimer.current = window.setTimeout(() => setAddressFilled(false), 1_000);
+  };
+  const load = async () => {
+    try {
+      const safe = await api.request<SafeConfig>("/admin/config");
+      setConfig(safe);
+      setConnection(current => ({ ...current, networkAddress: safe.networkAddress || "", networkUuid: safe.networkUuid || "", btAdapter: safe.btAdapter || "", forceOffline: safe.forceOffline, fastWrites: safe.fastWrites, pollingEnabled: safe.pollingEnabled, pollingIntervalSeconds: safe.pollingIntervalSeconds }));
+    } catch (error) { setNotice(error instanceof Error ? error.message : t("Unable to load admin configuration.")); }
+  };
+  useEffect(() => { void load(); }, []);
+  const saveConfig = async (event: FormEvent) => {
+    event.preventDefault();
+    try {
+      await api.request("/admin/config", { method: "PUT", body: JSON.stringify({ ...connection, networkAddress: connection.networkAddress.trim() || null, apiKey: connection.apiKey || undefined, networkPassword: connection.networkPassword || undefined }) });
+      setNotice(t("Bridge settings saved."));
+      await load();
+    } catch (error) { setNotice(error instanceof Error ? error.message : t("Unable to save configuration.")); }
+  };
+  const bridgeAction = async (action: "connect" | "disconnect" | "discovery") => {
+    setBusyAction(action);
+    try {
+      const result = await api.request<unknown>(`/admin/${action}`, { method: action === "discovery" ? "GET" : "POST" });
+      if (action === "discovery") fillDiscoveredAddress(result as Array<{ address: string }>);
+      else setNotice(action === "connect" ? t("Bridge connect command accepted.") : t("Bridge disconnect command accepted."));
+      await refresh();
+    } catch (error) { setNotice(error instanceof Error ? error.message : t("Bridge operation failed.")); } finally { setBusyAction(null); }
+  };
+  // Worker controls stay usable while a bridge action is running: that is when a stuck worker needs checking.
+  const showWorkerState = async () => {
+    setWorkerAction("state");
+    try { setNotice(describeWorkerState(await api.request<WorkerState>("/admin/worker"))); } catch (error) { setNotice(error instanceof Error ? error.message : t("Unable to read the worker state.")); } finally { setWorkerAction(null); }
+  };
+  const restartWorker = async () => {
+    if (!window.confirm(t("Restart the Casambi Bluetooth worker? Lights keep their current state, but control is unavailable until it reconnects, usually within a minute."))) return;
+    setWorkerAction("restart");
+    try { await api.request<WorkerState>("/admin/worker/restart", { method: "POST" }); setNotice(t("Worker restart requested. It reconnects automatically; the status above shows the progress.")); } catch (error) { setNotice(error instanceof Error ? error.message : t("Unable to restart the worker.")); } finally { setWorkerAction(null); }
+  };
+
+  return <HudFrame className="form-panel"><h3><Cable /> {t("CASAMBI LINK")}</h3>
+    {notice && <p className="form-notice">{notice}</p>}
+    <ConnectionStatusBar status={connectionStatus} />
+    <div className="button-pair link-actions">
+      <button className="outline-button" disabled={busyAction !== null} onClick={() => void bridgeAction("connect")}>{busyAction === "connect" ? t("CONNECTING…") : t("CONNECT")}</button>
+      <button className="outline-button danger" disabled={busyAction !== null} onClick={() => void bridgeAction("disconnect")}>{busyAction === "disconnect" ? t("DISCONNECTING…") : t("DISCONNECT")}</button>
+    </div>
+    <form onSubmit={saveConfig} className="admin-form">
+      <label>{t("NETWORK BLE ADDRESS")}<span className="input-with-button"><input className={addressFilled ? "just-filled" : undefined} value={connection.networkAddress} onChange={event => setConnection({ ...connection, networkAddress: event.target.value })} placeholder="AA:BB:CC:DD:EE:FF" /><button type="button" className="outline-button" disabled={busyAction !== null} onClick={() => void bridgeAction("discovery")}><Radio /> {busyAction === "discovery" ? t("SCANNING…") : t("DISCOVER")}</button></span></label>
+      {addressFilled && <p className="field-confirm" role="status"><Check /> {t("{address} FILLED INTO NETWORK BLE ADDRESS — SAVE TO USE IT", { address: connection.networkAddress })}</p>}
+      <p className="muted-copy">{t("Enter the 12-digit address from Discover. Colons are optional; the bridge standardizes it before connecting.")}</p>
+      <label>{t("NETWORK PASSWORD")}<input type="password" value={connection.networkPassword} onChange={event => setConnection({ ...connection, networkPassword: event.target.value })} placeholder={config?.hasNetworkPassword ? t("Stored securely") : t("Required by casambi-bt")} /></label>
+      <details className="admin-advanced"><summary>{t("ADVANCED")}</summary>
+        <label>{t("NETWORK UUID (OPTIONAL METADATA)")}<input value={connection.networkUuid} onChange={event => setConnection({ ...connection, networkUuid: event.target.value })} /></label>
+        <label>{t("CASAMBI API KEY (OPTIONAL)")}<input type="password" value={connection.apiKey} onChange={event => setConnection({ ...connection, apiKey: event.target.value })} placeholder={config?.hasApiKey ? t("Stored securely") : t("For network records")} /></label>
+        <label>{t("BLUETOOTH ADAPTER")}<input value={connection.btAdapter} onChange={event => setConnection({ ...connection, btAdapter: event.target.value })} placeholder="hci0" /></label>
+        <div className="form-grid">
+          <label className="checkbox-row"><input type="checkbox" checked={connection.forceOffline} onChange={event => setConnection({ ...connection, forceOffline: event.target.checked })} /> {t("FORCE OFFLINE DATA")}</label>
+          <label className="checkbox-row"><input type="checkbox" checked={connection.pollingEnabled} onChange={event => setConnection({ ...connection, pollingEnabled: event.target.checked })} /> {t("ENABLE STATUS POLLING")}</label>
+        </div>
+        <label>{t("POLLING INTERVAL (SECONDS)")}<input type="number" min="5" max="3600" disabled={!connection.pollingEnabled} value={connection.pollingIntervalSeconds} onChange={event => setConnection({ ...connection, pollingIntervalSeconds: Number(event.target.value) })} /></label>
+        <label className="checkbox-row"><input type="checkbox" checked={connection.fastWrites} onChange={event => setConnection({ ...connection, fastWrites: event.target.checked })} /> {t("FAST BLUETOOTH WRITES (EXPERIMENTAL)")}</label>
+        <p className="muted-copy">{t("Sends commands without waiting for the lamp's acknowledgement. Takes effect when saved, without reconnecting. Compare the send times under WORKER STATE, and turn it off again if lamps miss commands.")}</p>
+        <div className="button-pair">
+          <button type="button" className="outline-button" disabled={workerAction !== null} onClick={() => void showWorkerState()}><Activity /> {workerAction === "state" ? t("CHECKING…") : t("WORKER STATE")}</button>
+          <button type="button" className="outline-button danger" disabled={workerAction !== null} onClick={() => void restartWorker()}><RotateCcw /> {workerAction === "restart" ? t("RESTARTING…") : t("RESTART WORKER")}</button>
+        </div>
+      </details>
+      <button className="neon-button">{t("SAVE ENCRYPTED SETTINGS")}</button>
+    </form>
+  </HudFrame>;
+}
