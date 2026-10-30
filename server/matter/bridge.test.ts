@@ -11,7 +11,7 @@ import { DurableScheduler } from "../scheduler";
 import { LocalStore } from "../store";
 import { DEFAULT_MATTER_NAME, DEFAULT_MATTER_PORT, DEFAULT_PRODUCT_ID, DEFAULT_VENDOR_ID, MatterBridge } from "./bridge";
 import { fabricOwner, generateNodeId, generatePasscode, isValidPasscode, matterLabel } from "./identity";
-import { shortId, startError } from "./runtime";
+import { exportStorageFolder, importStorageFolder, shortId, startError } from "./runtime";
 import type { MatterFabric, MatterHost, MatterNodeConfig, MatterRuntime } from "./runtime";
 
 const folders: string[] = [];
@@ -24,10 +24,12 @@ function newStore(): LocalStore {
 /** An in-memory stand-in for matter.js that records nodes and lets a test commission one. */
 function fakeRuntime(options: { busyPorts?: number[]; failStart?: string } = {}) {
   const created: MatterNodeConfig[] = [];
+  const storage = new Map<string, Record<string, string>>();
   const hosts: Array<MatterHost & { commission: (vendorId: number) => void; running: boolean; windows: number }> = [];
   const runtime: MatterRuntime = {
     async create(config) {
       created.push(config);
+      if (!storage.has(config.id)) storage.set(config.id, { "root.__number__": "MA==" });
       let fabrics: MatterFabric[] = [];
       const listeners: Array<(index: number, action: "added" | "deleted" | "updated") => void> = [];
       const host = {
@@ -48,8 +50,10 @@ function fakeRuntime(options: { busyPorts?: number[]; failStart?: string } = {})
       return host as never;
     },
     portAvailable: async port => !(options.busyPorts ?? []).includes(port),
+    exportStorage: nodeId => storage.get(nodeId) ?? null,
+    importStorage: (nodeId, files) => { storage.set(nodeId, files); },
   };
-  return { runtime, created, hosts };
+  return { runtime, created, hosts, storage };
 }
 
 let clock = 1_000_000;
@@ -107,6 +111,23 @@ describe("Matter bridge", () => {
     await expect(bridge.removeFabric(9, "admin")).rejects.toThrow("does not exist");
     expect(await bridge.reset("admin")).toMatchObject({ commissioned: false, fabrics: [] });
     expect(store.auditSince(0, ["matter.pairing_window_opened", "matter.fabric_removed", "matter.reset"]).map(entry => entry.action)).toEqual(["matter.pairing_window_opened", "matter.fabric_removed", "matter.reset"]);
+  });
+
+  it("puts its storage in a backup and keeps the same node after a restore on another Pi", async () => {
+    const oldStore = newStore(); const oldPi = fakeRuntime();
+    await bridgeFor(oldStore, oldPi.runtime).update(on, "admin");
+    const pairing = bridgeFor(oldStore, oldPi.runtime).exportPairing();
+    expect(pairing?.nodeId).toBe(oldPi.created[0].id);
+    // The new Pi gets the old database (with the Matter settings), then the storage from the backup.
+    const newStore_ = newStore(); const newPi = fakeRuntime();
+    for (const key of ["matter.enabled", "matter.name", "matter.port", "matter.vendorId", "matter.productId", "matter.nodeId", "matter.passcode", "matter.discriminator"]) newStore_.setAppSetting(key, oldStore.appSetting(key));
+    await bridgeFor(newStore_, newPi.runtime).restore(pairing);
+    expect(newPi.created[0]).toEqual(oldPi.created[0]);
+    expect(newPi.storage.get(pairing!.nodeId)).toEqual(pairing!.files);
+    // A pairing for another node id is ignored.
+    const third = fakeRuntime();
+    await bridgeFor(newStore_, third.runtime).restore({ nodeId: "casambi-00000000-0000-0000-0000-000000000000", files: { x: "eA==" } });
+    expect(third.storage.has("casambi-00000000-0000-0000-0000-000000000000")).toBe(false);
   });
 
   it("reports a busy port or a failed start instead of crashing", async () => {
@@ -167,5 +188,15 @@ describe("Matter runtime helpers", () => {
     const failed = Object.assign(new Error("Behaviors have errors"), { errors: [new Error("Error initializing node.basicInformation Error: Validating uniqueId: too long")] });
     expect(startError(failed)).toBe("Validating uniqueId: too long");
     expect(startError(new Error("no IPv6"))).toBe("no IPv6");
+  });
+
+  it("exports a storage folder without its lock files, and imports it without leaving the folder", () => {
+    const folder = mkdtempSync(join(tmpdir(), "casambi-matter-storage-")); folders.push(folder);
+    const node = join(folder, "node");
+    importStorageFolder(node, { "root.fabrics": Buffer.from("keys").toString("base64"), "sub/blob": Buffer.from("b").toString("base64"), "../escape": Buffer.from("x").toString("base64"), "matter.lock": "", "matter.pid": "MTIz" });
+    const exported = exportStorageFolder(node);
+    expect(Object.keys(exported!).sort()).toEqual(["root.fabrics", "sub/blob"]);
+    expect(Buffer.from(exported!["root.fabrics"], "base64").toString()).toBe("keys");
+    expect(exportStorageFolder(join(folder, "missing"))).toBeNull();
   });
 });

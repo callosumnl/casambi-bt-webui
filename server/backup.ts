@@ -6,13 +6,15 @@ const KDF = { N: 2 ** 15, r: 8, p: 1 };
 export type BackupSecrets = { networkPassword: string | null; apiKey: string | null };
 /** The HomeKit bridge's keys and pairings, as HAP-NodeJS stores them; null when HomeKit was never published. */
 export type HomeKitPairing = { username: string; entries: Record<string, unknown> };
-export type BackupContents = { database: Buffer; secrets: BackupSecrets; homekit: HomeKitPairing | null; createdAt: string; appVersion: string | null };
+/** The Matter node's storage (keys, fabrics, endpoint numbers) as file path → base64; null when Matter was never used. */
+export type MatterPairing = { nodeId: string; files: Record<string, string> };
+export type BackupContents = { database: Buffer; secrets: BackupSecrets; homekit: HomeKitPairing | null; matter: MatterPairing | null; createdAt: string; appVersion: string | null };
 type Header = { format: typeof BACKUP_FORMAT; version: 1; createdAt: string; appVersion: string | null; kdf: { name: "scrypt"; N: number; r: number; p: number; salt: string }; cipher: { name: "aes-256-gcm"; iv: string } };
 
 const scrypt = (password: string, salt: Buffer, options: ScryptOptions) => new Promise<Buffer>((resolve, reject) => scryptCallback(password, salt, 32, options, (error, key) => error ? reject(error) : resolve(key)));
 
 /**
- * A backup is one JSON file: a readable header, and the database with the Casambi secrets and the HomeKit pairing
+ * A backup is one JSON file: a readable header, and the database with the Casambi secrets and the HomeKit and Matter pairings
  * encrypted with a passphrase the admin chooses. The passphrase, not this Pi's encryption key, protects it, so it can be restored
  * on another Pi; scrypt makes guessing the passphrase slow, and the header is authenticated along with the data.
  */
@@ -22,7 +24,7 @@ export async function sealBackup(contents: Omit<BackupContents, "createdAt">, pa
   const key = await scrypt(passphrase, salt, { ...KDF, maxmem: 128 * KDF.N * KDF.r * 2 });
   const cipher = createCipheriv("aes-256-gcm", key, iv);
   cipher.setAAD(Buffer.from(JSON.stringify(header)));
-  const plaintext = Buffer.from(JSON.stringify({ database: contents.database.toString("base64"), secrets: contents.secrets, homekit: contents.homekit }));
+  const plaintext = Buffer.from(JSON.stringify({ database: contents.database.toString("base64"), secrets: contents.secrets, homekit: contents.homekit, matter: contents.matter }));
   const data = Buffer.concat([cipher.update(plaintext), cipher.final()]);
   return Buffer.from(JSON.stringify({ header, tag: cipher.getAuthTag().toString("base64"), data: data.toString("base64") }));
 }
@@ -43,7 +45,7 @@ export async function openBackup(file: Buffer, passphrase: string): Promise<Back
     decipher.setAuthTag(Buffer.from(tag, "base64"));
     plaintext = Buffer.concat([decipher.update(Buffer.from(data, "base64")), decipher.final()]);
   } catch { throw new Error("The backup passphrase is invalid, or the file is damaged."); }
-  // Backups from before HomeKit support have no pairing.
-  const contents = JSON.parse(plaintext.toString("utf8")) as { database: string; secrets: BackupSecrets; homekit?: HomeKitPairing | null };
-  return { database: Buffer.from(contents.database, "base64"), secrets: contents.secrets, homekit: contents.homekit ?? null, createdAt: header.createdAt, appVersion: header.appVersion };
+  // Backups from before HomeKit or Matter support have no pairing for them.
+  const contents = JSON.parse(plaintext.toString("utf8")) as { database: string; secrets: BackupSecrets; homekit?: HomeKitPairing | null; matter?: MatterPairing | null };
+  return { database: Buffer.from(contents.database, "base64"), secrets: contents.secrets, homekit: contents.homekit ?? null, matter: contents.matter ?? null, createdAt: header.createdAt, appVersion: header.appVersion };
 }

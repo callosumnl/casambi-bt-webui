@@ -79,6 +79,10 @@ function assertUnused(store: LocalStore, target: { type: "room" | "local_scene";
 }
 
 function parsed<T>(schema: z.ZodType<T>, input: unknown): T { return schema.parse(input); }
+/** Whether the Pi has an IPv6 address on a network interface (link-local counts); Matter needs one. */
+function hasIpv6(probes: Probes): boolean {
+  return Object.values(probes.network().interfaces).some(addresses => (addresses ?? []).some(address => address.family === "IPv6" && !address.internal));
+}
 function principal(response: Response): Principal { return response.locals.principal as Principal; }
 function assertScheduleAccess(schedule: { ownerUserId: number }, actor: Principal): void { if (actor.role !== "admin" && !(actor.kind === "user" && schedule.ownerUserId === actor.id)) throw new Error("Schedule does not exist."); }
 /** The account that owns a new timer. An API key is not an account: admin keys file timers under the first admin. */
@@ -181,6 +185,8 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
       port: process.env.PORT || "3000",
       // Only what the check needs: the status also holds the setup code, which the diagnostics file must not contain.
       ...(homekit ? { homekit: (({ enabled, state, error, port, advertised, advertiser, pairings, lights, lightsNotShown }) => ({ enabled, state, error, port, advertised, advertiser, pairings, lights, lightsNotShown }))(homekit.status()) } : {}),
+      // The same for Matter: no setup code in the diagnostics file.
+      ...(matter ? { matter: (({ enabled, state, error, port, commissioned, fabrics, lights }) => ({ enabled, state, error, port, commissioned, owners: fabrics.map(fabric => fabric.owner), lights, ipv6: hasIpv6(probes) }))(matter.status()) } : {}),
     };
     const [system, version] = await Promise.all([
       gatherSystemFacts(probes, { adapter: config.btAdapter || "hci0", dataDirectory: store.dataDirectory, pythonCommand: process.env.CASAMBI_PYTHON_COMMAND || "python3" }),
@@ -293,7 +299,7 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
   api.post("/admin/backup", requireAuth(store, "admin"), route(async (request, response) => {
     const { passphrase } = parsed(backupCreateSchema, request.body);
     const config = store.getCasambiConfig();
-    const file = await sealBackup({ database: store.exportDatabase(), secrets: { networkPassword: config.networkPassword, apiKey: config.apiKey }, homekit: homekit?.exportPairing() ?? null, appVersion: (await appVersion(probes)).version }, passphrase);
+    const file = await sealBackup({ database: store.exportDatabase(), secrets: { networkPassword: config.networkPassword, apiKey: config.apiKey }, homekit: homekit?.exportPairing() ?? null, matter: matter?.exportPairing() ?? null, appVersion: (await appVersion(probes)).version }, passphrase);
     store.audit(principal(response).name, "backup.created", { bytes: file.length });
     response.setHeader("Content-Type", "application/json");
     response.setHeader("Content-Disposition", `attachment; filename="casambi-backup-${new Date().toISOString().slice(0, 10)}.json"`);
@@ -309,15 +315,16 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
       writeFileSync(file, backup.database, { mode: 0o600 });
       store.restoreDatabase(file, backup.secrets);
     } finally { for (const suffix of ["", "-wal", "-shm"]) rmSync(`${file}${suffix}`, { force: true }); }
-    store.audit(principal(response).name, "backup.restored", { createdAt: backup.createdAt, appVersion: backup.appVersion, homekitPairing: Boolean(backup.homekit) });
+    store.audit(principal(response).name, "backup.restored", { createdAt: backup.createdAt, appVersion: backup.appVersion, homekitPairing: Boolean(backup.homekit), matterPairing: Boolean(backup.matter) });
     // The HomeKit settings came back with the database; its pairing comes from the backup, so Apple Home keeps the bridge.
     if (homekit) await homekit.restore(backup.homekit);
+    if (matter) await matter.restore(backup.matter);
     // Accounts, timers, and settings changed underneath everything that was running.
     events.disconnectAll();
     scheduler.reload();
     const config = store.getCasambiConfig();
     if (config.networkAddress && config.networkPassword) void service.connect().catch(() => { /* connect() reports its own failure. */ });
-    response.json({ restored: { createdAt: backup.createdAt, users: store.listUsers().length, rooms: store.listRooms().length, timers: store.listSchedules().length, homekitPairing: Boolean(backup.homekit) }, signInAgain: true });
+    response.json({ restored: { createdAt: backup.createdAt, users: store.listUsers().length, rooms: store.listRooms().length, timers: store.listSchedules().length, homekitPairing: Boolean(backup.homekit), matterPairing: Boolean(backup.matter) }, signInAgain: true });
   }));
   api.get("/admin/worker", requireAuth(store, "admin"), (_request, response) => response.json(service.workerState()));
   api.post("/admin/worker/restart", requireAuth(store, "admin"), route(async (_request, response) => { response.status(202).json(service.restartWorker(principal(response).name)); }));

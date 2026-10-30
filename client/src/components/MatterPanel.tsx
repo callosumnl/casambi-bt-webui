@@ -1,6 +1,7 @@
-import { DoorOpen, RotateCcw, Speaker, Trash2 } from "lucide-react";
+import { CircleHelp, DoorOpen, RotateCcw, Speaker, Trash2 } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { HudFrame } from "@/components/HudFrame";
+import { MatterGuide } from "@/components/MatterGuide";
 import { qrImageSource } from "@/lib/homekit";
 import { t } from "@/lib/i18n";
 import { LocalApi } from "@/lib/localApi";
@@ -11,6 +12,7 @@ export function MatterPanel({ api, onNotice }: { api: LocalApi; onNotice: (messa
   const [info, setInfo] = useState<MatterInfo | null>(null);
   const [form, setForm] = useState({ enabled: false, name: "", port: "", vendorId: "", productId: "" });
   const [busy, setBusy] = useState(false);
+  const [guide, setGuide] = useState(false);
   const show = (next: MatterInfo) => { setInfo(next); setForm({ enabled: next.enabled, name: next.name, port: String(next.port), vendorId: formatId(next.vendorId), productId: formatId(next.productId) }); };
   useEffect(() => { void api.request<MatterInfo>("/admin/matter").then(show).catch(error => onNotice(error instanceof Error ? error.message : t("Unable to load the Matter settings."))); }, []);
   // Pairing happens in the Google Home app; check again while it can.
@@ -50,6 +52,8 @@ export function MatterPanel({ api, onNotice }: { api: LocalApi; onNotice: (messa
     {!info && <p className="muted-copy">{t("Loading…")}</p>}
     {info && <>
       <p className="muted-copy">{t("Makes this Pi a Matter bridge, so a Google Nest speaker or display can switch these lights locally, by voice too. It is separate from HomeKit. Google Home only adds it when your Google Home Developer Console project has a Matter integration with the same vendor and product id (see the README).")}</p>
+      <button type="button" className="outline-button guide-open" onClick={() => setGuide(true)}><CircleHelp /> {t("HOW DO I CONNECT GOOGLE HOME?")}</button>
+      <MatterGuide open={guide} onClose={() => setGuide(false)} vendorId={info.vendorId} productId={info.productId} />
       <form onSubmit={save} className="admin-form">
         <label className="checkbox-row"><input type="checkbox" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })} disabled={busy} /> {t("RUN THE MATTER BRIDGE")}</label>
         <div className="form-grid">

@@ -1,5 +1,6 @@
 import { createSocket } from "dgram";
-import { mkdirSync } from "fs";
+import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "fs";
+import { dirname, join, normalize, sep } from "path";
 import { Endpoint, Environment, Logger, ServerNode, VendorId } from "@matter/main";
 import { AggregatorEndpoint } from "@matter/main/endpoints/aggregator";
 import { FabricManager } from "@matter/main/protocol";
@@ -40,7 +41,14 @@ export interface MatterHost {
 export interface MatterRuntime {
   create(config: MatterNodeConfig): Promise<MatterHost>;
   portAvailable(port: number): Promise<boolean>;
+  /** The node's stored keys, fabrics, and endpoint numbers as path → base64, for a backup; null when there are none. */
+  exportStorage(nodeId: string): Record<string, string> | null;
+  /** Replaces the node's storage with a backup's; only while the node is closed. */
+  importStorage(nodeId: string, files: Record<string, string>): void;
 }
+
+/** A relative path inside the storage folder, never one that leaves it. */
+const safeRelative = (path: string) => { const clean = normalize(path); return clean && !clean.startsWith("..") && !clean.startsWith(sep) && !clean.includes(`..${sep}`) ? clean : null; };
 
 /**
  * matter.js keeps the node's keys and fabrics in one process-wide storage folder, set before first use. Its own log
@@ -84,10 +92,34 @@ export function matterRuntime(storagePath: string, logLevel = process.env.CASAMB
         aggregator: () => aggregator,
       };
     },
+    exportStorage: nodeId => exportStorageFolder(join(storagePath, nodeId)),
+    importStorage: (nodeId, files) => importStorageFolder(join(storagePath, nodeId), files),
     portAvailable: port => new Promise(resolve => {
       const probe = createSocket({ type: "udp6", reuseAddr: false });
       probe.once("error", () => { probe.close(); resolve(false); });
       probe.bind(port, () => probe.close(() => resolve(true)));
     }),
   };
+}
+
+/** A storage folder's files as relative path → base64, without matter.js's lock files; null when there are none. */
+export function exportStorageFolder(folder: string): Record<string, string> | null {
+  try {
+    // matter.lock and matter.pid only mark an open storage; they must not come back on another Pi.
+    const files = readdirSync(folder, { recursive: true, withFileTypes: true }).filter(entry => entry.isFile() && entry.name !== "matter.lock" && entry.name !== "matter.pid");
+    const paths = files.map(entry => join(entry.parentPath, entry.name));
+    return paths.length ? Object.fromEntries(paths.map(path => [path.slice(folder.length + 1), readFileSync(path).toString("base64")])) : null;
+  } catch { return null; }
+}
+
+/** Replaces a storage folder with exported files; paths that would leave the folder are skipped. */
+export function importStorageFolder(folder: string, files: Record<string, string>): void {
+  rmSync(folder, { recursive: true, force: true });
+  mkdirSync(folder, { recursive: true, mode: 0o700 });
+  for (const [path, content] of Object.entries(files)) {
+    const relative = safeRelative(path);
+    if (!relative || typeof content !== "string") continue;
+    mkdirSync(dirname(join(folder, relative)), { recursive: true, mode: 0o700 });
+    writeFileSync(join(folder, relative), Buffer.from(content, "base64"), { mode: 0o600 });
+  }
 }
