@@ -106,6 +106,9 @@ class MockUnit:
     dimmer: int
     temperature: int
     on: bool = True
+    # Set on a unit that also takes RGB colour; color_source says which of the two it shows.
+    rgb: tuple[int, int, int] | None = None
+    color_source: str = "temperature"
 
     def serialize(self) -> dict[str, Any]:
         return {
@@ -120,8 +123,12 @@ class MockUnit:
                 {"type": "dimmer", "min": 0, "max": 255, "readOnly": False},
                 {"type": "temperature", "min": 2700, "max": 6500, "readOnly": False},
                 {"type": "onoff", "readOnly": False},
+                *([{"type": "rgb", "min": 0, "max": 255, "readOnly": False}, {"type": "colorsource", "min": 0, "max": 2, "readOnly": False}] if self.rgb else []),
             ],
-            "state": {"dimmer": self.dimmer, "temperature": self.temperature, "sensors": [{"label": "Ambient light", "value": 420, "unit": "lux"}], "on": self.on, "online": True},
+            "state": {
+                "dimmer": self.dimmer, "temperature": self.temperature, "sensors": [{"label": "Ambient light", "value": 420, "unit": "lux"}], "on": self.on, "online": True,
+                **({"rgb": list(self.rgb), "colorSource": self.color_source} if self.rgb else {}),
+            },
         }
 
 
@@ -317,7 +324,7 @@ class CasambiWorker:
         self.mock = mock
         self.casa: Any | None = None
         self.connected = False
-        self.mock_units = [MockUnit(1, "Studio light", 180, 4000), MockUnit(2, "Entry light", 110, 3000)]
+        self.mock_units = [MockUnit(1, "Studio light", 180, 4000), MockUnit(2, "Entry light", 110, 3000, rgb=(255, 140, 0))]
         # How long the last control command spent in casambi-bt (the Bluetooth write), reported with its reply.
         self.last_ble_ms: float | None = None
         # The experimental write-without-response mode; see set_fast_writes.
@@ -366,6 +373,8 @@ class CasambiWorker:
                 "vertical": state.vertical if state else None,
                 "slider": state.slider if state else None,
                 "xy": list(state.xy) if state and state.xy else None,
+                # Which colour a unit with several colour controls shows: temperature, rgb, or xy.
+                "colorSource": state.colorsource.name.lower() if state and getattr(state, "colorsource", None) else None,
                 "sensors": [{"label": f"Sensor @ bit {control.offset}", "value": sensor_values.get(control.offset), "unit": "raw" if control.offset in sensor_values else None} for control in unit.unitType.controls if control.type.name == "SENSOR"],
                 "on": unit.is_on,
                 "online": unit.online,
@@ -558,7 +567,8 @@ class CasambiWorker:
                     if operation == "on": unit.on = True
                     elif operation == "off": unit.on = False; unit.dimmer = 0
                     elif operation == "set_level": unit.dimmer = int(value); unit.on = unit.dimmer > 0
-                    elif operation == "set_temperature": unit.temperature = int(value)
+                    elif operation == "set_temperature": unit.temperature = int(value); unit.color_source = "temperature"
+                    elif operation == "set_color" and unit.rgb: unit.rgb = tuple(int(item) for item in value); unit.color_source = "rgb"
                     emit({"event": {"type": "unit.state", "unit": unit.serialize()}})
             return {"ok": True} if payload.get("reply") == "ack" else self.snapshot()
         if not self.casa or not self.connected:

@@ -1,6 +1,6 @@
 # HomeKit compatibility plan
 
-Status: phases 1 (bridge, pairing, admin panel) and 2 (lamps, groups and rooms) are implemented; colour is next.
+Status: phases 1 (bridge, pairing, admin panel), 2 (lamps, groups and rooms) and 3 (colour) are implemented; scenes are next.
 
 ## Goal
 
@@ -156,7 +156,9 @@ New admin API (OpenAPI document and its sync test updated):
 2. **Lamps, groups and rooms (done):** on/off and brightness for lamps, Casambi groups and local rooms, read from the
    cache, state pushes, "No Response" when offline, write coalescing with `planTargets`, and a cached accessory list so
    Apple Home keeps its setup across restarts and disconnects (`server/homekit/mapping.ts`, `lights.ts`).
-3. **Colour:** colour temperature and hue/saturation where capabilities allow.
+3. **Colour (done):** ColorTemperature in mired within each lamp's kelvin range, Hue and Saturation for RGB and XY
+   lamps (`server/homekit/colour.ts`); groups and rooms get what any of their lamps supports. The worker now reports
+   which colour source a lamp shows, so a lamp with both white and colour is drawn right in Apple Home.
 4. **Scenes:** momentary scene switches (network and local scenes); exposure toggles.
 5. **Operations:** backup/restore of pairing, system check line, Dutch strings for new texts.
 6. **Wall switches:** Casambi buttons as programmable switches for Home automations.
@@ -164,7 +166,8 @@ New admin API (OpenAPI document and its sync test updated):
 
 ## Decisions
 
-- Groups and rooms are exposed by default.
+- Groups and rooms are exposed by default, without duplicates: a group or room with one lamp, and a room with exactly
+  a Casambi group's lamps (as the setup wizard creates them), are left out.
 - Casambi's `on` restores the last brightness; no bookkeeping on our side.
 - Lamp control comes before wall switches.
 

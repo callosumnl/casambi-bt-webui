@@ -30,7 +30,12 @@ type Options = {
   writeTimeoutMs: number;
   now: () => number;
 };
-type Light = { descriptor: LightDescriptor; missingSince: number | null; accessory: hap.Accessory | null; pushed: LightState | null; lastBrightness: number };
+/** `last` holds the values HomeKit shows while a light is off or a value is unknown, so its controls do not jump. */
+type Light = { descriptor: LightDescriptor; missingSince: number | null; accessory: hap.Accessory | null; pushed: LightState | null; last: { brightness: number; mired: number; hue: number; saturation: number } };
+const newLight = (descriptor: LightDescriptor): Light => ({
+  descriptor, missingSince: null, accessory: null, pushed: null,
+  last: { brightness: 100, mired: descriptor.temperature ? Math.round((descriptor.temperature.minMired + descriptor.temperature.maxMired) / 2) : 300, hue: 0, saturation: 0 },
+});
 
 const communicationFailure = () => new hap.HapStatusError(hap.HAPStatus.SERVICE_COMMUNICATION_FAILURE);
 
@@ -52,7 +57,7 @@ export class HomeKitLights {
   private sending: Promise<void> = Promise.resolve();
 
   public constructor(private readonly store: LocalStore, private readonly source: LightingSource, private readonly options: Options = { flushMs: 75, removeAfterMs: 10 * 60_000, writeTimeoutMs: 5_000, now: Date.now }) {
-    for (const descriptor of this.loadCache()) this.lights.set(descriptor.key, { descriptor, missingSince: null, accessory: null, pushed: null, lastBrightness: 100 });
+    for (const descriptor of this.loadCache()) this.lights.set(descriptor.key, newLight(descriptor));
     source.onStateChange(() => this.scheduleSync());
     // Room and name changes in the Admin panel do not reach the live state; pick them up within half a minute.
     this.resyncTimer = setInterval(() => this.scheduleSync(), 30_000);
@@ -108,14 +113,15 @@ export class HomeKitLights {
     for (const descriptor of Array.from(fresh.values())) {
       const light = this.lights.get(descriptor.key);
       if (!light) {
-        const created: Light = { descriptor, missingSince: null, accessory: null, pushed: null, lastBrightness: 100 };
+        const created = newLight(descriptor);
         this.lights.set(descriptor.key, created);
         if (this.host) added.push(...this.build(created));
         changed = true;
         continue;
       }
       light.missingSince = null;
-      if (light.descriptor.dimmable !== descriptor.dimmable || light.descriptor.id !== descriptor.id) {
+      const features = (item: LightDescriptor) => JSON.stringify([item.id, item.dimmable, item.temperature, item.color]);
+      if (features(light.descriptor) !== features(descriptor)) {
         // A characteristic set that changed needs a new accessory; HomeKit keeps it in place because its id stays.
         if (light.accessory) removed.push(light.accessory);
         light.descriptor = descriptor;
@@ -131,8 +137,9 @@ export class HomeKitLights {
     }
     for (const [key, light] of Array.from(this.lights.entries())) {
       if (fresh.has(key)) continue;
-      // A deleted room is gone for sure; a lamp or group may only be missing from one incomplete snapshot.
-      const gone = light.descriptor.kind === "room" && !roomIds.has(light.descriptor.id);
+      // A deleted room, or one left out as a duplicate (its lamps are known), is gone for sure; a lamp or group may
+      // only be missing from one incomplete snapshot.
+      const gone = light.descriptor.kind === "room" && (!roomIds.has(light.descriptor.id) || lightUnitIds(light.descriptor, snapshot).length > 0);
       light.missingSince ??= now;
       if (!gone && now - light.missingSince < this.options.removeAfterMs) continue;
       if (light.accessory) removed.push(light.accessory);
@@ -147,7 +154,7 @@ export class HomeKitLights {
   /** Creates the accessory for a light, unless the bridge is full. */
   private build(light: Light): hap.Accessory[] {
     if (Array.from(this.lights.values()).filter(other => other.accessory).length >= MAX_LIGHTS) { this.skipped += 1; return []; }
-    const { key, name, kind, dimmable } = light.descriptor;
+    const { key, name, kind, dimmable, temperature, color } = light.descriptor;
     const accessory = new hap.Accessory(name, hap.uuid.generate(`casambi-bt-webui:${key}`));
     accessory.category = hap.Categories.LIGHTBULB;
     accessory.getService(hap.Service.AccessoryInformation)!
@@ -162,8 +169,23 @@ export class HomeKitLights {
       .onSet(value => this.write(light, { on: Boolean(value) }));
     if (dimmable) {
       service.getCharacteristic(hap.Characteristic.Brightness)
-        .onGet(() => this.read(light).brightness ?? light.lastBrightness)
+        .onGet(() => this.read(light).brightness ?? light.last.brightness)
         .onSet(value => this.write(light, { brightness: Number(value) }));
+    }
+    if (temperature) {
+      service.getCharacteristic(hap.Characteristic.ColorTemperature)
+        .setProps({ minValue: temperature.minMired, maxValue: temperature.maxMired })
+        .updateValue(light.last.mired)
+        .onGet(() => this.clampMired(light, this.read(light).mired ?? light.last.mired))
+        .onSet(value => this.write(light, { mired: Number(value) }));
+    }
+    if (color) {
+      service.getCharacteristic(hap.Characteristic.Hue)
+        .onGet(() => this.read(light).hue ?? light.last.hue)
+        .onSet(value => this.write(light, { hue: Number(value) }));
+      service.getCharacteristic(hap.Characteristic.Saturation)
+        .onGet(() => this.read(light).saturation ?? light.last.saturation)
+        .onSet(value => this.write(light, { saturation: Number(value) }));
     }
     light.accessory = accessory;
     return [accessory];
@@ -172,8 +194,29 @@ export class HomeKitLights {
   private read(light: Light): LightState {
     const state = lightState(light.descriptor, this.source.cachedSnapshot());
     if (!state.available) throw communicationFailure();
-    if (state.brightness) light.lastBrightness = state.brightness;
+    this.remember(light, state);
     return state;
+  }
+
+  private remember(light: Light, state: LightState): void {
+    if (state.brightness) light.last.brightness = state.brightness;
+    if (state.mired !== null) light.last.mired = this.clampMired(light, state.mired);
+    if (state.hue !== null) light.last.hue = state.hue;
+    if (state.saturation !== null) light.last.saturation = state.saturation;
+  }
+
+  private clampMired(light: Light, mired: number): number {
+    const range = light.descriptor.temperature;
+    return range ? Math.max(range.minMired, Math.min(range.maxMired, mired)) : mired;
+  }
+
+  /** The characteristics a light has besides On. */
+  private valueCharacteristics(light: Light) {
+    return [
+      ...(light.descriptor.dimmable ? [hap.Characteristic.Brightness] : []),
+      ...(light.descriptor.temperature ? [hap.Characteristic.ColorTemperature] : []),
+      ...(light.descriptor.color ? [hap.Characteristic.Hue, hap.Characteristic.Saturation] : []),
+    ];
   }
 
   /** Pushes a light's state to HomeKit when it changed, or "No Response" while it is unreachable. */
@@ -185,20 +228,27 @@ export class HomeKitLights {
     light.pushed = state;
     if (!state.available) {
       if (previous?.available !== false) {
-        service.getCharacteristic(hap.Characteristic.On).updateValue(communicationFailure());
-        if (light.descriptor.dimmable) service.getCharacteristic(hap.Characteristic.Brightness).updateValue(communicationFailure());
+        for (const type of [hap.Characteristic.On, ...this.valueCharacteristics(light)]) service.getCharacteristic(type).updateValue(communicationFailure());
       }
       return;
     }
-    if (state.brightness) light.lastBrightness = state.brightness;
-    if (previous?.available !== true || previous.on !== state.on) service.updateCharacteristic(hap.Characteristic.On, state.on);
-    if (light.descriptor.dimmable && state.brightness !== null && (previous?.available !== true || previous.brightness !== state.brightness)) service.updateCharacteristic(hap.Characteristic.Brightness, state.brightness);
+    this.remember(light, state);
+    const fresh = previous?.available !== true;
+    if (fresh || previous.on !== state.on) service.updateCharacteristic(hap.Characteristic.On, state.on);
+    if (light.descriptor.dimmable && state.brightness !== null && (fresh || previous.brightness !== state.brightness)) service.updateCharacteristic(hap.Characteristic.Brightness, state.brightness);
+    if (light.descriptor.temperature && state.mired !== null && (fresh || previous.mired !== state.mired)) service.updateCharacteristic(hap.Characteristic.ColorTemperature, this.clampMired(light, state.mired));
+    if (light.descriptor.color && state.hue !== null && (fresh || previous.hue !== state.hue)) service.updateCharacteristic(hap.Characteristic.Hue, state.hue);
+    if (light.descriptor.color && state.saturation !== null && (fresh || previous.saturation !== state.saturation)) service.updateCharacteristic(hap.Characteristic.Saturation, state.saturation);
   }
 
   /** Queues a write; it resolves when its batch was sent, or after the write timeout while Bluetooth is still busy. */
   private write(light: Light, write: LightWrite): Promise<void> {
     if (!this.source.cachedSnapshot().connected) throw communicationFailure();
-    this.pending.set(light.descriptor.key, { ...this.pending.get(light.descriptor.key), ...write });
+    const merged: LightWrite = { ...this.pending.get(light.descriptor.key), ...write };
+    // A colour temperature and a colour exclude each other; the newest choice wins.
+    if (write.mired !== undefined) { delete merged.hue; delete merged.saturation; }
+    if (write.hue !== undefined || write.saturation !== undefined) delete merged.mired;
+    this.pending.set(light.descriptor.key, merged);
     const done = new Promise<void>((resolve, reject) => this.waiters.push({ resolve, reject }));
     if (!this.flushTimer) {
       this.flushTimer = setTimeout(() => { this.flushTimer = null; this.flush(); }, this.options.flushMs);
@@ -221,7 +271,10 @@ export class HomeKitLights {
         if (!snapshot.connected) throw communicationFailure();
         const commands = planWrites(Array.from(writes, ([key, write]) => {
           const light = this.lights.get(key);
-          return { unitIds: light ? lightUnitIds(light.descriptor, snapshot) : [], write };
+          if (!light) return { unitIds: [], write };
+          // Hue and Saturation usually arrive together; one alone keeps the light's current other value.
+          const colour = write.hue !== undefined || write.saturation !== undefined ? { hue: write.hue ?? light.last.hue, saturation: write.saturation ?? light.last.saturation } : {};
+          return { unitIds: lightUnitIds(light.descriptor, snapshot), write: { ...write, ...colour } };
         }), snapshot);
         for (const command of commands) await this.source.control(command, "homekit");
         waiters.forEach(waiter => waiter.resolve());
@@ -235,7 +288,10 @@ export class HomeKitLights {
   private loadCache(): LightDescriptor[] {
     try {
       const cached = JSON.parse(this.store.appSetting(CACHE_KEY) || "[]") as unknown;
-      return Array.isArray(cached) ? cached.filter((item): item is LightDescriptor => Boolean(item) && typeof item.key === "string" && typeof item.name === "string" && ["unit", "group", "room"].includes(item.kind) && typeof item.id === "number" && typeof item.dimmable === "boolean") : [];
+      if (!Array.isArray(cached)) return [];
+      // Lights cached before colour support have no colour fields; they get them at the next connected sync.
+      return cached.filter(item => Boolean(item) && typeof item.key === "string" && typeof item.name === "string" && ["unit", "group", "room"].includes(item.kind) && typeof item.id === "number" && typeof item.dimmable === "boolean")
+        .map(item => ({ ...item, temperature: item.temperature ?? null, color: item.color === true }) as LightDescriptor);
     } catch { return []; }
   }
 

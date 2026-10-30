@@ -2,7 +2,7 @@ import { spawn, spawnSync } from "child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import os from "os";
 import path from "path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const projectRoot = path.resolve(import.meta.dirname, "../..");
 const workerPath = path.join(projectRoot, "server", "casambi", "casambi_worker.py");
@@ -487,7 +487,8 @@ class Casambi:
       await send("connect", "configure", credentials(false));
       expect(await level("default", 10)).toMatchObject({ ok: true, bleFast: false });
       await expect(send("on", "options", { fastWrites: true })).resolves.toMatchObject({ ok: true, result: { fastWrites: true, active: true } });
-      expect(stderr()).toContain("Fast Bluetooth writes turned on (write without response, up to 244 bytes).");
+      // The notice goes to stderr, a separate pipe from the answer, so it can arrive just after it.
+      await vi.waitFor(() => expect(stderr()).toContain("Fast Bluetooth writes turned on (write without response, up to 244 bytes)."));
       expect(await level("fast", 20)).toMatchObject({ ok: true, bleFast: true });
       await level("reconnected", 99); // the new client is still on the safe default for this command
       expect(await level("fast-again", 30)).toMatchObject({ bleFast: true });
