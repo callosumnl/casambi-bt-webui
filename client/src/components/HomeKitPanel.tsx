@@ -1,7 +1,7 @@
 import { Home, RotateCcw } from "lucide-react";
 import { FormEvent, useEffect, useState } from "react";
 import { HudFrame } from "@/components/HudFrame";
-import { describeHomeKit, qrImageSource, type HomeKitInfo } from "@/lib/homekit";
+import { describeHomeKit, describeHomeKitLights, qrImageSource, type HomeKitInfo } from "@/lib/homekit";
 import { t } from "@/lib/i18n";
 import { LocalApi } from "@/lib/localApi";
 
@@ -41,7 +41,7 @@ export function HomeKitPanel({ api, onNotice }: { api: LocalApi; onNotice: (mess
   return <HudFrame className="form-panel"><h3><Home /> {t("HOMEKIT")}</h3>
     {!info && <p className="muted-copy">{t("Loading…")}</p>}
     {info && <>
-      <p className="muted-copy">{t("Makes this Pi a bridge in the Apple Home app, like Homebridge. Everyone in that Home can then switch these lights. The Home app calls it an uncertified accessory; that is expected.")}</p>
+      <p className="muted-copy">{t("Makes this Pi a bridge in the Apple Home app, like Homebridge: every lamp, Casambi group, and room becomes a light there. Everyone in that Home can then switch these lights. The Home app calls it an uncertified accessory; that is expected.")}</p>
       <form onSubmit={event => void save(event)} className="admin-form">
         <label className="checkbox-row"><input type="checkbox" checked={form.enabled} onChange={event => setForm({ ...form, enabled: event.target.checked })} disabled={busy} /> {t("PUBLISH AS HOMEKIT BRIDGE")}</label>
         <div className="form-grid">
@@ -51,6 +51,7 @@ export function HomeKitPanel({ api, onNotice }: { api: LocalApi; onNotice: (mess
         <button className="neon-button" disabled={busy || !changed}>{t("SAVE")}</button>
       </form>
       <p role="status">{describeHomeKit(info)}</p>
+      {describeHomeKitLights(info) && <p className="muted-copy">{describeHomeKitLights(info)}</p>}
       {info.state === "published" && <div className="homekit-pairing">
         {info.qrSvg && <img src={qrImageSource(info.qrSvg)} alt={t("HomeKit setup code {code} as a QR code", { code: info.pincode })} />}
         <div><p className="muted-copy">{t("SETUP CODE")}</p><code className="homekit-code">{info.pincode}</code></div>

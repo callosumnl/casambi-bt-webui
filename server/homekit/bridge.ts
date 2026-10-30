@@ -2,6 +2,7 @@ import * as hap from "hap-nodejs";
 import { mkdirSync } from "fs";
 import net from "net";
 import type { LocalStore } from "../store";
+import type { AccessoryHost, HomeKitLights } from "./lights";
 import { generatePincode, generateSetupId, generateUsername, isValidPincode, isValidSetupId, isValidUsername, sanitizeName } from "./identity";
 
 export const DEFAULT_HOMEKIT_NAME = "Casambi-bt-webui";
@@ -14,13 +15,15 @@ export type HomeKitState = "disabled" | "starting" | "published" | "failed";
 export type HomeKitStatus = HomeKitSettings & {
   state: HomeKitState; error: string | null; advertised: boolean; advertiser: string;
   pincode: string; setupUri: string | null; pairings: number;
+  /** Lights shown in HomeKit, and how many did not fit on the bridge (HomeKit allows 149). */
+  lights: number; lightsNotShown: number;
 };
 
 type Identity = { username: string; pincode: string; setupId: string };
 type PublishInfo = Identity & { name: string; port: number; advertiser: string };
 
 /** One published HAP bridge, as far as this module uses it; tests replace it. */
-export interface HapHost {
+export interface HapHost extends AccessoryHost {
   publish(info: PublishInfo): Promise<void>;
   unpublish(): Promise<void>;
   /** Unpublishes and deletes the bridge's keys and pairings from disk. */
@@ -66,6 +69,8 @@ export function hapRuntime(storagePath: string): HapRuntime {
           username: info.username, pincode: info.pincode, setupID: info.setupId, port: info.port,
           category: hap.Categories.BRIDGE, advertiser: info.advertiser as hap.MDNSAdvertiser,
         }),
+        addAccessories: accessories => bridge.addBridgedAccessories(accessories),
+        removeAccessories: accessories => bridge.removeBridgedAccessories(accessories),
         unpublish: () => bridge.unpublish(),
         destroy: () => bridge.destroy(),
         setupUri: () => (bridge._accessoryInfo ? bridge.setupURI() : null),
@@ -103,6 +108,8 @@ export class HomeKitBridge {
     private readonly store: LocalStore,
     private readonly runtime: HapRuntime,
     private readonly options: { appPort: () => number; advertiser: string } = { appPort: () => Number(process.env.PORT || 3000), advertiser: defaultAdvertiser() },
+    /** The lamp, group, and room lights; without it the bridge publishes no accessories. */
+    private readonly lights: HomeKitLights | null = null,
   ) {}
 
   public settings(): HomeKitSettings {
@@ -119,6 +126,7 @@ export class HomeKitBridge {
     return {
       ...this.settings(), state: this.state, error: this.error, advertised: this.advertised, advertiser: this.options.advertiser,
       pincode: identity.pincode, setupUri: this.state === "published" ? this.host?.setupUri() ?? null : null, pairings: this.host?.pairings() ?? 0,
+      ...(() => { const lights = this.lights?.status() ?? { lights: 0, notShown: 0 }; return { lights: lights.lights, lightsNotShown: lights.notShown }; })(),
     };
   }
 
@@ -147,6 +155,7 @@ export class HomeKitBridge {
       if (this.host) await this.host.destroy();
       else this.runtime.forgetIdentity(username);
       this.host = null;
+      this.lights?.attach(null);
       this.state = "disabled";
       this.advertised = false;
       this.saveIdentity({ username: generateUsername(), pincode: generatePincode(), setupId: generateSetupId() });
@@ -175,13 +184,16 @@ export class HomeKitBridge {
     host.on("paired", () => this.store.audit("homekit", "homekit.paired", { pairings: host.pairings() }));
     host.on("unpaired", () => this.store.audit("homekit", "homekit.unpaired", { pairings: host.pairings() }));
     host.on("advertised", () => { if (this.host === host) this.advertised = true; });
-    // Current before publishing, so an announcement that completes during publish() is not dropped.
+    // Current before publishing, so an announcement that completes during publish() is not dropped. The lights are
+    // added before publishing too: HomeKit must see them in the first accessory list it reads.
     this.host = host;
+    this.lights?.attach(host);
     try {
       await host.publish({ ...identity, name: settings.name, port: settings.port, advertiser: this.options.advertiser });
       this.state = "published";
     } catch (error) {
       this.host = null;
+      this.lights?.attach(null);
       await host.unpublish().catch(() => undefined);
       this.fail(error instanceof Error ? error.message : "Publishing the HomeKit bridge failed.");
     }
@@ -191,6 +203,7 @@ export class HomeKitBridge {
     const host = this.host;
     this.host = null;
     this.advertised = false;
+    this.lights?.attach(null);
     if (host) await host.unpublish();
     if (this.state !== "failed") this.state = "disabled";
   }

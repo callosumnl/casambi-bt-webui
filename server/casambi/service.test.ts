@@ -235,6 +235,22 @@ describe("CasambiService connection resilience", () => {
     expect(entries.find(entry => entry.action === "bridge.connected")).toMatchObject({ reason: "startup", attempt: 3 });
   });
 
+  it("tells state listeners about lamp states, controls, and connection changes, but not switch presses", async () => {
+    const bridge = new FakeBridge();
+    const service = new CasambiService(store(), bridge as never, new EventHub());
+    const listener = vi.fn();
+    service.onStateChange(listener);
+    bridge.emit("event", { type: "unit.state", unit: { ...bridge.network.units[0], state: { ...bridge.network.units[0].state, on: true, dimmer: 200 } } });
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(service.cachedSnapshot().units[0].state.dimmer).toBe(200);
+    await service.control({ targetType: "unit", targetId: 2, operation: "set_level", value: 100 }, "test");
+    expect(listener).toHaveBeenCalledTimes(2);
+    bridge.emit("event", { type: "switch", press: { unitId: 9, button: 1, trigger: "tap", raw: {} } });
+    expect(listener).toHaveBeenCalledTimes(2);
+    bridge.emit("event", { type: "bridge", state: "disconnected" });
+    expect(listener).toHaveBeenCalledTimes(3);
+  });
+
   it("reconnects after an unexpected drop, but never after a manual disconnect", async () => {
     vi.useFakeTimers();
     const database = configured(); const bridge = new FakeBridge();

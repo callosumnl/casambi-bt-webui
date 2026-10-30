@@ -36,6 +36,8 @@ function fakeRuntime(options: { busyPorts?: number[]; failPublish?: string } = {
           host.live = true; listeners.advertised?.forEach(listener => listener());
         },
         async unpublish() { host.live = false; },
+        addAccessories() { /* No lights in these tests. */ },
+        removeAccessories() { /* No lights in these tests. */ },
         async destroy() { host.live = false; stored.delete(username); },
         setupUri: () => (host.live ? `X-HM://TEST${username}` : null),
         pairings: () => pairings,

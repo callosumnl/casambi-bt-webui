@@ -115,6 +115,8 @@ const schemas: Record<string, JsonSchema> = {
     setupUri: nullable({ type: "string", description: "X-HM:// setup payload, while published." }),
     qrSvg: nullable({ type: "string", description: "The setup payload as a QR code (SVG) for the Home app, while published." }),
     pairings: { type: "integer", description: "Number of paired Apple Home controllers." },
+    lights: { type: "integer", description: "Lamps, Casambi groups, and rooms shown as lights in HomeKit." },
+    lightsNotShown: { type: "integer", description: "Lights that did not fit: HomeKit allows 149 accessories per bridge." },
   }),
   BackupFile: { type: "string", contentMediaType: "application/octet-stream", description: "A backup file as downloaded from POST /admin/backup." },
   DiscoveredNetwork: object({ address: { type: "string", description: "BLE address of a Casambi network endpoint in range." }, rssi: nullable({ type: "integer", description: "Signal strength in dBm (closer to 0 is stronger); null when the scan could not measure it." }) }),
