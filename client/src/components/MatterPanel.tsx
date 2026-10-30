@@ -4,7 +4,7 @@ import { HudFrame } from "@/components/HudFrame";
 import { qrImageSource } from "@/lib/homekit";
 import { t } from "@/lib/i18n";
 import { LocalApi } from "@/lib/localApi";
-import { describeMatter, formatId, formatManualCode, parseId, type MatterInfo } from "@/lib/matter";
+import { describeMatter, describeMatterLights, formatId, formatManualCode, parseId, type MatterInfo } from "@/lib/matter";
 
 /** Runs the Pi as a Matter bridge for Google Home, separate from HomeKit, and shows the code to add it. */
 export function MatterPanel({ api, onNotice }: { api: LocalApi; onNotice: (message: string) => void }) {
@@ -62,6 +62,7 @@ export function MatterPanel({ api, onNotice }: { api: LocalApi; onNotice: (messa
         <button className="neon-button" disabled={busy || !changed}>{t("SAVE")}</button>
       </form>
       <p role="status">{describeMatter(info)}</p>
+      {describeMatterLights(info) && <p className="muted-copy">{describeMatterLights(info)}</p>}
       {info.manualPairingCode && <div className="homekit-pairing">
         {info.qrSvg && <img src={qrImageSource(info.qrSvg)} alt={t("Matter setup code {code} as a QR code", { code: formatManualCode(info.manualPairingCode) })} />}
         <div><p className="muted-copy">{t("SETUP CODE")}</p><code className="homekit-code">{formatManualCode(info.manualPairingCode)}</code></div>

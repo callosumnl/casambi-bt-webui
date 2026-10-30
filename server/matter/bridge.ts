@@ -1,5 +1,7 @@
 import type { LocalStore } from "../store";
 import { fabricOwner, generateDiscriminator, generateNodeId, generatePasscode, isValidDiscriminator, isValidNodeId, isValidPasscode, matterLabel } from "./identity";
+import { endpointFactory } from "./devices";
+import type { MatterLights } from "./lights";
 import { startError, type MatterHost, type MatterRuntime } from "./runtime";
 
 export const DEFAULT_MATTER_NAME = "Casambi-bt-webui";
@@ -18,6 +20,8 @@ export type MatterStatus = MatterSettings & {
   fabrics: Array<{ index: number; owner: string }>;
   pairingWindowUntil: string | null;
   manualPairingCode: string | null; qrPairingCode: string | null;
+  /** Lamps, groups, and rooms the bridge shows. */
+  lights: number;
 };
 
 type Identity = { nodeId: string; passcode: number; discriminator: number };
@@ -34,7 +38,13 @@ export class MatterBridge {
   private pairingWindowUntil: number | null = null;
   private queue: Promise<unknown> = Promise.resolve();
 
-  public constructor(private readonly store: LocalStore, private readonly runtime: MatterRuntime, private readonly now: () => number = Date.now) {}
+  public constructor(
+    private readonly store: LocalStore,
+    private readonly runtime: MatterRuntime,
+    private readonly now: () => number = Date.now,
+    /** The lamp, group, and room devices; without it the bridge shows none. */
+    private readonly lights: MatterLights | null = null,
+  ) {}
 
   public settings(): MatterSettings {
     const number = (key: string, fallback: number, min: number, max: number) => { const value = Number(this.store.appSetting(key)); return Number.isInteger(value) && value >= min && value <= max ? value : fallback; };
@@ -58,6 +68,7 @@ export class MatterBridge {
       fabrics: host?.fabrics().map(fabric => ({ index: fabric.index, owner: fabricOwner(fabric.vendorId, fabric.label) })) ?? [],
       pairingWindowUntil: commissioned && windowOpen ? new Date(this.pairingWindowUntil!).toISOString() : null,
       manualPairingCode: codes?.manualPairingCode ?? null, qrPairingCode: codes?.qrPairingCode ?? null,
+      lights: host ? this.lights?.status().lights ?? 0 : 0,
     };
   }
 
@@ -130,9 +141,12 @@ export class MatterBridge {
         if (action === "added") this.pairingWindowUntil = null;
       });
       this.host = host;
+      // The devices are added before the node starts, so a controller sees them in its first read.
+      await this.lights?.attach(endpointFactory(host.aggregator()));
       await host.start();
       this.state = "running";
     } catch (error) {
+      await this.lights?.attach(null);
       await this.host?.close().catch(() => undefined);
       this.host = null;
       this.fail(startError(error));
@@ -143,6 +157,7 @@ export class MatterBridge {
     const host = this.host;
     this.host = null;
     this.pairingWindowUntil = null;
+    await this.lights?.attach(null);
     if (host) await host.close();
     if (this.state !== "failed") this.state = "disabled";
   }

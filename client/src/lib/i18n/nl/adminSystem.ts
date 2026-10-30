@@ -240,4 +240,5 @@ export const adminSystem: Record<string, string> = {
   "Another app can add the bridge with the code until {time}.": "Een andere app kan de brug tot {time} met de code toevoegen.",
   "Paired with {owner}.": "Gekoppeld met {owner}.",
   "Paired with {count} apps.": "Gekoppeld met {count} apps.",
+  "{count} lights (lamps, groups, and rooms) for Google Home.": "{count} lampen (lampen, groepen en ruimtes) voor Google Home.",
 };

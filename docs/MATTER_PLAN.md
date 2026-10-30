@@ -1,6 +1,6 @@
 # Matter / Google Home plan
 
-Status: phases 0 (spike), 1 (shared lighting core), and 2 (the Matter bridge with pairing and the Google Home tab) are done; phase 3 (lamps, groups, and rooms) is next.
+Status: phases 0 (spike), 1 (shared lighting core), 2 (the Matter bridge with pairing and the Google Home tab), and 3 (lamps, groups, and rooms) are done; phase 4 (colour) is next.
 
 ## Goal
 
@@ -176,7 +176,11 @@ reacted, and how Google Home handled 60 lamps.
    storage in `matter/` next to the database, setup code and QR code, Admin → GOOGLE HOME with the connected apps,
    a 15-minute pairing window for another app, removing one app, reset, and audit. matter.js logs at "warn", so the
    setup code never reaches the service log.
-3. **Lamps, groups and rooms:** on/off and dimming, state from the cache, `reachable`, write planning.
+3. **Lamps, groups and rooms (done):** `server/matter/lights.ts` and `devices.ts`: an On/Off Light or Dimmable Light
+   per lamp, Casambi group, and room (no duplicates), with their own list under `matter.*`; state pushed as it changes
+   (`reachable` false while Bluetooth is down or a lamp is offline); Google Home's commands go through the shared write
+   batcher as actor `matter` (on + level merged, group commands), with the Casambi level 0–255 passed through instead
+   of whole percents; level transitions are instant, so one command per change reaches Casambi.
 4. **Colour:** colour temperature, hue/saturation, xy.
 5. **Scenes and choosing what Google Home shows.**
 6. **Operations:** Matter storage in backups, system check line, README with the Google Developer Console steps.

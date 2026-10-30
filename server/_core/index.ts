@@ -12,6 +12,7 @@ import { EventHub } from "../events";
 import { HomeKitBridge, hapRuntime } from "../homekit/bridge";
 import { HomeKitLights } from "../homekit/lights";
 import { MatterBridge } from "../matter/bridge";
+import { MatterLights } from "../matter/lights";
 import { matterRuntime } from "../matter/runtime";
 import { DurableScheduler } from "../scheduler";
 import { SetupCode } from "../setupCode";
@@ -100,7 +101,7 @@ async function startServer() {
   const notifier = new Notifier(store, events, { connection: () => casambi.cachedSnapshot().connection, update: () => updater.status() });
   const homekit = new HomeKitBridge(store, hapRuntime(join(store.dataDirectory, "homekit")), undefined, new HomeKitLights(store, casambi));
   // Google Home goes through Matter, fully separate from HomeKit: its own settings, identity, and storage folder.
-  const matter = new MatterBridge(store, matterRuntime(join(store.dataDirectory, "matter")));
+  const matter = new MatterBridge(store, matterRuntime(join(store.dataDirectory, "matter")), undefined, new MatterLights(store, casambi));
   app.use("/api/v1", createCasambiApi({ store, service: casambi, events, scheduler, setupCode, updater, notifier, homekit, matter }));
   app.use("/api/v1", apiErrorHandler);
   await casambi.initialize();

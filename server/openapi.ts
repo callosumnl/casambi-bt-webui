@@ -105,6 +105,7 @@ const schemas: Record<string, JsonSchema> = {
     manualPairingCode: nullable({ type: "string", description: "The 11-digit setup code, while the bridge can be added." }),
     qrPairingCode: nullable({ type: "string", description: "The MT: setup payload, while the bridge can be added." }),
     qrSvg: nullable({ type: "string", description: "The setup payload as a QR code (SVG) for the Google Home app." }),
+    lights: { type: "integer", description: "Lamps, Casambi groups, and rooms the bridge shows." },
   }),
   Notifications: object({
     notifications: { type: "array", description: "Newest first, at most 50: id, kind (connection.lost, connection.restored, timer.failed, timer.unusable, update.failed), severity (info, warning, error), title, message, createdAt, readAt.", items: { type: "object" } },

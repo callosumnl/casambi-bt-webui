@@ -16,10 +16,16 @@ export type LightingSnapshot = Pick<NetworkSnapshot, "connected" | "network" | "
  * temperature; `color` says a lamp takes RGB or XY colour.
  */
 export type LightDescriptor = { key: string; kind: "unit" | "group" | "room" | "scene" | "local_scene" | "switch"; id: number; name: string; dimmable: boolean; temperature: { minMired: number; maxMired: number } | null; color: boolean; buttons?: number[] };
-/** A light's state in HomeKit terms; `brightness` is 0–100 and null while off; colour values are null when unknown. */
-export type LightState = { available: boolean; on: boolean; brightness: number | null; mired: number | null; hue: number | null; saturation: number | null };
-/** What HomeKit asked for one light; On, Brightness, Hue, and Saturation arrive as separate writes and are merged. */
-export type LightWrite = { on?: boolean; brightness?: number; mired?: number; hue?: number; saturation?: number };
+/**
+ * A light's state: `brightness` is 0–100 and `level` the Casambi level 0–255 (both null while off), so each platform
+ * converts from the precision it needs; colour values are null when unknown.
+ */
+export type LightState = { available: boolean; on: boolean; brightness: number | null; level: number | null; mired: number | null; hue: number | null; saturation: number | null };
+/**
+ * What a platform asked for one light; On, Brightness, Hue, and Saturation arrive as separate writes and are merged.
+ * `level` is a Casambi level 0–255, for platforms with a finer scale than percent; it wins over `brightness`.
+ */
+export type LightWrite = { on?: boolean; brightness?: number; level?: number; mired?: number; hue?: number; saturation?: number };
 type ColorSource = "temperature" | "rgb" | "xy";
 
 /** Turns a Casambi or local name into one a smart home platform accepts; `fallback` when nothing is left. */
@@ -128,20 +134,20 @@ export function lightUnitIds(light: Pick<LightDescriptor, "kind" | "id">, snapsh
  */
 export function lightState(light: Pick<LightDescriptor, "kind" | "id">, snapshot: LightingSnapshot): LightState {
   // A scene switch is always off (it only activates the scene) and works while the network is connected.
-  if (isScene(light)) return { available: snapshot.connected, on: false, brightness: null, mired: null, hue: null, saturation: null };
+  if (isScene(light)) return { available: snapshot.connected, on: false, brightness: null, level: null, mired: null, hue: null, saturation: null };
   // A wall switch has no state of its own; it is reachable while the network is connected and the unit online.
-  if (light.kind === "switch") return { available: snapshot.connected && snapshot.units.some(unit => unit.id === light.id && unit.state.online), on: false, brightness: null, mired: null, hue: null, saturation: null };
+  if (light.kind === "switch") return { available: snapshot.connected && snapshot.units.some(unit => unit.id === light.id && unit.state.online), on: false, brightness: null, level: null, mired: null, hue: null, saturation: null };
   const ids = new Set(lightUnitIds(light, snapshot));
   const members = snapshot.units.filter(unit => ids.has(unit.id) && unit.state.online);
-  if (!snapshot.connected || members.length === 0) return { available: false, on: false, brightness: null, mired: null, hue: null, saturation: null };
+  if (!snapshot.connected || members.length === 0) return { available: false, on: false, brightness: null, level: null, mired: null, hue: null, saturation: null };
   const lit = members.filter(unit => unit.state.on && (unit.state.dimmer ?? 255) > 0);
   const shown = lit.length ? lit : members;
   const temperatures = shown.filter(unit => capability(unit, "temperature") && unit.state.temperature).map(unit => kelvinToMired(unit.state.temperature!));
   const colour = shown.map(unitHueSaturation).find((value): value is HueSaturation => Boolean(value)) ?? null;
   const colourState = { mired: temperatures.length ? Math.round(temperatures.reduce((sum, value) => sum + value, 0) / temperatures.length) : null, hue: colour?.hue ?? null, saturation: colour?.saturation ?? null };
-  if (lit.length === 0) return { available: true, on: false, brightness: null, ...colourState };
+  if (lit.length === 0) return { available: true, on: false, brightness: null, level: null, ...colourState };
   const average = lit.reduce((sum, unit) => sum + (unit.state.dimmer ?? 255), 0) / lit.length;
-  return { available: true, on: true, brightness: levelToPercent(average), ...colourState };
+  return { available: true, on: true, brightness: levelToPercent(average), level: Math.max(1, Math.min(255, Math.round(average))), ...colourState };
 }
 
 /** The colour command a lamp gets for a write, in the form it takes; null when the write has no colour or the lamp cannot show it. */
@@ -174,7 +180,8 @@ export function planWrites(writes: Array<{ unitIds: number[]; write: LightWrite 
   const power = new Map<number, Command>();
   const colour = new Map<number, Command>();
   for (const { unitIds, write } of writes) {
-    const command = write.on === false || write.brightness === 0 ? { operation: "off" as const }
+    const command = write.on === false || write.brightness === 0 || write.level === 0 ? { operation: "off" as const }
+      : write.level !== undefined ? { operation: "set_level" as const, value: Math.max(1, Math.min(255, Math.round(write.level))) }
       : write.brightness !== undefined ? { operation: "set_level" as const, value: percentToLevel(write.brightness) }
       : write.on === true ? { operation: "on" as const } : null;
     for (const unitId of unitIds) {
