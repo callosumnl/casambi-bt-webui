@@ -17,3 +17,18 @@ export function fixture(overrides: Partial<LightingSnapshot> = {}): LightingSnap
     ...overrides,
   };
 }
+
+const temperature = { type: "temperature", min: 2700, max: 6500, readOnly: false };
+/** Lamp 11 only does white, lamp 12 does white and RGB (showing red), lamp 13 only does XY colour; group 20 has all three. */
+export function colourFixture(): LightingSnapshot {
+  return {
+    connected: true, network: { id: "net", name: "Home" },
+    units: [
+      { ...unit(11), state: { ...unit(11).state, temperature: 4000 }, capabilities: [...dimmer, temperature] },
+      { ...unit(12), state: { ...unit(12).state, temperature: 3000, rgb: [255, 0, 0], colorSource: "rgb" }, capabilities: [...dimmer, temperature, { type: "rgb", min: 0, max: 255, readOnly: false }, { type: "colorsource", min: 0, max: 2, readOnly: false }] },
+      { ...unit(13, { on: false, dimmer: 0 }), state: { ...unit(13, { on: false, dimmer: 0 }).state, xy: [0.3127, 0.329] }, capabilities: [...dimmer, { type: "xy", min: 0, max: 1, readOnly: false }] },
+    ],
+    groups: [{ id: 20, name: "Mixed", unitIds: [11, 12, 13] }, { id: 21, name: "White", unitIds: [11, 12] }],
+    rooms: [],
+  };
+}

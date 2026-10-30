@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ControlRequest } from "../casambi/types";
 import { LocalStore } from "../store";
 import { HomeKitLights, LightingSource } from "./lights";
-import { fixture } from "./testFixtures";
+import { colourFixture, fixture } from "./testFixtures";
 import type { LightingSnapshot } from "./mapping";
 
 const folders: string[] = [];
@@ -142,5 +142,26 @@ describe("HomeKit lights", () => {
     const restarted = fakeHost();
     lightsFor(store, fakeSource(fixture({ connected: false, network: null })).source).attach(restarted);
     expect(keys(restarted)).toEqual(["group:net:7", "room:2", "unit:uuid-1", "unit:uuid-2"]);
+  });
+
+  it("adds colour temperature and colour where lamps take them, and sends the colour HomeKit picks", async () => {
+    const store = newStore(); const { source, sent } = fakeSource(colourFixture()); const host = fakeHost();
+    lightsFor(store, source).attach(host);
+    const white = bulb(host.find("unit:uuid-11"));
+    expect(white.getCharacteristic(hap.Characteristic.ColorTemperature).props).toMatchObject({ minValue: 154, maxValue: 370 });
+    expect(white.getCharacteristic(hap.Characteristic.ColorTemperature).value).toBe(250);
+    expect(white.testCharacteristic(hap.Characteristic.Hue)).toBe(false);
+    const mixed = host.find("unit:uuid-12");
+    expect(bulb(mixed).getCharacteristic(hap.Characteristic.Saturation).value).toBe(100);
+    // Hue alone keeps the current saturation; it becomes one RGB command.
+    await bulb(mixed).getCharacteristic(hap.Characteristic.Hue).handleSetRequest(240);
+    expect(sent).toEqual([{ targetType: "unit", targetId: 12, operation: "set_color", value: [0, 0, 255] }]);
+    sent.length = 0;
+    // A colour temperature picked right after a colour replaces it.
+    await Promise.all([
+      bulb(mixed).getCharacteristic(hap.Characteristic.Hue).handleSetRequest(120),
+      bulb(mixed).getCharacteristic(hap.Characteristic.ColorTemperature).handleSetRequest(370),
+    ]);
+    expect(sent).toEqual([{ targetType: "unit", targetId: 12, operation: "set_temperature", value: 2703 }]);
   });
 });

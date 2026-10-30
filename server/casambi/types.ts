@@ -17,6 +17,8 @@ export const unitStateSchema = z.object({
   vertical: z.number().int().min(0).max(255).nullable().optional(),
   slider: z.number().int().min(0).max(255).nullable().optional(),
   xy: z.tuple([z.number(), z.number()]).nullable().optional(),
+  /** Which colour a unit with several colour controls shows. */
+  colorSource: z.enum(["temperature", "rgb", "xy"]).nullable().optional(),
   sensors: z.array(z.object({ label: z.string(), value: z.number().nullable(), unit: z.string().nullable() })).default([]),
   on: z.boolean(),
   online: z.boolean(),
