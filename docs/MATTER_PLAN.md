@@ -1,6 +1,6 @@
 # Matter / Google Home plan
 
-Status: phases 0 (spike), 1 (shared lighting core), 2 (the Matter bridge with pairing and the Google Home tab), 3 (lamps, groups, and rooms), and 4 (colour) are done; phase 5 (scenes and choosing what Google Home shows) is next.
+Status: phases 0 (spike), 1 (shared lighting core), 2 (the Matter bridge with pairing and the Google Home tab), 3 (lamps, groups, and rooms), 4 (colour), and 5 (scenes and choosing what Google Home shows) are done; phase 6 (backup and system check) is next.
 
 ## Goal
 
@@ -173,7 +173,7 @@ reacted, and how Google Home handled 60 lamps.
    what is shown (`registry.ts`: settings under `<prefix>.lights`, `.hidden`, `.buttons`, removal rules), and write
    batching (`writes.ts`). `HomeKitLights` only builds HAP accessories on top; HomeKit behaves exactly as before.
 2. **Matter bridge (done):** `server/matter/` (`bridge.ts`, `runtime.ts`, `identity.ts`): settings under `matter.*`,
-   storage in `matter/` next to the database, setup code and QR code, Admin → GOOGLE HOME with the connected apps,
+   storage in `matter/` next to the database, setup code and QR code, Admin → GOOGLE HOME / MATTER with the connected apps,
    a 15-minute pairing window for another app, removing one app, reset, and audit. matter.js logs at "warn", so the
    setup code never reaches the service log.
 3. **Lamps, groups and rooms (done):** `server/matter/lights.ts` and `devices.ts`: an On/Off Light or Dimmable Light
@@ -185,7 +185,10 @@ reacted, and how Google Home handled 60 lamps.
    Color Light with hue/saturation, xy, and colour temperature; Matter's colour mode follows what the lamp shows (the
    shared light state now says so). Colour commands go through the shared planner, so each lamp gets kelvin, RGB, or
    xy, and colour transitions are instant (matter.js's default).
-5. **Scenes and choosing what Google Home shows.**
+5. **Scenes and choosing what Google Home shows (done):** Casambi scenes and saved scenes are On/Off Plug-in Units that
+   activate the scene and switch themselves off after a second (as plug-in units, "all lights off" leaves them alone);
+   Admin → GOOGLE HOME / MATTER → IN GOOGLE HOME chooses what Google Home shows (`matter.hidden`, separate from
+   HomeKit's list; `PUT /admin/matter/accessories`). The panel is shared with HomeKit's.
 6. **Operations:** Matter storage in backups, system check line, README with the Google Developer Console steps.
 7. **Optional, wall switches:** as Matter Generic Switch, if Google Home automations can use them.
 

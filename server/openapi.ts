@@ -1,6 +1,6 @@
 import { z } from "zod";
 import {
-  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, homekitAccessoriesSchema, homekitSettingsSchema, matterSettingsSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
+  apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema,
   roomDefaultBrightnessSchema, roomRenameSchema, sceneCreateSchema, sceneRenameSchema, schedulePatchSchema, scheduleSchema, userCreateSchema, userUpdateSchema,
 } from "./apiSchemas";
 import { controlRequestSchema, groupSchema, networkSnapshotSchema, sceneSchema, unitSchema } from "./casambi/types";
@@ -95,6 +95,7 @@ const schemas: Record<string, JsonSchema> = {
   HomeKitSettings: fromZod(homekitSettingsSchema),
   HomeKitAccessories: fromZod(homekitAccessoriesSchema),
   MatterSettings: fromZod(matterSettingsSchema),
+  MatterAccessories: fromZod(matterAccessoriesSchema),
   MatterStatus: object({
     enabled: { type: "boolean" }, name: { type: "string" }, port: { type: "integer" }, vendorId: { type: "integer" }, productId: { type: "integer" },
     state: { type: "string", enum: ["disabled", "starting", "running", "failed"] },
@@ -105,7 +106,8 @@ const schemas: Record<string, JsonSchema> = {
     manualPairingCode: nullable({ type: "string", description: "The 11-digit setup code, while the bridge can be added." }),
     qrPairingCode: nullable({ type: "string", description: "The MT: setup payload, while the bridge can be added." }),
     qrSvg: nullable({ type: "string", description: "The setup payload as a QR code (SVG) for the Google Home app." }),
-    lights: { type: "integer", description: "Lamps, Casambi groups, and rooms the bridge shows." },
+    lights: { type: "integer", description: "Lamps, Casambi groups, rooms, and scenes the bridge shows." },
+    accessories: { type: "array", description: "Everything Google Home can show, as last seen on the connected network, and whether it does (separate from HomeKit's list).", items: object({ key: { type: "string" }, kind: { type: "string", enum: ["unit", "group", "room", "scene", "local_scene"] }, name: { type: "string" }, shown: { type: "boolean" } }) },
   }),
   Notifications: object({
     notifications: { type: "array", description: "Newest first, at most 50: id, kind (connection.lost, connection.restored, timer.failed, timer.unusable, update.failed), severity (info, warning, error), title, message, createdAt, readAt.", items: { type: "object" } },
@@ -235,6 +237,7 @@ const operations: Operation[] = [
   { method: "post", path: "/admin/homekit/reset", tag: "Admin: bridge", summary: "Reset HomeKit pairing", description: "Removes every pairing and creates a new device id and setup code. Apple Home sees a new bridge: remove the old one there and add the bridge again.", access: "admin", responses: { 200: { description: "Reset; the new status.", schema: "HomeKitStatus" } } },
   { method: "get", path: "/admin/matter", tag: "Admin: bridge", summary: "Matter bridge (Google Home)", description: "Settings, whether the bridge runs and is paired, the connected ecosystems, and the setup code while the bridge can be added.", access: "admin", responses: { 200: { description: "The Matter status.", schema: "MatterStatus" } } },
   { method: "put", path: "/admin/matter", tag: "Admin: bridge", summary: "Change the Matter bridge", description: "Turns the Matter bridge on or off, or changes its name, port, vendor id, or product id, and restarts it. Pairings are kept.", access: "admin", body: "MatterSettings", bodyRequired: true, responses: { 200: { description: "Saved; the new status.", schema: "MatterStatus" }, 422: { description: "Invalid.", schema: "Error" } } },
+  { method: "put", path: "/admin/matter/accessories", tag: "Admin: bridge", summary: "Choose what Google Home shows", description: "Hides the given lamps, groups, rooms, and scenes from Google Home (removing them there at once) and shows everything else. Separate from HomeKit's choice.", access: "admin", body: "MatterAccessories", bodyRequired: true, responses: { 200: { description: "Saved; the new status.", schema: "MatterStatus" } } },
   { method: "post", path: "/admin/matter/pairing-window", tag: "Admin: bridge", summary: "Let another ecosystem add the bridge", description: "Opens a 15-minute window in which another Matter controller can add the already paired bridge with the setup code.", access: "admin", responses: { 200: { description: "Opened; the new status with the setup code.", schema: "MatterStatus" }, 422: { description: "Not running or not paired yet.", schema: "Error" } } },
   { method: "delete", path: "/admin/matter/fabrics/{id}", tag: "Admin: bridge", summary: "Remove an ecosystem", description: "Removes one ecosystem's access (by fabric index from `fabrics`); the bridge disappears from that app.", access: "admin", responses: { 200: { description: "Removed; the new status.", schema: "MatterStatus" }, 404: { description: "No such connection.", schema: "Error" } } },
   { method: "post", path: "/admin/matter/reset", tag: "Admin: bridge", summary: "Reset the Matter bridge", description: "Removes every ecosystem and all Matter keys. The bridge can then be added again with the same setup code.", access: "admin", responses: { 200: { description: "Reset; the new status.", schema: "MatterStatus" } } },

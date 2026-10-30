@@ -16,6 +16,7 @@ export type MatterInfo = {
   qrPairingCode: string | null;
   qrSvg: string | null;
   lights: number;
+  accessories: Array<{ key: string; kind: "unit" | "group" | "room" | "scene" | "local_scene"; name: string; shown: boolean }>;
 };
 
 /** An iPhone's own Matter fabric; the Google Home app on an iPhone adds the bridge through it. */
@@ -38,7 +39,7 @@ export function describeMatter(info: MatterInfo): string {
 /** How many lights Google Home gets, while the bridge runs. */
 export function describeMatterLights(info: MatterInfo): string | null {
   if (info.state !== "running") return null;
-  return info.lights === 1 ? t("1 light for Google Home.") : t("{count} lights (lamps, groups, and rooms) for Google Home.", { count: info.lights });
+  return info.lights === 1 ? t("1 device for Google Home.") : t("{count} devices (lamps, groups, rooms, and scenes) for Google Home.", { count: info.lights });
 }
 
 /** The 11-digit manual code as the Google Home app shows it: 1234-567-8901. */

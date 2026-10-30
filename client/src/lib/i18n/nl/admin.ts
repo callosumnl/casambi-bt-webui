@@ -193,6 +193,6 @@ export const admin: Record<string, string> = {
   "ADVANCED": "GEAVANCEERD",
   "SUNRISE AND SUNSET": "ZONSOPGANG EN ZONSONDERGANG",
   "Location for sunrise and sunset saved.": "Locatie voor zonsopgang en zonsondergang opgeslagen.",
-  "GOOGLE HOME": "GOOGLE HOME",
-  "Control these lights from Google Home and a Google Nest, through Matter; separate from HomeKit.": "Bedien deze lampen vanuit Google Home en een Google Nest, via Matter; los van HomeKit.",
+  "GOOGLE HOME / MATTER": "GOOGLE HOME / MATTER",
+  "Control these lights and scenes from Google Home and a Google Nest, through Matter, and choose what appears there; separate from HomeKit.": "Bedien deze lampen en scènes vanuit Google Home en een Google Nest, via Matter, en kies wat daar verschijnt; los van HomeKit.",
 };

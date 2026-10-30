@@ -6,7 +6,8 @@ import { ColorTemperatureLightDevice } from "@matter/main/devices/color-temperat
 import { ExtendedColorLightDevice } from "@matter/main/devices/extended-color-light";
 import { DimmableLightDevice, DimmableLightRequirements } from "@matter/main/devices/dimmable-light";
 import { OnOffLightDevice } from "@matter/main/devices/on-off-light";
-import type { LightDescriptor } from "../lighting/model";
+import { OnOffPlugInUnitDevice } from "@matter/main/devices/on-off-plug-in-unit";
+import { isScene, type LightDescriptor } from "../lighting/model";
 
 /**
  * A bridged device's state in Matter terms: `level` 1–254, `mired` the colour temperature, `hue` and `saturation`
@@ -73,14 +74,16 @@ function colourAttributes(descriptor: LightDescriptor, state: DeviceState): Reco
 }
 
 /**
- * Bridged lights on the Matter node's aggregator endpoint: Extended Color Light for colour lamps, Color Temperature
- * Light for white lamps, Dimmable Light, or On/Off Light.
+ * Bridged devices on the Matter node's aggregator endpoint: Extended Color Light for colour lamps, Color Temperature
+ * Light for white lamps, Dimmable Light, or On/Off Light; scenes are On/Off Plug-in Units, so Google Home shows them
+ * as switches and does not switch them with "all lights off".
  */
 export function endpointFactory(aggregator: Endpoint): DeviceFactory {
   return {
     async add(descriptor, initial, handlers) {
       const range = descriptor.temperature ?? { minMired: 140, maxMired: 500 };
-      const type = descriptor.color ? ExtendedColorLightDevice.with(BridgedDeviceBasicInformationServer, InstantLevelControlServer, ExtendedColorControlServer)
+      const type = isScene(descriptor) ? OnOffPlugInUnitDevice.with(BridgedDeviceBasicInformationServer)
+        : descriptor.color ? ExtendedColorLightDevice.with(BridgedDeviceBasicInformationServer, InstantLevelControlServer, ExtendedColorControlServer)
         : descriptor.temperature ? ColorTemperatureLightDevice.with(BridgedDeviceBasicInformationServer, InstantLevelControlServer)
         : descriptor.dimmable ? DimmableLightDevice.with(BridgedDeviceBasicInformationServer, InstantLevelControlServer)
         : OnOffLightDevice.with(BridgedDeviceBasicInformationServer);

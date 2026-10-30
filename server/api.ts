@@ -22,7 +22,7 @@ import QRCode from "qrcode";
 import type { HomeKitBridge } from "./homekit/bridge";
 import type { MatterBridge } from "./matter/bridge";
 import { AppFacts, appVersion, evaluateChecks, gatherSystemFacts, Probes, systemProbes } from "./diagnostics";
-import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitAccessoriesSchema, homekitSettingsSchema, matterSettingsSchema } from "./apiSchemas";
+import { apiKeyCreateSchema, awayDateSetSchema, backupCreateSchema, bootstrapSchema, serverSettingsSchema, notificationWebhookSchema, configSchema, credentialsSchema, deviceMetadataSchema, deviceRoomsSchema, fadeBodySchema, roomCreateSchema, roomDefaultBrightnessSchema, sceneCreateSchema, sceneRenameSchema, scheduleSchema, schedulePatchSchema, userCreateSchema, userUpdateSchema, roomRenameSchema, auditQuerySchema, homekitAccessoriesSchema, homekitSettingsSchema, matterAccessoriesSchema, matterSettingsSchema } from "./apiSchemas";
 
 /**
  * `setupCode`, when set, must accompany the first-admin request, so a stranger on the network cannot claim a fresh install.
@@ -258,6 +258,11 @@ export function createCasambiApi({ store, service, events, scheduler, setupCode,
   api.put("/admin/matter", requireAuth(store, "admin"), route(async (request, response) => {
     const bridge = requireMatter();
     await bridge.update(parsed(matterSettingsSchema, request.body), principal(response).name);
+    response.json(await matterStatus(bridge));
+  }));
+  api.put("/admin/matter/accessories", requireAuth(store, "admin"), route(async (request, response) => {
+    const bridge = requireMatter();
+    await bridge.setHidden(parsed(matterAccessoriesSchema, request.body).hidden, principal(response).name);
     response.json(await matterStatus(bridge));
   }));
   api.post("/admin/matter/pairing-window", requireAuth(store, "admin"), route(async (_request, response) => {
