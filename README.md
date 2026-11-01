@@ -6,13 +6,20 @@ Casambi BT WebGUI turns a Raspberry Pi into a small lighting hub that sits next 
 
 [![Buy me a coffee on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/callosum/)
 
+### What makes it special
+
+- 🌅 **Wake-up light.** Wake up to light instead of an alarm: a timer slowly raises your bedroom lamps over 5 to 60 minutes, from the faintest warm glow to bright, cool morning light, slowly at first, because eyes notice the first light most. Any other command, from the app, Apple Home, or Google Home, stops it.
+- ☀️ **Daylight rhythm.** In the rooms you choose, lamps with adjustable white follow the sun all day by themselves: warm and cosy in the evening, fresh and cool at midday. Pick a colour by hand and that room pauses until its lights go off.
+- 🔘 **Wall switches that do more.** Give a Casambi wall switch a new job (toggle, dim, or a scene on tap, hold, or release), or let its buttons start any automation in Apple Home or Google Home.
+- 🏖️ **Timers that know when you're away.** Holiday dates and shared away periods keep the house from lighting up at 7 o'clock while you're on the beach.
+
 ### What it gives you
 
 - 💡 **One web app for the whole household.** Every phone, tablet, and laptop on your network opens it: lamps, groups, rooms, and scenes, with brightness, colour temperature, and colour, updated live, also when someone uses a wall switch.
 - 🍎 **Apple HomeKit.** The Pi becomes a HomeKit bridge (the way Homebridge does), so your lights and scenes are in the Apple Home app, work with Siri, and take part in Home automations. Casambi wall switches can start automations too.
 - 🏠 **Matter for Google Home.** A separate Matter bridge puts the same lights and scenes in Google Home, controlled locally by a Google Nest ("Hey Google, dim the reading lamp to 30 percent"). Wall switches become automation starters there.
-- ⏰ **Lights that run themselves.** Timers at fixed times or at sunrise and sunset, holiday and away dates, a wake-up light, and a daylight rhythm that makes white light warmer in the evening and cooler at midday.
-- 🎛️ **Your own scenes and switch rules.** Save how a room looks and bring it back with a fade, from a tap in the app, a timer, or a Casambi wall switch.
+- ⏰ **Lights that run themselves.** Timers at fixed times or at sunrise and sunset (with an offset), with optional fades and saved scenes as targets.
+- 🎛️ **Your own scenes.** Save how a room looks and bring it back with a fade, from a tap in the app, a timer, or a Casambi wall switch.
 - 🛠️ **Easy to install and look after.** One install command, then a setup wizard, a system check with plain advice, one-click updates that undo themselves when something fails, automatic encrypted backups (also to a NAS), and notifications when something needs you. The interface speaks English and Dutch.
 - 🔌 **Open to tinkerers.** A documented REST API with API keys and live events, for Home Assistant, scripts, or your own projects.
 
