@@ -1,16 +1,32 @@
 # Casambi BT WebGUI
 
-**Casambi BT WebGUI** is a self-hosted lighting-control appliance for a Raspberry Pi. It places a cyberpunk-styled React interface, a JWT- and API-key-protected REST API, a local SQLite configuration store, durable timer rules, and a supervised Node.js-to-Python Bluetooth bridge behind one local service. The Python bridge uses [`lkempf/casambi-bt`](https://github.com/lkempf/casambi-bt), which must be treated as an unofficial, alpha-quality Casambi protocol implementation. [1]
+**Easy, local control of your Casambi lights, including DALI lights on a Casambi network, from any browser, Apple Home, and Google Home.**
+
+Casambi BT WebGUI turns a Raspberry Pi into a small lighting hub that sits next to your lights. It connects to your Casambi network over Bluetooth and runs everything at home: no cloud account, no subscription, and no phone that has to be in range. DALI lights connected through a Casambi DALI module or gateway are units in the Casambi network, so they work like any other lamp.
 
 [![Buy me a coffee on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/callosum/)
 
-> **Disclaimer:** Casambi BT WebGUI is an independent, source-available hobby project. It is not affiliated with, endorsed by, or supported by Casambi Technologies. "Casambi" is a trademark of Casambi Technologies and is used here only to describe the lighting system this software works with. The Bluetooth protocol support comes from the unofficial [`casambi-bt`](https://github.com/lkempf/casambi-bt) library; use this software at your own risk.
+### What it gives you
+
+- 💡 **One web app for the whole household.** Every phone, tablet, and laptop on your network opens it: lamps, groups, rooms, and scenes, with brightness, colour temperature, and colour, updated live, also when someone uses a wall switch.
+- 🍎 **Apple HomeKit.** The Pi becomes a HomeKit bridge (the way Homebridge does), so your lights and scenes are in the Apple Home app, work with Siri, and take part in Home automations. Casambi wall switches can start automations too.
+- 🏠 **Matter for Google Home.** A separate Matter bridge puts the same lights and scenes in Google Home, controlled locally by a Google Nest ("Hey Google, dim the reading lamp to 30 percent"). Wall switches become automation starters there.
+- ⏰ **Lights that run themselves.** Timers at fixed times or at sunrise and sunset, holiday and away dates, a wake-up light, and a daylight rhythm that makes white light warmer in the evening and cooler at midday.
+- 🎛️ **Your own scenes and switch rules.** Save how a room looks and bring it back with a fade, from a tap in the app, a timer, or a Casambi wall switch.
+- 🛠️ **Easy to install and look after.** One install command, then a setup wizard, a system check with plain advice, one-click updates that undo themselves when something fails, automatic encrypted backups (also to a NAS), and notifications when something needs you. The interface speaks English and Dutch.
+- 🔌 **Open to tinkerers.** A documented REST API with API keys and live events, for Home Assistant, scripts, or your own projects.
+
+### How it works
+
+One local service on the Pi serves the web app, a JWT- and API-key-protected REST API, the timers, and the HomeKit and Matter bridges, and keeps its settings in a local SQLite database. A supervised Python process talks to the Casambi network through [`lkempf/casambi-bt`](https://github.com/lkempf/casambi-bt), an unofficial, alpha-quality implementation of the Casambi Bluetooth protocol, so test your own fixtures before you rely on automations. [1]
 
 Sign in with a local account. The initial `admin` account is created in the browser with a one-time setup code that the installer prints.
 
+> **Disclaimer:** Casambi BT WebGUI is an independent, source-available hobby project. It is not affiliated with, endorsed by, or supported by Casambi Technologies, Apple, Google, or the Connectivity Standards Alliance, and its HomeKit and Matter bridges are not certified. "Casambi", "HomeKit", "Google Home", and "Matter" are trademarks of their owners and are used here only to describe what this software works with (see [NOTICE](NOTICE)). The Bluetooth protocol support comes from the unofficial [`casambi-bt`](https://github.com/lkempf/casambi-bt) library; use this software at your own risk.
+
 > Run this on a trusted local network. A lighting controller has physical-world effects. Do not expose it directly to the public internet; place it behind a VPN or a carefully configured HTTPS reverse proxy if remote access is needed.
 
-## What is included
+## Features in detail
 
 | Capability | Implementation |
 | --- | --- |
