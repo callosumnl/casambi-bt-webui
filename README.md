@@ -6,6 +6,12 @@ Casambi BT WebGUI turns a Raspberry Pi into a small lighting hub that sits next 
 
 [![Buy me a coffee on Ko-fi](https://img.shields.io/badge/Ko--fi-Buy%20me%20a%20coffee-FF5E5B?logo=ko-fi&logoColor=white)](https://ko-fi.com/callosum/)
 
+> **Disclaimer:** Casambi BT WebGUI is an independent, source-available hobby project. It is **not affiliated with, endorsed by, or supported by Casambi Technologies**, nor by Apple, Google, or the Connectivity Standards Alliance, and its HomeKit and Matter bridges are not certified.
+>
+> It exists for interoperability: it lets you control lighting you own, in your own home, with your own network password. It contains no code, firmware, apps, or other material from Casambi Technologies; the Bluetooth protocol support comes from the independent, unofficial [`casambi-bt`](https://github.com/lkempf/casambi-bt) library. "Casambi", "HomeKit", "Google Home", and "Matter" are trademarks of their owners and are used only to describe what this software works with (see [NOTICE](NOTICE)). No infringement of any copyright, trademark, or other right is intended. If you hold rights and have a concern, please contact info@callosum.nl and it will be addressed promptly.
+>
+> Use this software at your own risk.
+
 ### What makes it special
 
 - 🌅 **Wake-up light.** Wake up to light instead of an alarm: a timer slowly raises your bedroom lamps over 5 to 60 minutes, from the faintest warm glow to bright, cool morning light, slowly at first, because eyes notice the first light most. Any other command, from the app, Apple Home, or Google Home, stops it.
@@ -28,8 +34,6 @@ Casambi BT WebGUI turns a Raspberry Pi into a small lighting hub that sits next 
 One local service on the Pi serves the web app, a JWT- and API-key-protected REST API, the timers, and the HomeKit and Matter bridges, and keeps its settings in a local SQLite database. A supervised Python process talks to the Casambi network through [`lkempf/casambi-bt`](https://github.com/lkempf/casambi-bt), an unofficial, alpha-quality implementation of the Casambi Bluetooth protocol, so test your own fixtures before you rely on automations. [1]
 
 Sign in with a local account. The initial `admin` account is created in the browser with a one-time setup code that the installer prints.
-
-> **Disclaimer:** Casambi BT WebGUI is an independent, source-available hobby project. It is not affiliated with, endorsed by, or supported by Casambi Technologies, Apple, Google, or the Connectivity Standards Alliance, and its HomeKit and Matter bridges are not certified. "Casambi", "HomeKit", "Google Home", and "Matter" are trademarks of their owners and are used here only to describe what this software works with (see [NOTICE](NOTICE)). The Bluetooth protocol support comes from the unofficial [`casambi-bt`](https://github.com/lkempf/casambi-bt) library; use this software at your own risk.
 
 > Run this on a trusted local network. A lighting controller has physical-world effects. Do not expose it directly to the public internet; place it behind a VPN or a carefully configured HTTPS reverse proxy if remote access is needed.
 
@@ -162,7 +166,7 @@ This project grew out of many evenings, a lot of testing in a dark living room, 
 
 ## License
 
-Casambi BT WebGUI is licensed under the [PolyForm Noncommercial License 1.0.0](LICENSE): you may use, change, and share it for noncommercial purposes, such as personal use, education, research, charities, and public institutions. Commercial use needs permission from me (info @ callosum nl). See [NOTICE](NOTICE) for the copyright and trademark notice. It depends on [`casambi-bt`](https://github.com/lkempf/casambi-bt) by [lkempf](https://github.com/lkempf), which is also licensed under the Apache License 2.0 and is installed as a separate package.
+Casambi BT WebGUI is licensed under the [Apache License 2.0 with the Commons Clause](LICENSE): you may use, change, and share it freely, also at work, but you may not sell it, or a product or service (such as installation, hosting, or support) whose value comes entirely or substantially from it, without permission from me (info @ callosum nl). See [NOTICE](NOTICE) for the copyright and trademark notice. It depends on [`casambi-bt`](https://github.com/lkempf/casambi-bt) by [lkempf](https://github.com/lkempf), which is also licensed under the Apache License 2.0 and is installed as a separate package.
 
 ## References
 
