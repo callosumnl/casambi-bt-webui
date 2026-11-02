@@ -8,7 +8,7 @@ Casambi BT WebGUI turns a Raspberry Pi into a small lighting hub that sits next 
 
 > **Disclaimer:** Casambi BT WebGUI is an independent, source-available hobby project. It is **not affiliated with, endorsed by, or supported by Casambi Technologies**, nor by Apple, Google, or the Connectivity Standards Alliance, and its HomeKit and Matter bridges are not certified.
 >
-> It exists for interoperability: it lets you control lighting you own, in your own home, with your own network password. It contains no code, firmware, apps, or other material from Casambi Technologies; the Bluetooth protocol support comes from the independent, unofficial [`casambi-bt`](https://github.com/lkempf/casambi-bt) library. "Casambi", "HomeKit", "Google Home", and "Matter" are trademarks of their owners and are used only to describe what this software works with (see [NOTICE](NOTICE)). No infringement of any copyright, trademark, or other right is intended. If you hold rights and have a concern, please contact info@callosum.nl and it will be addressed promptly.
+> It exists for interoperability: it lets you control lighting you own, in your own home, with your own network password. It contains no code, firmware, apps, or other material from Casambi Technologies; the Bluetooth protocol support comes from the independent, unofficial [`casambi-bt`](https://github.com/lkempf/casambi-bt) library. "Casambi", "HomeKit", "Google Home", and "Matter" are trademarks of their owners and are used only to describe what this software works with (see [NOTICE](NOTICE)). No infringement of any copyright, trademark, or other right is intended. If you hold rights and have a concern, please contact info {at} callosum.nl and it will be addressed promptly.
 >
 > Use this software at your own risk.
 
