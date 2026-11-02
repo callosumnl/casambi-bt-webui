@@ -1,10 +1,11 @@
 Casambi BT WebGUI
+Copyright 2026 Callosum (https://github.com/callosumnl/casambi-bt-webui)
 
-Required Notice: Copyright 2026 Callosum (https://github.com/callosumnl/casambi-bt-webui)
-
-This software is licensed under the PolyForm Noncommercial License 1.0.0 (see LICENSE):
-it may be used, changed, and shared for noncommercial purposes only. For commercial use,
-contact Callosum (info@callosum.nl).
+This software is licensed under the Apache License, Version 2.0, with the
+"Commons Clause" License Condition v1.0 (see LICENSE): you may use, change, and
+share it, but not sell it or a product or service whose value derives entirely
+or substantially from it, without permission. For commercial use, contact
+Callosum (info@callosum.nl).
 
 It controls Casambi lighting through the casambi-bt library
 (https://github.com/lkempf/casambi-bt), which is licensed separately under the
